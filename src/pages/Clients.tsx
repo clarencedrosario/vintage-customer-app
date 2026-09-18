@@ -19,21 +19,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { api } from "@/convex/_generated/api";
-import {
-  CLIENT_KINDS,
-  INDIAN_STATES,
-} from "@/lib/format";
+import { CLIENT_KINDS, INDIAN_STATES } from "@/lib/format";
 import { useMutation, useQuery } from "convex/react";
-import { Building2, Landmark, Plus, ShieldCheck, User } from "lucide-react";
+import { Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-
-const KIND_ICON: Record<string, typeof User> = {
-  individual: User,
-  company: Building2,
-  trust: ShieldCheck,
-  government: Landmark,
-};
 
 function AddClientDialog() {
   const createClient = useMutation(api.clients.create);
@@ -84,7 +74,9 @@ function AddClientDialog() {
       setGstin("");
       setNotes("");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not add the client.");
+      toast.error(
+        err instanceof Error ? err.message : "Could not add the client.",
+      );
     } finally {
       setBusy(false);
     }
@@ -94,14 +86,16 @@ function AddClientDialog() {
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button className="gap-2">
-          <Plus className="size-4" />
+          <Plus className="size-4" aria-hidden="true" />
           Add client
         </Button>
       </DialogTrigger>
-      <DialogContent className="rule-frame bg-card sm:max-w-lg">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <p className="type-label ink-faded">Register of Clients</p>
-          <DialogTitle className="font-serif text-2xl">Add a client</DialogTitle>
+          <DialogTitle className="font-serif text-2xl">
+            Add a client
+          </DialogTitle>
         </DialogHeader>
         <div className="max-h-[60vh] space-y-4 overflow-y-auto pr-1">
           <div className="space-y-2">
@@ -255,86 +249,101 @@ export default function Clients() {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return clients ?? [];
-    return (clients ?? []).filter((c) => c.name.toLowerCase().includes(q));
+    return (clients ?? []).filter((c) =>
+      c.name.toLowerCase().includes(q),
+    );
   }, [clients, search]);
 
   return (
-    <ChamberShell subtitle="The Digital Chamber" actions={<AddClientDialog />}>
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <p className="type-label ink-faded">Register of Clients</p>
-          <h1 className="mt-2 font-serif text-3xl font-semibold tracking-tight">
-            Clients
-          </h1>
-          <p className="mt-2 max-w-xl ink-faded">
-            Individuals, companies, trusts and government bodies on the
-            chamber's record.
-          </p>
-        </div>
+    <ChamberShell
+      subtitle="Register of Clients"
+      title="Clients"
+      actions={<AddClientDialog />}
+    >
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <p className="max-w-xl text-sm text-muted-foreground">
+          Individuals, companies, trusts and government bodies on the
+          chamber's record.
+        </p>
         <Input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search clients…"
           className="sm:max-w-xs"
+          aria-label="Search clients by name"
         />
       </div>
 
-      {clients === undefined ? (
-        <p className="mt-10 text-sm ink-faded">Opening the register…</p>
-      ) : filtered.length === 0 ? (
-        <Card className="mt-10 border-dashed">
-          <CardContent className="flex flex-col items-center py-12 text-center">
-            <User className="size-8 text-muted-foreground" />
-            <p className="mt-4 font-serif text-xl">
-              {search ? "No clients match that search" : "No clients on record yet"}
-            </p>
-            <p className="mt-2 max-w-sm text-sm ink-faded">
-              {search
-                ? "Adjust the spelling and try again."
-                : "Add your first client, then open a matter in their name."}
-            </p>
+      <div className="rule-frame mt-4 overflow-x-auto rounded-lg">
+        {clients === undefined ? (
+          <p className="p-6 text-sm text-muted-foreground">
+            Opening the register…
+          </p>
+        ) : filtered.length === 0 ? (
+          <p className="p-6 text-sm text-muted-foreground">
+            {search
+              ? "No clients match that search — adjust the spelling and try again."
+              : "No clients on record yet. Add your first client, then open a matter in their name."}
+          </p>
+        ) : (
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th scope="col">Client</th>
+                <th scope="col">Type</th>
+                <th scope="col">Contact</th>
+                <th scope="col">City</th>
+                <th scope="col">GSTIN</th>
+                <th scope="col">Open matters</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((c) => {
+                const openMatters = openCounts?.[c._id] ?? 0;
+                return (
+                  <tr key={c._id}>
+                    <td>
+                      <p className="font-medium">{c.name}</p>
+                      {c.addressLine1 && (
+                        <p className="text-xs text-muted-foreground">
+                          {c.addressLine1}
+                        </p>
+                      )}
+                    </td>
+                    <td>
+                      <span className="stamp ink-faded">{c.kind}</span>
+                    </td>
+                    <td className="text-muted-foreground">
+                      <p>{c.phone ?? "—"}</p>
+                      {c.email && (
+                        <p className="text-xs">{c.email}</p>
+                      )}
+                    </td>
+                    <td className="text-muted-foreground">
+                      {[c.city, c.state].filter(Boolean).join(", ") || "—"}
+                    </td>
+                    <td className="text-xs text-muted-foreground">
+                      {c.gstin ?? "—"}
+                    </td>
+                    <td>
+                      <span className={openMatters > 0 ? "font-medium text-[#8a6a33]" : "text-muted-foreground"}>
+                        {openMatters}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {clients !== undefined && clients.length === 0 && (
+        <Card className="mt-4 border-dashed sm:hidden">
+          <CardContent className="py-8 text-center text-sm text-muted-foreground">
+            Use the “Add client” button above to begin.
           </CardContent>
         </Card>
-      ) : (
-        <ul className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {filtered.map((c) => {
-            const Icon = KIND_ICON[c.kind] ?? User;
-            const openMatters = openCounts?.[c._id] ?? 0;
-            const addr = [
-              c.addressLine1,
-              c.addressLine2,
-              c.city,
-              c.state,
-              c.pincode,
-            ]
-              .filter(Boolean)
-              .join(", ");
-            return (
-              <li key={c._id} className="rule-frame bg-card p-5">
-                <div className="flex items-start justify-between gap-3">
-                  <span className="flex size-10 items-center justify-center rounded-full border border-foreground/25 text-primary">
-                    <Icon className="size-5" />
-                  </span>
-                  <span className="stamp ink-faded">{c.kind}</span>
-                </div>
-                <h2 className="mt-4 font-serif text-xl font-semibold leading-snug">
-                  {c.name}
-                </h2>
-                {addr && <p className="mt-2 text-sm ink-faded">{addr}</p>}
-                <div className="mt-3 space-y-1 text-sm ink-faded">
-                  {c.phone && <p>{c.phone}</p>}
-                  {c.email && <p className="truncate">{c.email}</p>}
-                  {c.gstin && <p className="type-label">GSTIN {c.gstin}</p>}
-                </div>
-                <div className="mt-4 border-t border-border pt-3">
-                  <p className="type-label ink-faded">
-                    {openMatters} open {openMatters === 1 ? "matter" : "matters"}
-                  </p>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
       )}
     </ChamberShell>
   );

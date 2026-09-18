@@ -28,12 +28,10 @@ import {
   ArrowLeft,
   CalendarClock,
   CircleDashed,
-  Eye,
   FileText,
   Gavel,
   Landmark,
   ListChecks,
-  Lock,
   Paperclip,
   Plus,
   Receipt,
@@ -120,20 +118,20 @@ export default function MatterDetail() {
 
   if (matter === undefined) {
     return (
-      <ChamberShell subtitle="The Digital Chamber">
-        <p className="type-label ink-faded">Retrieving the file…</p>
+      <ChamberShell subtitle="The Digital Chamber" title="Matter file">
+        <p className="text-sm text-muted-foreground">Retrieving the file…</p>
       </ChamberShell>
     );
   }
 
   if (matter === null) {
     return (
-      <ChamberShell subtitle="The Digital Chamber">
+      <ChamberShell subtitle="The Digital Chamber" title="Matter file">
         <div className="py-20 text-center">
-          <Landmark className="mx-auto size-10 text-primary/70" />
-          <h1 className="mt-6 font-serif text-2xl font-semibold">
+          <Landmark className="mx-auto size-10 text-muted-foreground" />
+          <h2 className="mt-6 font-serif text-2xl font-semibold">
             This matter is not on the chamber's record
-          </h1>
+          </h2>
           <Button asChild variant="outline" className="mt-6">
             <Link to="/dashboard">
               <ArrowLeft className="mr-2 size-4" />
@@ -172,9 +170,12 @@ export default function MatterDetail() {
   };
 
   return (
-    <ChamberShell subtitle="The Digital Chamber">
+    <ChamberShell
+      subtitle="The Digital Chamber"
+      title={matter.title}
+    >
       {/* File heading */}
-      <div className="rule-frame bg-card p-8">
+      <div className="rule-frame rounded-lg p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">
             <p className="type-label ink-faded">
@@ -183,8 +184,10 @@ export default function MatterDetail() {
             <h1 className="mt-2 font-serif text-3xl font-semibold tracking-tight">
               {matter.title}
             </h1>
-            <p className="mt-2 ink-faded">
-              <span className="text-foreground">{matter.client?.name}</span>
+            <p className="mt-2 text-sm text-muted-foreground">
+              <span className="font-medium text-foreground">
+                {matter.client?.name}
+              </span>
               {matter.court ? ` · ${matter.court}` : ""}
               {matter.opposingParty ? ` · vs ${matter.opposingParty}` : ""}
             </p>
@@ -220,7 +223,7 @@ export default function MatterDetail() {
         {matter.description && (
           <>
             <Separator className="my-5" />
-            <p className="whitespace-pre-wrap leading-relaxed ink-faded">
+            <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
               {matter.description}
             </p>
           </>

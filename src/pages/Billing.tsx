@@ -21,16 +21,16 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { formatINR, formatINRCompact, formatDateIN, todayIN } from "@/lib/format";
 import { useMutation, useQuery } from "convex/react";
-import { BadgeIndianRupee, Plus, Receipt } from "lucide-react";
+import { Plus } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
 
 const STATUS_STAMP: Record<string, { label: string; className: string }> = {
   draft: { label: "Draft", className: "text-muted-foreground" },
-  sent: { label: "Sent", className: "text-chart-2" },
-  partially_paid: { label: "Part Paid", className: "text-chart-4" },
-  paid: { label: "Paid", className: "text-chart-3" },
+  sent: { label: "Sent", className: "text-chart-3" },
+  partially_paid: { label: "Part Paid", className: "text-chart-2" },
+  paid: { label: "Paid", className: "text-chart-4" },
   cancelled: { label: "Cancelled", className: "text-muted-foreground" },
 };
 
@@ -53,11 +53,11 @@ function PaymentDialog({
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button size="sm" variant="outline" className="gap-1.5">
-          <Plus className="size-3.5" />
+          <Plus className="size-3.5" aria-hidden="true" />
           Payment
         </Button>
       </DialogTrigger>
-      <DialogContent className="rule-frame bg-card sm:max-w-md">
+      <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <p className="type-label ink-faded">Receipt</p>
           <DialogTitle className="font-serif text-2xl">
@@ -74,7 +74,7 @@ function PaymentDialog({
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
             />
-            <p className="text-xs ink-faded">
+            <p className="text-xs text-muted-foreground">
               Balance due: {formatINR(balance)}
             </p>
           </div>
@@ -158,26 +158,16 @@ export default function Billing() {
   const setStatus = useMutation(api.billing.setStatus);
 
   return (
-    <ChamberShell subtitle="The Digital Chamber">
-      <p className="type-label ink-faded">Register of Invoices</p>
-      <h1 className="mt-2 font-serif text-3xl font-semibold tracking-tight">
-        Billing
-      </h1>
-      <p className="mt-2 max-w-2xl ink-faded">
-        Fees and disbursements billed from matters, with tax applied per the
-        chamber's settings. Payments are receipted against each invoice.
-      </p>
-
+    <ChamberShell subtitle="Register of Invoices" title="Billing">
       {/* Stats */}
-      <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         {[
           { label: "Billed (this record)", value: stats?.billed },
           { label: "Collected", value: stats?.collected },
           { label: "Outstanding", value: stats?.outstandingAmount },
         ].map((s) => (
-          <Card key={s.label} className="rule-frame bg-card">
-            <CardContent className="pt-6">
-              <BadgeIndianRupee className="size-5 text-primary" />
+          <Card key={s.label} className="shadow-sm">
+            <CardContent className="pt-5">
               <p className="mt-3 font-serif text-3xl font-semibold">
                 {s.value === undefined ? "—" : formatINRCompact(s.value)}
               </p>
@@ -187,115 +177,125 @@ export default function Billing() {
         ))}
       </div>
 
-      {/* Invoice list */}
-      {invoices === undefined ? (
-        <p className="mt-10 text-sm ink-faded">Opening the register…</p>
-      ) : invoices.length === 0 ? (
-        <Card className="mt-10 border-dashed">
-          <CardContent className="flex flex-col items-center py-12 text-center">
-            <Receipt className="size-8 text-muted-foreground" />
-            <p className="mt-4 font-serif text-xl">No invoices yet</p>
-            <p className="mt-2 max-w-md text-sm ink-faded">
-              Record time or expenses on a matter, then draft an invoice from
-              the matter file — it will appear here with its tax and payment
-              status.
-            </p>
-          </CardContent>
-        </Card>
-      ) : (
-        <ul className="mt-8 space-y-4">
-          {invoices.map((inv) => {
-            const st = STATUS_STAMP[inv.status] ?? STATUS_STAMP.draft;
-            const balance = inv.total - inv.amountPaid;
-            return (
-              <li key={inv._id} className="rule-frame bg-card p-5">
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <p className="type-label ink-faded">
-                      {inv.number} · issued {formatDateIN(inv.issuedOn)}
-                    </p>
-                    <h2 className="mt-1 font-serif text-xl font-semibold">
-                      {inv.matter?.title ?? "Matter"}
-                    </h2>
-                    <p className="mt-0.5 text-sm ink-faded">
-                      {inv.client?.name}
-                      {inv.matter ? (
-                        <>
-                          {" · "}
+      <p className="mt-6 max-w-2xl text-sm text-muted-foreground">
+        Fees and disbursements billed from matters, with tax applied per the
+        chamber's settings. Payments are receipted against each invoice.
+      </p>
+
+      <div className="rule-frame mt-4 overflow-x-auto rounded-lg">
+        {invoices === undefined ? (
+          <p className="p-6 text-sm text-muted-foreground">
+            Opening the register…
+          </p>
+        ) : invoices.length === 0 ? (
+          <p className="p-6 text-sm text-muted-foreground">
+            No invoices yet. Record time or expenses on a matter, then draft an
+            invoice from the matter file — it will appear here with its tax and
+            payment status.
+          </p>
+        ) : (
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th scope="col">Invoice</th>
+                <th scope="col">Matter / client</th>
+                <th scope="col">Issued</th>
+                <th scope="col" className="text-right">
+                  Total
+                </th>
+                <th scope="col" className="text-right">
+                  Balance
+                </th>
+                <th scope="col">Status</th>
+                <th scope="col">
+                  <span className="sr-only">Actions</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {invoices.map((inv) => {
+                const st = STATUS_STAMP[inv.status] ?? STATUS_STAMP.draft;
+                const balance = inv.total - inv.amountPaid;
+                return (
+                  <tr key={inv._id}>
+                    <td className="type-label ink-faded">{inv.number}</td>
+                    <td>
+                      <p className="max-w-[220px] truncate font-medium">
+                        {inv.matter?.title ?? "Matter"}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {inv.client?.name}
+                        {inv.matter ? " · " : ""}
+                        {inv.matter && (
                           <Link
                             to={`/matters/${inv.matterId}`}
-                            className="text-primary hover:underline"
+                            className="text-[#8a6a33] hover:underline"
                           >
                             {inv.matter.reference}
                           </Link>
-                        </>
-                      ) : null}
-                    </p>
-                  </div>
-                  <div className="text-right">
-                    <p className="font-serif text-2xl font-semibold text-primary">
-                      {formatINR(inv.total)}
-                    </p>                    <p className="type-label ink-faded">
-                      incl. GST {inv.taxPercent}% ({formatINR(inv.taxAmount)})
-                    </p>
-                    {inv.amountPaid > 0 && (
-                      <p className="type-label ink-faded">
-                        paid {formatINR(inv.amountPaid)} · due{" "}
-                        {formatINR(balance)}
+                        )}
                       </p>
-                    )}
-                  </div>
-                </div>
-                <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-border pt-4">
-                  <span className={`stamp ${st.className}`}>{st.label}</span>
-                  {inv.status === "draft" && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={async () => {
-                        try {
-                          await setStatus({ invoiceId: inv._id, status: "sent" });
-                          toast.success("Invoice marked sent.");
-                        } catch (err) {
-                          toast.error(
-                            err instanceof Error ? err.message : "Failed.",
-                          );
+                    </td>
+                    <td className="whitespace-nowrap text-muted-foreground">
+                      {formatDateIN(inv.issuedOn)}
+                    </td>
+                    <td className="text-right font-medium">
+                      {formatINR(inv.total)}
+                    </td>
+                    <td className="text-right">
+                      <span
+                        className={
+                          balance > 0 ? "font-medium text-[#8a6a33]" : "text-muted-foreground"
                         }
-                      }}
-                    >
-                      Mark sent
-                    </Button>
-                  )}
-                  {inv.status !== "paid" && inv.status !== "cancelled" && inv.status !== "draft" && (
-                    <PaymentDialog invoiceId={inv._id} balance={balance} />
-                  )}
-                  {inv.status !== "paid" && inv.status !== "cancelled" && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={async () => {
-                        try {
-                          await setStatus({
-                            invoiceId: inv._id,
-                            status: "cancelled",
-                          });
-                          toast.success("Invoice cancelled.");
-                        } catch (err) {
-                          toast.error(
-                            err instanceof Error ? err.message : "Failed.",
-                          );
-                        }
-                      }}
-                    >
-                      Cancel
-                    </Button>
-                  )}
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      )}
+                      >
+                        {formatINR(balance)}
+                      </span>
+                    </td>
+                    <td>
+                      <span className={`stamp ${st.className}`}>{st.label}</span>
+                    </td>
+                    <td>
+                      <div className="flex items-center justify-end gap-2">
+                        {inv.status === "draft" && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={async () => {
+                              try {
+                                await setStatus({
+                                  invoiceId: inv._id,
+                                  status: "sent",
+                                });
+                                toast.success("Invoice marked sent.");
+                              } catch (err) {
+                                toast.error(
+                                  err instanceof Error
+                                    ? err.message
+                                    : "Failed.",
+                                );
+                              }
+                            }}
+                          >
+                            Mark sent
+                          </Button>
+                        )}
+                        {inv.status !== "paid" &&
+                          inv.status !== "cancelled" &&
+                          inv.status !== "draft" && (
+                            <PaymentDialog
+                              invoiceId={inv._id}
+                              balance={balance}
+                            />
+                          )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
     </ChamberShell>
   );
 }
