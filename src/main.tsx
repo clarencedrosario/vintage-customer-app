@@ -14,9 +14,10 @@ const Landing = lazy(() => import("./pages/Landing.tsx"));
 const AuthPage = lazy(() => import("./pages/Auth.tsx"));
 const Dashboard = lazy(() => import("./pages/Dashboard.tsx"));
 const MatterDetail = lazy(() => import("./pages/MatterDetail.tsx"));
-const Catalog = lazy(() => import("./pages/Catalog.tsx"));
-const ServiceDetail = lazy(() => import("./pages/ServiceDetail.tsx"));
-const Admin = lazy(() => import("./pages/Admin.tsx"));
+const Clients = lazy(() => import("./pages/Clients.tsx"));
+const Billing = lazy(() => import("./pages/Billing.tsx"));
+const Team = lazy(() => import("./pages/Team.tsx"));
+const Settings = lazy(() => import("./pages/Settings.tsx"));
 const NotFound = lazy(() => import("./pages/NotFound.tsx"));
 
 // Simple loading fallback for route transitions
@@ -144,13 +145,35 @@ createRoot(document.getElementById("root")!).render(
                   </RequireAuth>
                 }
               />
-              <Route path="/catalog" element={<Catalog />} />
-              <Route path="/catalog/:slug" element={<ServiceDetail />} />
               <Route
-                path="/admin"
+                path="/clients"
                 element={
                   <RequireAuth>
-                    <Admin />
+                    <Clients />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/billing"
+                element={
+                  <RequireAuth>
+                    <Billing />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/team"
+                element={
+                  <RequireAuth>
+                    <Team />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/settings"
+                element={
+                  <RequireAuth>
+                    <Settings />
                   </RequireAuth>
                 }
               />

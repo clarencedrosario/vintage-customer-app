@@ -115,7 +115,7 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
         <div className="flex h-full flex-col items-center justify-center">
           {/* Firm mark above the card */}
           <div className="mb-8">
-            <BrandMark subtitle="Client Registry" />
+            <BrandMark subtitle="The Digital Chamber" />
           </div>
 
           <Card className="rule-frame min-w-[350px] bg-card pb-0 shadow-md">
@@ -123,13 +123,13 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
               <>
                 <CardHeader className="text-center">
                   <p className="type-label ink-faded">
-                    Business Accounts · Counsel in Confidence
+                    Members of Chambers · Counsel in Confidence
                   </p>
                   <CardTitle className="mt-2 font-serif text-2xl">
-                    Client Registry
+                    Chamber Sign-In
                   </CardTitle>
                   <CardDescription>
-                    Enter your work email to sign in or enroll your company
+                    Enter your email to sign in or enroll your chamber
                   </CardDescription>
                 </CardHeader>
                 <form onSubmit={handleEmailSubmit}>
@@ -282,14 +282,13 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
             )}
 
             <div className="rounded-b-lg border-t bg-muted px-6 py-4 text-center text-xs ink-faded">
-              Business correspondence through this portal is confidential and
-              encrypted.
+              Chamber records are confidential and encrypted.
             </div>
           </Card>
 
           <p className="mt-6 max-w-sm text-center text-sm ink-faded">
-            Enrollment is open to businesses — enter your work email above and
-            your company will be admitted upon verification.
+            New chamber? Enrollment is open — enter your email above and your
+            chamber will be admitted upon verification.
           </p>
         </div>
       </div>
