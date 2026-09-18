@@ -69,7 +69,8 @@ export function ChamberShell({
 
   const handleSignOut = async () => {
     await signOut();
-    navigate("/");
+    // Logout lands on the portal selector.
+    navigate("/login?reason=signedout", { replace: true });
   };
 
   return (
@@ -87,7 +88,7 @@ export function ChamberShell({
         className="fixed inset-y-0 left-0 z-30 hidden w-[260px] flex-col bg-sidebar lg:flex"
       >
         <Link
-          to="/dashboard"
+          to="/"
           className="flex items-center gap-3 border-b border-sidebar-border px-5 py-5"
         >
           <span className="flex size-9 items-center justify-center rounded-md border border-sidebar-primary/40 text-sidebar-primary">

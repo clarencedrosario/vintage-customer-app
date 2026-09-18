@@ -6,18 +6,21 @@ import { ConvexAuthProvider } from "@convex-dev/auth/react";
 import { ConvexReactClient } from "convex/react";
 import React, { StrictMode, useEffect, lazy, Suspense } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter, Route, Routes, useLocation } from "react-router";
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router";
 import "./index.css";
 
 // Lazy load route components for better code splitting
 const Landing = lazy(() => import("./pages/Landing.tsx"));
-const AuthPage = lazy(() => import("./pages/Auth.tsx"));
+const LoginPage = lazy(() => import("./pages/Login.tsx"));
+const FindALawyer = lazy(() => import("./pages/FindALawyer.tsx"));
 const Dashboard = lazy(() => import("./pages/Dashboard.tsx"));
 const MatterDetail = lazy(() => import("./pages/MatterDetail.tsx"));
 const Clients = lazy(() => import("./pages/Clients.tsx"));
 const Billing = lazy(() => import("./pages/Billing.tsx"));
 const Team = lazy(() => import("./pages/Team.tsx"));
 const Settings = lazy(() => import("./pages/Settings.tsx"));
+const ClientPortal = lazy(() => import("./pages/ClientPortal.tsx"));
+const StaffPortal = lazy(() => import("./pages/StaffPortal.tsx"));
 const NotFound = lazy(() => import("./pages/NotFound.tsx"));
 
 // Simple loading fallback for route transitions
@@ -125,9 +128,12 @@ createRoot(document.getElementById("root")!).render(
           <Suspense fallback={<RouteLoading />}>
             <Routes>
               <Route path="/" element={<Landing />} />
+              <Route path="/auth" element={<Navigate to="/login" replace />} />
+              <Route path="/login" element={<LoginPage />} />
+              <Route path="/login/:portal" element={<LoginPage />} />
               <Route
-                path="/auth"
-                element={<AuthPage redirectAfterAuth="/dashboard" />}
+                path="/find-a-lawyer"
+                element={<FindALawyer />}
               />
               <Route
                 path="/dashboard"
@@ -174,6 +180,22 @@ createRoot(document.getElementById("root")!).render(
                 element={
                   <RequireAuth>
                     <Settings />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/portal"
+                element={
+                  <RequireAuth portal="client">
+                    <ClientPortal />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/staff"
+                element={
+                  <RequireAuth portal="staff">
+                    <StaffPortal />
                   </RequireAuth>
                 }
               />

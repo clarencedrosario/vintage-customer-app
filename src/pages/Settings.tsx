@@ -23,6 +23,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useMutation, useQuery } from "convex/react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { ShieldCheck } from "lucide-react";
 
 const CURRENCIES = ["INR", "USD", "EUR", "GBP", "AED", "SGD"];
 const TIMEZONES = [
@@ -32,6 +33,222 @@ const TIMEZONES = [
   "Europe/London",
   "America/New_York",
 ];
+
+function randomB64(n: number): string {
+  const bytes = new Uint8Array(n);
+  crypto.getRandomValues(bytes);
+  return btoa(String.fromCharCode(...bytes));
+}
+
+/** Two-factor enrolment + session security, one card above Settings. */
+function SecurityCard() {
+  const status = useQuery(api.twofactor.status);
+  const sessions = useQuery(api.sessions.activeSessions);
+  const start = useMutation(api.twofactor.startEnrollment);
+  const confirm = useMutation(api.twofactor.confirmEnrollment);
+  const storeCodes = useMutation(api.twofactor.storeRecoveryCodes);
+  const disable2fa = useMutation(api.twofactor.disable);
+  const signOutAll = useMutation(api.sessions.signOutAllDevices);
+
+  const [uri, setUri] = useState<string | null>(null);
+  const [code, setCode] = useState("");
+  const [disableCode, setDisableCode] = useState("");
+  const [recovery, setRecovery] = useState<string[] | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  if (status === undefined) {
+    return (
+      <Card className="rule-frame bg-card">
+        <CardContent className="py-6 text-sm ink-faded">
+          Loading security settings…
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="rule-frame bg-card">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 font-serif text-2xl">
+          <ShieldCheck className="size-5 text-primary" />
+          Security
+        </CardTitle>
+        <CardDescription>
+          Two-factor authentication and session control for your account.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        {/* 2FA */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <p className="text-sm font-medium">Authenticator app (TOTP)</p>
+              <p className="text-xs ink-faded">
+                {status.enabled
+                  ? "Enabled — codes required on sign-in from new sessions."
+                  : "Add a second factor with Google Authenticator, Authy or 1Password."}
+              </p>
+            </div>
+            <span
+              className={`stamp ${status.enabled ? "text-emerald-700" : "text-muted-foreground"}`}
+            >
+              {status.enabled ? "On" : "Off"}
+            </span>
+          </div>
+
+          {!status.enabled && !uri && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  const r = await start({ entropy: randomB64(20) });
+                  setUri(r.otpauthUri);
+                } catch (err) {
+                  toast.error(err instanceof Error ? err.message : "Failed.");
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              Set up two-factor
+            </Button>
+          )}
+
+          {uri && (
+            <div className="space-y-3 rounded-md border border-border bg-muted p-4">
+              <p className="text-xs ink-faded">
+                Scan this secret into your authenticator app, then confirm
+                with a code.
+              </p>
+              <code className="block break-all rounded bg-card p-2 text-xs">
+                {uri}
+              </code>
+              <div className="flex gap-2">
+                <Input
+                  value={code}
+                  onChange={(e) => setCode(e.target.value)}
+                  placeholder="6-digit code"
+                  maxLength={6}
+                  className="max-w-[140px] font-mono"
+                />
+                <Button
+                  size="sm"
+                  disabled={busy || code.length !== 6}
+                  onClick={async () => {
+                    setBusy(true);
+                    try {
+                      await confirm({ code });
+                      const codes = Array.from({ length: 8 }, () =>
+                        randomB64(5).replace(/[^a-zA-Z0-9]/g, "").slice(0, 10).toLowerCase(),
+                      );
+                      await storeCodes({ codes });
+                      setRecovery(codes);
+                      setUri(null);
+                      setCode("");
+                      toast.success("Two-factor enabled.");
+                    } catch (err) {
+                      toast.error(err instanceof Error ? err.message : "Failed.");
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                >
+                  Confirm
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {recovery && (
+            <div className="rounded-md border border-border bg-muted p-4">
+              <p className="text-xs font-medium">
+                Recovery codes — shown once. Store them safely.
+              </p>
+              <div className="mt-2 grid grid-cols-2 gap-1 font-mono text-xs sm:grid-cols-4">
+                {recovery.map((c) => (
+                  <span key={c} className="rounded bg-card px-2 py-1">
+                    {c}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {status.enabled && (
+            <div className="flex flex-wrap items-end gap-2">
+              <div className="space-y-1">
+                <Label htmlFor="sec-disable">Disable with a current code</Label>
+                <Input
+                  id="sec-disable"
+                  value={disableCode}
+                  onChange={(e) => setDisableCode(e.target.value)}
+                  placeholder="123456"
+                  maxLength={6}
+                  className="max-w-[140px] font-mono"
+                />
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy || disableCode.length !== 6}
+                onClick={async () => {
+                  setBusy(true);
+                  try {
+                    await disable2fa({ code: disableCode });
+                    toast.success("Two-factor disabled.");
+                    setDisableCode("");
+                  } catch (err) {
+                    toast.error(err instanceof Error ? err.message : "Failed.");
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                Disable 2FA
+              </Button>
+            </div>
+          )}
+        </div>
+
+        <hr className="engraving-rule" />
+
+        {/* Sessions */}
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <p className="text-sm font-medium">Active sessions</p>
+            <p className="text-xs ink-faded">
+              {sessions === undefined
+                ? "—"
+                : `${sessions.count} device${sessions.count === 1 ? "" : "s"} signed in. Sessions expire after 30 days.`}
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy || !sessions?.count}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                await signOutAll({});
+                toast.success("Signed out everywhere.");
+                window.location.href = "/login?reason=signedout";
+              } catch (err) {
+                toast.error(err instanceof Error ? err.message : "Failed.");
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            Sign out all devices
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 /**
  * The settings form. Mounted only once the chamber document has loaded, with
@@ -349,14 +566,18 @@ export default function Settings() {
 
   return (
     <ChamberShell subtitle="The Digital Chamber">
-      <p className="type-label ink-faded">Chamber Particulars</p>
-      <h1 className="mt-2 font-serif text-3xl font-semibold tracking-tight">
-        Settings
-      </h1>
-      <p className="mt-2 max-w-2xl ink-faded">
-        The chamber's address, tax and billing conventions. These particulars
-        appear on invoices and govern numbering and financial years.
-      </p>
+      <SecurityCard />
+
+      <div className="mt-10">
+        <p className="type-label ink-faded">Chamber Particulars</p>
+        <h1 className="mt-2 font-serif text-3xl font-semibold tracking-tight">
+          Settings
+        </h1>
+        <p className="mt-2 max-w-2xl ink-faded">
+          The chamber's address, tax and billing conventions. These particulars
+          appear on invoices and govern numbering and financial years.
+        </p>
+      </div>
 
       {chamber === undefined ? (
         <p className="mt-10 text-sm ink-faded">Retrieving particulars…</p>

@@ -1,37 +1,48 @@
-import { useAuth } from "@/hooks/use-auth";
+import { Link } from "react-router";
 import { Button } from "@/components/ui/button";
 import {
   ArrowRight,
+  Briefcase,
   CalendarClock,
   FileText,
   Gavel,
   Landmark,
-  Receipt,
   Scale,
-  Users,
+  Search,
+  UserRound,
 } from "lucide-react";
-import { Link, useNavigate } from "react-router";
 
+/**
+ * The four entry experiences. Cards choose which login form opens; they
+ * never grant privileges themselves — authorization is resolved
+ * server-side from the account's role after sign-in.
+ */
 const PORTALS = [
   {
-    to: "/dashboard",
+    id: "lawyer",
+    icon: Briefcase,
+    title: "Lawyer Login",
+    text: "Manage your matters, clients and court schedule.",
+  },
+  {
+    id: "firm",
     icon: Landmark,
-    title: "Practice Overview",
-    text: "Open matters, the cause list, pending tasks and outstanding fees — the chamber at a glance.",
+    title: "Law Firm Login",
+    text: "Manage your firm, legal team and practice.",
   },
   {
-    to: "/clients",
-    icon: Users,
-    title: "Clients & Matters",
-    text: "Individuals, companies, trusts and government departments, with every matter on its own file.",
+    id: "staff",
+    icon: CalendarClock,
+    title: "Peon / Support Staff Login",
+    text: "View assigned tasks, filing work and shared documents.",
   },
   {
-    to: "/billing",
-    icon: Receipt,
-    title: "Billing & Receipts",
-    text: "Invoices raised from time and expenses, GST applied, payments receipted against each bill.",
+    id: "client",
+    icon: UserRound,
+    title: "Client Login",
+    text: "Access case updates and documents shared by your lawyer.",
   },
-];
+] as const;
 
 const CAPABILITIES = [
   {
@@ -45,23 +56,18 @@ const CAPABILITIES = [
     text: "Appearances across courts in one view, with tasks and due dates tracked to the matter they serve.",
   },
   {
-    icon: Receipt,
+    icon: FileText,
     title: "Fees, GST & receipts",
     text: "Record time and disbursements, draft invoices with configurable tax, and receipt payments by UPI, NEFT, cash or cheque.",
   },
   {
-    icon: FileText,
-    title: "Documents & correspondence",
-    text: "File pleadings, orders and communications against the matter they belong to — retrievable in seconds.",
+    icon: Scale,
+    title: "One chamber, every role",
+    text: "Advocates, firm administration, support staff and clients each work in their own portal over the same live records.",
   },
 ];
 
 export default function Landing() {
-  const { isLoading, isAuthenticated } = useAuth();
-  const navigate = useNavigate();
-
-  const portalHref = isAuthenticated ? "/dashboard" : "/auth";
-
   return (
     <div className="min-h-screen bg-sidebar">
       {/* Navy masthead */}
@@ -80,34 +86,18 @@ export default function Landing() {
               </span>
             </span>
           </Link>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="ghost"
-              className="hidden text-slate-300 hover:bg-sidebar-accent hover:text-white sm:inline-flex"
-              onClick={() => navigate(isAuthenticated ? "/dashboard" : "/auth")}
-            >
-              Member Sign-In
-            </Button>
-            <Button
-              disabled={isLoading}
-              className="bg-sidebar-primary text-sidebar-primary-foreground hover:bg-[#C39A52]"
-              onClick={() =>
-                navigate(
-                  isAuthenticated
-                    ? "/dashboard"
-                    : "/auth?returnTo=%2Fdashboard",
-                )
-              }
-            >
-              Open the Chamber
-            </Button>
-          </div>
+          <Button
+            asChild
+            className="bg-sidebar-primary text-sidebar-primary-foreground hover:bg-[#C39A52]"
+          >
+            <Link to="/login">Member Sign-In</Link>
+          </Button>
         </div>
       </header>
 
       <main className="flex-1">
         {/* Hero */}
-        <section className="mx-auto w-full max-w-4xl px-6 pb-16 pt-16 text-center sm:pt-20">
+        <section className="mx-auto w-full max-w-4xl px-6 pb-14 pt-16 text-center sm:pt-20">
           <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-sidebar-primary">
             For Indian Advocates, Chambers &amp; Law Firms
           </p>
@@ -119,14 +109,18 @@ export default function Landing() {
             Research. Intelligence — your entire legal practice in one
             intelligent workspace.
           </p>
+        </section>
 
-          {/* Portal selection cards */}
-          <div className="mx-auto mt-12 grid max-w-4xl gap-4 text-left sm:grid-cols-3">
+        {/* Portal selector: / always shows these four cards, session or not */}
+        <section
+          aria-label="Choose your portal"
+          className="mx-auto w-full max-w-6xl px-6 pb-16"
+        >
+          <div className="grid gap-4 text-left sm:grid-cols-2 xl:grid-cols-4">
             {PORTALS.map((p) => (
-              <Link
-                key={p.to + p.title}
-                to={isAuthenticated ? p.to : "/auth"}
-                className="group rounded-xl border border-sidebar-border bg-card p-5 shadow-sm transition-shadow hover:shadow-md"
+              <div
+                key={p.id}
+                className="flex h-full flex-col rounded-xl border border-sidebar-border bg-card p-5 shadow-sm"
               >
                 <span className="flex size-9 items-center justify-center rounded-md border border-border text-primary">
                   <p.icon className="size-4.5" aria-hidden="true" />
@@ -134,15 +128,28 @@ export default function Landing() {
                 <h2 className="mt-4 font-serif text-lg font-semibold text-foreground">
                   {p.title}
                 </h2>
-                <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+                <p className="mt-1.5 flex-1 text-sm leading-relaxed text-muted-foreground">
                   {p.text}
                 </p>
-                <span className="mt-4 inline-flex items-center gap-1 text-sm font-medium text-[#8a6a33] transition-transform group-hover:translate-x-0.5">
-                  Enter
-                  <ArrowRight className="size-3.5" aria-hidden="true" />
-                </span>
-              </Link>
+                <Button asChild className="mt-5 w-full">
+                  <Link to={`/login/${p.id}`}>
+                    Login Now
+                    <ArrowRight className="ml-1.5 size-4" aria-hidden="true" />
+                  </Link>
+                </Button>
+              </div>
             ))}
+          </div>
+
+          {/* Public directory link — for visitors, not members */}
+          <div className="mt-8 text-center">
+            <Link
+              to="/find-a-lawyer"
+              className="inline-flex items-center gap-2 text-sm font-medium text-sidebar-primary underline-offset-4 hover:underline"
+            >
+              <Search className="size-4" aria-hidden="true" />
+              Find a Lawyer — search advocates on Advokate
+            </Link>
           </div>
         </section>
 
@@ -190,12 +197,13 @@ export default function Landing() {
             </p>
             <Button
               size="lg"
-              disabled={isLoading}
+              asChild
               className="mt-8 gap-2 bg-sidebar-primary px-10 text-sidebar-primary-foreground hover:bg-[#C39A52]"
-              onClick={() => navigate(portalHref)}
             >
-              {isAuthenticated ? "Return to the Chamber" : "Enroll Your Chamber"}
-              <ArrowRight className="size-4" aria-hidden="true" />
+              <Link to="/login/firm">
+                Enroll Your Chamber
+                <ArrowRight className="size-4" aria-hidden="true" />
+              </Link>
             </Button>
           </div>
         </section>
