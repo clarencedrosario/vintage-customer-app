@@ -40,87 +40,173 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  --font-serif: "Playfair Display", "Cormorant Garamond", Georgia, "Times New Roman", serif;
+  --font-body: "Cormorant Garamond", Georgia, "Times New Roman", serif;
+  --font-mono: "Courier Prime", "Courier New", monospace;
 }
 
-/* CHANGE VALUES FOR THEME */
+/* CHANGE VALUES FOR THEME — Vintage sepia & aged paper */
 :root {
-  --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --radius: 0.125rem;
+  --background: #f4ead7;
+  --foreground: #2e2418;
+  --card: #faf3e3;
+  --card-foreground: #2e2418;
+  --popover: #faf3e3;
+  --popover-foreground: #2e2418;
+  --primary: #6d1a28;
+  --primary-foreground: #f7efdd;
+  --secondary: #e9dcc3;
+  --secondary-foreground: #4a3a26;
+  --muted: #ece1cb;
+  --muted-foreground: #7a6a52;
+  --accent: #e3d5b8;
+  --accent-foreground: #4a3a26;
+  --destructive: #9c2f2f;
+  --border: #d8c9a9;
+  --input: #cbb98f;
+  --ring: #6d1a28;
+  --chart-1: #6d1a28;
+  --chart-2: #7a5c2e;
+  --chart-3: #54622f;
+  --chart-4: #a8763e;
+  --chart-5: #4f6d7a;
+  --sidebar: #ece1cb;
+  --sidebar-foreground: #2e2418;
+  --sidebar-primary: #6d1a28;
+  --sidebar-primary-foreground: #f7efdd;
+  --sidebar-accent: #e3d5b8;
+  --sidebar-accent-foreground: #4a3a26;
+  --sidebar-border: #d8c9a9;
+  --sidebar-ring: #6d1a28;
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --background: #221c13;
+  --foreground: #e9dcc3;
+  --card: #2b2417;
+  --card-foreground: #e9dcc3;
+  --popover: #2b2417;
+  --popover-foreground: #e9dcc3;
+  --primary: #a94450;
+  --primary-foreground: #f4ead7;
+  --secondary: #3a3221;
+  --secondary-foreground: #e9dcc3;
+  --muted: #3a3221;
+  --muted-foreground: #a89a7e;
+  --accent: #453b27;
+  --accent-foreground: #e9dcc3;
+  --destructive: #b85c5c;
+  --border: #4a3f2a;
+  --input: #4a3f2a;
+  --ring: #a94450;
+  --chart-1: #a94450;
+  --chart-2: #b08d57;
+  --chart-3: #7f8f56;
+  --chart-4: #c08552;
+  --chart-5: #6f8b98;
+  --sidebar: #2b2417;
+  --sidebar-foreground: #e9dcc3;
+  --sidebar-primary: #a94450;
+  --sidebar-primary-foreground: #f4ead7;
+  --sidebar-accent: #453b27;
+  --sidebar-accent-foreground: #e9dcc3;
+  --sidebar-border: #4a3f2a;
+  --sidebar-ring: #a94450;
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
+  html {
+    font-family: var(--font-body);
+  }
   body {
     @apply bg-background text-foreground;
+    font-family: var(--font-body);
+    font-size: 1.0625rem;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-serif);
   }
   button:not([disabled]),
   [role="button"]:not([disabled]) {
     cursor: pointer;
   }
+}
+
+/* ---------------------------------- */
+/* Vintage archival utility classes   */
+/* ---------------------------------- */
+
+/* Aged-paper texture for full-page/section backgrounds */
+.paper-texture {
+  background-color: var(--background);
+  background-image:
+    radial-gradient(ellipse at 18% 12%, rgba(122, 92, 46, 0.06) 0%, transparent 55%),
+    radial-gradient(ellipse at 82% 88%, rgba(109, 26, 40, 0.05) 0%, transparent 50%),
+    radial-gradient(ellipse at 55% 40%, rgba(255, 250, 235, 0.55) 0%, transparent 60%);
+}
+
+/* Deeper parchment tone for alternating sections */
+.parchment-deep {
+  background-color: var(--secondary);
+  background-image:
+    radial-gradient(ellipse at 70% 20%, rgba(122, 92, 46, 0.08) 0%, transparent 55%),
+    radial-gradient(ellipse at 25% 80%, rgba(46, 36, 24, 0.06) 0%, transparent 50%);
+}
+
+/* Double-rule frame used on archival documents */
+.rule-frame {
+  border: 1px solid color-mix(in srgb, var(--foreground) 24%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--foreground) 10%, transparent);
+  outline-offset: 4px;
+}
+
+/* Hairline engraving-style divider */
+.engraving-rule {
+  border: 0;
+  height: 3px;
+  background-image:
+    linear-gradient(to right, transparent, color-mix(in srgb, var(--foreground) 35%, transparent), transparent);
+}
+
+/* Typewriter-style monospace accents */
+.type-label {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+/* Slightly faded ink text */
+.ink-faded {
+  color: color-mix(in srgb, var(--foreground) 72%, var(--background));
+}
+
+/* Stamp-style badge, like an inked archive stamp */
+.stamp {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+  padding: 0.125rem 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  opacity: 0.85;
+}
+
+/* Subtle vignette for hero sections (position parent relative) */
+.vignette::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 55%, rgba(46, 36, 24, 0.12) 100%);
 }

@@ -16,6 +16,22 @@ export const roleValidator = v.union(
 );
 export type Role = Infer<typeof roleValidator>;
 
+// Statuses a client matter moves through at the firm.
+export const MATTER_STATUSES = {
+  RECEIVED: "received",
+  UNDER_REVIEW: "under_review",
+  ENGAGED: "engaged",
+  CLOSED: "closed",
+} as const;
+
+export const matterStatusValidator = v.union(
+  v.literal(MATTER_STATUSES.RECEIVED),
+  v.literal(MATTER_STATUSES.UNDER_REVIEW),
+  v.literal(MATTER_STATUSES.ENGAGED),
+  v.literal(MATTER_STATUSES.CLOSED),
+);
+export type MatterStatus = Infer<typeof matterStatusValidator>;
+
 const schema = defineSchema(
   {
     // default auth tables using convex auth.
@@ -32,12 +48,34 @@ const schema = defineSchema(
       role: v.optional(roleValidator), // role of the user. do not remove
     }).index("email", ["email"]), // index for the email. do not remove or modify
 
-    // add other tables here
+    // A legal matter: a client's inquiry that the firm tracks from intake to close.
+    matters: defineTable({
+      title: v.string(),
+      practiceArea: v.string(),
+      description: v.string(),
+      status: matterStatusValidator,
+      clientUserId: v.id("users"),
+      createdAt: v.number(),
+      updatedAt: v.number(),
+    })
+      .index("by_client", ["clientUserId"])
+      .index("by_status", ["status"]),
 
-    // tableName: defineTable({
-    //   ...
-    //   // table fields
-    // }).index("by_field", ["field"])
+    // Firm↔client correspondence attached to a matter.
+    matterMessages: defineTable({
+      matterId: v.id("matters"),
+      authorUserId: v.id("users"),
+      body: v.string(),
+      createdAt: v.number(),
+    }).index("by_matter", ["matterId"]),
+
+    // Append-only status/audit trail for a matter ("the docket").
+    matterEvents: defineTable({
+      matterId: v.id("matters"),
+      kind: v.string(), // e.g. "created", "status", "message", "closed"
+      detail: v.optional(v.string()),
+      createdAt: v.number(),
+    }).index("by_matter", ["matterId"]),
   },
   {
     schemaValidation: false,
