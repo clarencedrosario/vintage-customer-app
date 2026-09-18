@@ -1,22 +1,21 @@
+import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { mutation, query, QueryCtx } from "./_generated/server";
 import { getCurrentUser } from "./users";
-import { MATTER_STATUSES, type MatterStatus } from "./schema";
+import { MATTER_STATUSES, matterStatusValidator } from "./schema";
 
 const MAX_TITLE = 120;
 const MAX_DESCRIPTION = 4000;
 const MAX_MESSAGE = 2000;
+const MAX_DOCUMENT_NAME = 200;
 
-export const PRACTICE_AREAS = [
-  "Family Law",
-  "Estate & Wills",
-  "Real Estate",
-  "Business & Contracts",
-  "Employment",
-  "Personal Injury",
-  "Immigration",
-  "Criminal Defense",
-] as const;
+async function requireAdmin(ctx: QueryCtx) {
+  const user = await getCurrentUser(ctx);
+  if (!user || user.role !== "admin") {
+    throw new Error("Administrator access required.");
+  }
+  return user;
+}
 
 function titleCaseArea(area: string): string {
   return area
@@ -24,6 +23,8 @@ function titleCaseArea(area: string): string {
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
     .join(" ");
 }
+
+// ---------------- Client queries & mutations ----------------
 
 /** All matters belonging to the signed-in client, newest first. */
 export const listMine = query({
@@ -70,6 +71,25 @@ export const listMessages = query({
       .collect();
 
     return messages.sort((a, b) => a.createdAt - b.createdAt);
+  },
+});
+
+/** Documents on a matter the client owns. */
+export const listDocuments = query({
+  args: { matterId: v.id("matters") },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    if (!user) return [];
+
+    const matter = await ctx.db.get(args.matterId);
+    if (!matter || matter.clientUserId !== user._id) return [];
+
+    const docs = await ctx.db
+      .query("matterDocuments")
+      .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))
+      .collect();
+
+    return docs.sort((a, b) => b.createdAt - a.createdAt);
   },
 });
 
@@ -174,4 +194,115 @@ export const postMessage = mutation({
   },
 });
 
-export type { MatterStatus };
+// ---------------- Document storage ----------------
+
+/** Generate a short-lived upload URL for a document. */
+export const generateDocumentUploadUrl = mutation({
+  args: { matterId: v.id("matters") },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    if (!user) throw new Error("You must be signed in to upload documents.");
+
+    const matter = await ctx.db.get(args.matterId);
+    if (!matter || matter.clientUserId !== user._id)
+      throw new Error("Matter not found.");
+
+    return await ctx.storage.generateUploadUrl();
+  },
+});
+
+/** Attach metadata for an uploaded document and log a docket entry. */
+export const attachDocument = mutation({
+  args: {
+    matterId: v.id("matters"),
+    name: v.string(),
+    kind: v.union(v.literal("contract"), v.literal("correspondence")),
+    storageId: v.optional(v.id("_storage")),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    if (!user) throw new Error("You must be signed in to upload documents.");
+
+    const matter = await ctx.db.get(args.matterId);
+    if (!matter || matter.clientUserId !== user._id)
+      throw new Error("Matter not found.");
+
+    const name = args.name.trim().slice(0, MAX_DOCUMENT_NAME);
+    if (!name) throw new Error("Document name is required.");
+
+    await ctx.db.insert("matterDocuments", {
+      matterId: args.matterId,
+      uploaderUserId: user._id,
+      name,
+      kind: args.kind,
+      storageId: args.storageId,
+      createdAt: Date.now(),
+    });
+
+    await ctx.db.insert("matterEvents", {
+      matterId: args.matterId,
+      kind: "document",
+      detail: `Document added to the file: ${name}`,
+      createdAt: Date.now(),
+    });
+
+    await ctx.db.patch(args.matterId, { updatedAt: Date.now() });
+  },
+});
+
+/** A short-lived URL to fetch one of your documents. */
+export const getDocumentUrl = query({
+  args: { documentId: v.id("matterDocuments") },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    if (!user) return null;
+
+    const doc = await ctx.db.get(args.documentId);
+    if (!doc) return null;
+
+    const matter = await ctx.db.get(doc.matterId);
+    if (!matter || matter.clientUserId !== user._id) return null;
+    if (!doc.storageId) return null;
+
+    return await ctx.storage.getUrl(doc.storageId);
+  },
+});
+
+// ---------------- Admin: matter management ----------------
+
+export const adminList = query({
+  args: {},
+  handler: async (ctx) => {
+    await requireAdmin(ctx);
+    return await ctx.db.query("matters").collect();
+  },
+});
+
+export const adminUpdateStatus = mutation({
+  args: {
+    matterId: v.id("matters"),
+    status: matterStatusValidator,
+  },
+  handler: async (ctx, args) => {
+    const admin = await requireAdmin(ctx);
+
+    const matter = await ctx.db.get(args.matterId);
+    if (!matter) throw new Error("Matter not found.");
+
+    await ctx.db.patch(args.matterId, {
+      status: args.status,
+      updatedAt: Date.now(),
+    });
+
+    await ctx.db.insert("matterEvents", {
+      matterId: args.matterId,
+      kind: "status",
+      detail: `Status set to ${args.status.replace("_", " ")} by the firm.`,
+      createdAt: Date.now(),
+    });
+
+    return matter.clientUserId;
+  },
+});
+
+export { getAuthUserId };

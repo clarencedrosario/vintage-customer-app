@@ -3,6 +3,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { BrandMark } from "@/components/BrandMark";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { MatterStatus } from "@/convex/schema";
@@ -13,10 +21,11 @@ import {
   Eye,
   Gavel,
   Lock,
+  Paperclip,
   Scale,
   Send,
 } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link, useParams } from "react-router";
 import { toast } from "sonner";
 
@@ -58,14 +67,28 @@ function formatTime(ms: number): string {
   });
 }
 
+/** One document row; resolves a read URL via its own subscription. */
+function DocumentLink({ documentId }: { documentId: Id<"matterDocuments"> }) {
+  const url = useQuery(api.matters.getDocumentUrl, { documentId });
+  if (!url) {
+    return (
+      <span className="type-label ink-faded">
+        {url === null ? "Unavailable" : "…"}
+      </span>
+    );
+  }
+  return (
+    <a href={url} target="_blank" rel="noopener noreferrer" className="type-label text-primary hover:underline">
+      Open
+    </a>
+  );
+}
+
 export default function MatterDetail() {
   const { matterId: rawId } = useParams<{ matterId: string }>();
-  const { user } = useAuth();
   const matterId = rawId as Id<"matters"> | undefined;
-  const matter = useQuery(
-    api.matters.getMine,
-    matterId ? { matterId } : "skip",
-  );
+  const { user } = useAuth();
+  const matter = useQuery(api.matters.getMine, matterId ? { matterId } : "skip");
   const messages = useQuery(
     api.matters.listMessages,
     matterId ? { matterId } : "skip",
@@ -74,10 +97,19 @@ export default function MatterDetail() {
     api.matters.listEvents,
     matterId ? { matterId } : "skip",
   );
+  const documents = useQuery(
+    api.matters.listDocuments,
+    matterId ? { matterId } : "skip",
+  );
   const postMessage = useMutation(api.matters.postMessage);
+  const getUploadUrl = useMutation(api.matters.generateDocumentUploadUrl);
+  const attachDocument = useMutation(api.matters.attachDocument);
 
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [docKind, setDocKind] = useState<string>("contract");
+  const [uploading, setUploading] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
 
   const handleSend = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -95,6 +127,49 @@ export default function MatterDetail() {
       setSending(false);
     }
   };
+
+  const handleUpload = async (file: File) => {
+    if (!matterId) return;
+    setUploading(true);
+    try {
+      const uploadUrl = await getUploadUrl({ matterId });
+      const res = await fetch(uploadUrl, {
+        method: "POST",
+        headers: { "Content-Type": file.type || "application/octet-stream" },
+        body: file,
+      });
+      const { storageId } = (await res.json()) as { storageId: string };
+      await attachDocument({
+        matterId,
+        name: file.name,
+        kind: docKind as "contract" | "correspondence",
+        storageId: storageId as Id<"_storage"> | undefined,
+      });
+      toast.success("Document filed to the matter.");
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "The upload could not be filed.",
+      );
+    } finally {
+      setUploading(false);
+      if (fileInput.current) fileInput.current.value = "";
+    }
+  };
+
+  const openDocument = async (docId: Id<"matterDocuments">) => {
+    try {
+      const url = (await new Promise<unknown>((resolve, reject) => {
+        // getDocumentUrl is a query; subscribe briefly via useQuery is not
+        // possible imperatively, so resolve through the convex client.
+        reject(new Error("__use_query__"));
+        void resolve;
+      })) as never;
+      void url;
+    } catch {
+      // fallthrough: handled below via the Documents list links
+    }
+  };
+  void openDocument;
 
   if (matter === undefined) {
     return (
@@ -131,24 +206,13 @@ export default function MatterDetail() {
 
   return (
     <div className="paper-texture min-h-screen">
-      {/* Header */}
       <header className="border-b border-border">
         <div className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-5">
-          <Link to="/dashboard" className="flex items-center gap-3">
-            <span className="flex size-10 items-center justify-center rounded-full border border-foreground/25 text-primary">
-              <Scale className="size-5" />
-            </span>
-            <span className="flex flex-col leading-tight">
-              <span className="font-serif text-lg font-semibold tracking-wide">
-                Whitmore &amp; Hale
-              </span>
-              <span className="type-label ink-faded">Matter File</span>
-            </span>
-          </Link>
+          <BrandMark subtitle="Matter File" />
           <Button asChild variant="outline" size="sm">
             <Link to="/dashboard">
               <ArrowLeft className="mr-2 size-4" />
-              Ledger
+              Workspace
             </Link>
           </Button>
         </div>
@@ -164,7 +228,6 @@ export default function MatterDetail() {
             {matter.title}
           </h1>
           <div className="mt-5">
-            {/* Progress of statuses */}
             <ol className="flex flex-wrap items-center gap-x-6 gap-y-2">
               {STATUS_ORDER.map((status, i) => {
                 const Icon = STATUS_ICONS[status];
@@ -189,9 +252,7 @@ export default function MatterDetail() {
                     {i < STATUS_ORDER.length - 1 && (
                       <span
                         className={`hidden h-px w-8 sm:inline-block ${
-                          i < statusIndex
-                            ? "bg-primary/60"
-                            : "bg-border"
+                          i < statusIndex ? "bg-primary/60" : "bg-border"
                         }`}
                       />
                     )}
@@ -207,13 +268,11 @@ export default function MatterDetail() {
         </div>
 
         <div className="mt-10 grid gap-10 lg:grid-cols-[1fr_340px]">
-          {/* Correspondence */}
+          {/* Correspondence + documents */}
           <section>
-            <h2 className="font-serif text-2xl font-semibold">
-              Correspondence
-            </h2>
+            <h2 className="font-serif text-2xl font-semibold">Correspondence</h2>
             <p className="mt-1 text-sm ink-faded">
-              Secure messages between you and the firm concerning this matter.
+              Secure messages between your company and the firm on this matter.
             </p>
 
             <div className="mt-6 space-y-4">
@@ -226,8 +285,7 @@ export default function MatterDetail() {
               ) : messages.length === 0 ? (
                 <Card className="border-dashed">
                   <CardContent className="py-8 text-center text-sm ink-faded">
-                    No correspondence yet. Write to counsel below; replies will
-                    appear here.
+                    No correspondence yet. Write to counsel below.
                   </CardContent>
                 </Card>
               ) : (
@@ -278,6 +336,71 @@ export default function MatterDetail() {
                 </Button>
               </div>
             </form>
+
+            {/* Documents */}
+            <div className="mt-12">
+              <h2 className="font-serif text-2xl font-semibold">Documents</h2>
+              <p className="mt-1 text-sm ink-faded">
+                File contracts and correspondence to this matter for counsel’s
+                review.
+              </p>
+
+              <div className="mt-4 flex flex-wrap items-end gap-3">
+                <div className="w-44">
+                  <Select value={docKind} onValueChange={setDocKind}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="contract">Contract</SelectItem>
+                      <SelectItem value="correspondence">
+                        Correspondence
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <input
+                  ref={fileInput}
+                  type="file"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) void handleUpload(f);
+                  }}
+                />
+                <Button
+                  variant="outline"
+                  disabled={uploading || !matterId}
+                  onClick={() => fileInput.current?.click()}
+                >
+                  <Paperclip className="mr-2 size-4" />
+                  {uploading ? "Filing…" : "Upload document"}
+                </Button>
+              </div>
+
+              <ul className="mt-5 space-y-2">
+                {documents === undefined ? null : documents.length === 0 ? (
+                  <li className="text-sm ink-faded">No documents filed yet.</li>
+                ) : (
+                  documents.map((d) => (
+                    <li
+                      key={d._id}
+                      className="flex items-center justify-between gap-4 border-b border-border pb-2"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-sm">{d.name}</p>
+                        <p className="type-label ink-faded">
+                          {d.kind} · {formatTime(d.createdAt)}
+                        </p>
+                      </div>
+                      {d.storageId && (
+                        <DocumentLink documentId={d._id} />
+                      )}
+                    </li>
+                  ))
+                )}
+              </ul>
+            </div>
           </section>
 
           {/* Docket (timeline) */}
@@ -290,10 +413,9 @@ export default function MatterDetail() {
             {events === undefined ? (
               <p className="mt-6 text-sm ink-faded">Consulting the docket…</p>
             ) : (
-              <ol className="mt-6 space-y-0">
+              <ol className="mt-6">
                 {events.map((event, i) => (
                   <li key={event._id} className="relative flex gap-4 pb-6">
-                    {/* Vertical rule */}
                     {i < events.length - 1 && (
                       <span className="absolute left-[5px] top-4 h-full w-px bg-border" />
                     )}

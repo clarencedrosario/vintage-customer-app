@@ -15,9 +15,10 @@ import {
 } from "@/components/ui/input-otp";
 
 import { useAuth } from "@/hooks/use-auth";
-import { ArrowRight, Loader2, Mail, Scale, UserX } from "lucide-react";
+import { BrandMark } from "@/components/BrandMark";
+import { ArrowRight, Loader2, Mail, UserX } from "lucide-react";
 import { Suspense, useEffect, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router";
+import { useNavigate, useSearchParams } from "react-router";
 
 interface AuthProps {
   redirectAfterAuth?: string;
@@ -113,30 +114,22 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
       <div className="flex flex-1 items-center justify-center px-4 py-12">
         <div className="flex h-full flex-col items-center justify-center">
           {/* Firm mark above the card */}
-          <Link to="/" className="mb-8 flex items-center gap-3">
-            <span className="flex size-11 items-center justify-center rounded-full border border-foreground/25 text-primary">
-              <Scale className="size-5" />
-            </span>
-            <span className="flex flex-col leading-tight">
-              <span className="font-serif text-lg font-semibold tracking-wide text-foreground">
-                Whitmore &amp; Hale
-              </span>
-              <span className="type-label ink-faded">Client Portal</span>
-            </span>
-          </Link>
+          <div className="mb-8">
+            <BrandMark subtitle="Client Registry" />
+          </div>
 
           <Card className="rule-frame min-w-[350px] bg-card pb-0 shadow-md">
             {step === "signIn" ? (
               <>
                 <CardHeader className="text-center">
                   <p className="type-label ink-faded">
-                    Counsel in Confidence · Est. 1927
+                    Business Accounts · Counsel in Confidence
                   </p>
                   <CardTitle className="mt-2 font-serif text-2xl">
                     Client Registry
                   </CardTitle>
                   <CardDescription>
-                    Enter your email to sign in or enroll as a new client
+                    Enter your work email to sign in or enroll your company
                   </CardDescription>
                 </CardHeader>
                 <form onSubmit={handleEmailSubmit}>
@@ -289,13 +282,14 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
             )}
 
             <div className="rounded-b-lg border-t bg-muted px-6 py-4 text-center text-xs ink-faded">
-              Correspondence through this portal is confidential and encrypted.
+              Business correspondence through this portal is confidential and
+              encrypted.
             </div>
           </Card>
 
           <p className="mt-6 max-w-sm text-center text-sm ink-faded">
-            New here? Enrollment is open — enter your email above and counsel
-            will admit you upon verification.
+            Enrollment is open to businesses — enter your work email above and
+            your company will be admitted upon verification.
           </p>
         </div>
       </div>

@@ -1,48 +1,74 @@
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { motion } from "framer-motion";
-import { Scale, Feather, Landmark, ScrollText, ArrowRight } from "lucide-react";
+import {
+  ArrowRight,
+  Briefcase,
+  CalendarClock,
+  FileText,
+  Landmark,
+  MessagesSquare,
+  Search,
+  ShieldCheck,
+} from "lucide-react";
 import { Link, useNavigate } from "react-router";
 
-const PRACTICE_AREAS = [
+const CAPABILITIES = [
   {
-    title: "Family Law",
-    blurb:
-      "Custody, support and dissolution — handled with candour and a steady hand.",
+    icon: Search,
+    title: "Catalog of counsel",
+    text: "Browse fixed-fee legal services for businesses — contracts, corporate, employment, IP and compliance — with transparent pricing.",
   },
   {
-    title: "Estate & Wills",
-    blurb:
-      "Wills, trusts and probate, drafted so your affairs read plainly to those who follow.",
+    icon: CalendarClock,
+    title: "Scheduling that holds",
+    text: "Reserve time with the right attorney directly from a service page. Confirmations appear in your dashboard at once.",
   },
   {
-    title: "Real Estate",
-    blurb:
-      "Conveyances, titles and disputes, from the first offer to the final deed.",
+    icon: ShieldCheck,
+    title: "Checkout you can audit",
+    text: "Pay by card or request an invoice against your company account. Every order is receipted and traceable.",
   },
   {
-    title: "Business & Contracts",
-    blurb:
-      "Formation, review and negotiation, with terms written to be honoured.",
+    icon: FileText,
+    title: "Matters & documents",
+    text: "Open matters, follow the docket as work progresses, and exchange documents with counsel in one secure file.",
+  },
+  {
+    icon: MessagesSquare,
+    title: "Correspondence on the record",
+    text: "Message the firm from any matter. Every exchange is entered on the docket, so nothing rests on memory.",
+  },
+  {
+    icon: Landmark,
+    title: "Oversight for the firm",
+    text: "An administrative area keeps clients, engagements, bookings and revenue under one ledger.",
   },
 ];
 
 const STEPS = [
   {
     no: "I.",
-    title: "Submit your inquiry",
-    text: "Set down the nature of your matter in your own words, through the secure client portal.",
+    title: "Enroll your company",
+    text: "Create a business account and set out the matters your company needs counsel for.",
   },
   {
     no: "II.",
-    title: "The firm reviews",
-    text: "An attorney examines your file and records the matter in the ledger, marked “under review.”",
+    title: "Engage from the catalog",
+    text: "Compare fixed-fee services, book a consultation, and check out by card or company invoice.",
   },
   {
     no: "III.",
-    title: "Correspond & resolve",
-    text: "Exchange secure correspondence with counsel and follow each entry on your matter’s docket.",
+    title: "Follow the work",
+    text: "Track each engagement on its docket — statuses, correspondence, and documents in one place.",
   },
+];
+
+const PROOF = [
+  { figure: "3,400+", label: "matters administered" },
+  { figure: "96%", label: "renewal rate, 2025" },
+  { figure: "48h", label: "median first response" },
+  { figure: "11", label: "practice areas covered" },
 ];
 
 export default function Landing() {
@@ -58,13 +84,15 @@ export default function Landing() {
         <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-6 py-6">
           <Link to="/" className="flex items-center gap-3">
             <span className="flex size-10 items-center justify-center rounded-full border border-foreground/25 text-primary">
-              <Scale className="size-5" />
+              <Briefcase className="size-5" />
             </span>
             <span className="flex flex-col leading-tight">
-              <span className="font-serif text-lg font-semibold tracking-wide text-foreground">
-                Whitmore &amp; Hale
+              <span className="font-serif text-lg font-semibold tracking-[0.08em]">
+                ADVOKATE
               </span>
-              <span className="type-label ink-faded">Attorneys at Law</span>
+              <span className="type-label ink-faded">
+                Legal Operations for Business
+              </span>
             </span>
           </Link>
 
@@ -76,19 +104,19 @@ export default function Landing() {
                 navigate(isAuthenticated ? "/dashboard" : "/auth")
               }
             >
-              {isAuthenticated ? "Client Portal" : "Client Sign-In"}
+              {isAuthenticated ? "Your Workspace" : "Client Sign-In"}
             </Button>
             <Button
               disabled={isLoading}
               onClick={() =>
                 navigate(
                   isAuthenticated
-                    ? "/dashboard"
-                    : "/auth?returnTo=%2Fdashboard",
+                    ? "/catalog"
+                    : "/auth?returnTo=%2Fcatalog",
                 )
               }
             >
-              Begin an Inquiry
+              Browse the Catalog
             </Button>
           </div>
         </div>
@@ -99,15 +127,16 @@ export default function Landing() {
         <section className="vignette relative overflow-hidden">
           <div className="relative z-10 mx-auto w-full max-w-4xl px-6 pb-24 pt-16 text-center sm:pt-24">
             <p className="type-label ink-faded">
-              Est. 1927 · Counsel in Confidence
+              Est. 1927 · The Law Office, Modernised
             </p>
             <motion.h1
               initial={{ opacity: 0, y: 16 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.7 }}
-              className="mx-auto mt-6 max-w-3xl font-serif text-4xl font-semibold leading-tight tracking-tight text-foreground sm:text-6xl"
+              className="mx-auto mt-6 max-w-3xl font-serif text-4xl font-semibold leading-tight tracking-tight sm:text-6xl"
             >
-              Sound counsel, kept as it always has been — in writing.
+              Managing legal work for business, without the correspondence
+              chasing.
             </motion.h1>
             <motion.p
               initial={{ opacity: 0, y: 16 }}
@@ -115,10 +144,10 @@ export default function Landing() {
               transition={{ duration: 0.7, delay: 0.15 }}
               className="mx-auto mt-6 max-w-2xl text-lg leading-relaxed ink-faded"
             >
-              Whitmore &amp; Hale is a general-practice firm serving clients
-              across the state. Open a matter, follow its progress on the
-              docket, and correspond with your attorney — all from a private
-              client portal.
+              Advokate is the operational desk between your company and its
+              counsel. Engage fixed-fee services from the catalog, schedule
+              consultations, settle invoices, and follow every matter on its
+              docket — from one serious, auditable workspace.
             </motion.p>
             <motion.div
               initial={{ opacity: 0, y: 16 }}
@@ -129,58 +158,71 @@ export default function Landing() {
               <Button
                 size="lg"
                 disabled={isLoading}
-                onClick={() =>
-                  navigate(
-                    isAuthenticated ? "/dashboard" : "/auth?returnTo=%2Fdashboard",
-                  )
-                }
+                onClick={() => navigate(portalHref)}
                 className="gap-2 px-8"
               >
-                Open the Client Portal
+                Open Your Workspace
                 <ArrowRight className="size-4" />
               </Button>
               <Button
                 size="lg"
                 variant="outline"
                 className="px-8"
-                onClick={() =>
-                  document
-                    .getElementById("practices")
-                    ?.scrollIntoView({ behavior: "smooth" })
-                }
+                onClick={() => navigate("/catalog")}
               >
-                Our Practice Areas
+                Browse the Catalog
               </Button>
             </motion.div>
+
+            {/* Proof figures */}
+            <motion.dl
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.8, delay: 0.5 }}
+              className="mx-auto mt-16 grid max-w-3xl grid-cols-2 gap-8 sm:grid-cols-4"
+            >
+              {PROOF.map((p) => (
+                <div key={p.label}>
+                  <dt className="sr-only">{p.label}</dt>
+                  <dd className="font-serif text-3xl font-semibold text-primary">
+                    {p.figure}
+                  </dd>
+                  <dd className="type-label mt-1 ink-faded">{p.label}</dd>
+                </div>
+              ))}
+            </motion.dl>
           </div>
         </section>
 
-        {/* Practice areas */}
-        <section id="practices" className="parchment-deep border-y border-border py-20">
+        {/* Capabilities */}
+        <section
+          id="capabilities"
+          className="parchment-deep border-y border-border py-20"
+        >
           <div className="mx-auto w-full max-w-6xl px-6">
             <div className="text-center">
-              <p className="type-label ink-faded">The Firm’s Practice</p>
+              <p className="type-label ink-faded">The Platform</p>
               <h2 className="mt-3 font-serif text-3xl font-semibold tracking-tight sm:text-4xl">
-                Areas in which we are retained
+                Everything a company’s legal desk should do
               </h2>
               <hr className="engraving-rule mx-auto mt-6 w-40" />
             </div>
-            <div className="mt-12 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-              {PRACTICE_AREAS.map((area) => (
+            <div className="mt-12 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+              {CAPABILITIES.map((cap) => (
                 <motion.div
-                  key={area.title}
+                  key={cap.title}
                   initial={{ opacity: 0, y: 12 }}
                   whileInView={{ opacity: 1, y: 0 }}
                   viewport={{ once: true }}
                   transition={{ duration: 0.5 }}
-                  className="rule-frame bg-card p-6 text-center"
+                  className="rule-frame bg-card p-6"
                 >
-                  <Feather className="mx-auto size-5 text-primary" />
+                  <cap.icon className="size-5 text-primary" />
                   <h3 className="mt-4 font-serif text-xl font-semibold">
-                    {area.title}
+                    {cap.title}
                   </h3>
                   <p className="mt-2 text-sm leading-relaxed ink-faded">
-                    {area.blurb}
+                    {cap.text}
                   </p>
                 </motion.div>
               ))}
@@ -194,7 +236,7 @@ export default function Landing() {
             <div className="text-center">
               <p className="type-label ink-faded">Procedure</p>
               <h2 className="mt-3 font-serif text-3xl font-semibold tracking-tight sm:text-4xl">
-                Retaining the firm, step by step
+                From enrollment to engagement
               </h2>
               <hr className="engraving-rule mx-auto mt-6 w-40" />
             </div>
@@ -223,45 +265,24 @@ export default function Landing() {
           </div>
         </section>
 
-        {/* Archival band */}
-        <section className="parchment-deep border-y border-border py-16">
-          <div className="mx-auto flex w-full max-w-4xl flex-col items-center gap-8 px-6 text-center sm:flex-row sm:text-left">
-            <span className="flex size-16 shrink-0 items-center justify-center rounded-full border border-foreground/25 text-primary">
-              <Landmark className="size-7" />
-            </span>
-            <div>
-              <p className="type-label ink-faded">The Ledger &amp; Docket</p>
-              <p className="mt-2 max-w-2xl text-lg leading-relaxed ink-faded">
-                Every inquiry is entered in the firm ledger, assigned a docket,
-                and tracked to conclusion. Clients may consult their own file at
-                any hour — the record, as ever, speaks for itself.
-              </p>
-            </div>
-          </div>
-        </section>
-
         {/* Final CTA */}
-        <section className="vignette relative overflow-hidden py-24">
+        <section className="vignette relative overflow-hidden py-24 parchment-deep">
           <div className="relative z-10 mx-auto w-full max-w-2xl px-6 text-center">
-            <ScrollText className="mx-auto size-8 text-primary" />
+            <FileText className="mx-auto size-8 text-primary" />
             <h2 className="mt-6 font-serif text-3xl font-semibold tracking-tight sm:text-4xl">
-              Put your matter before counsel
+              Put your company’s legal affairs in order
             </h2>
             <p className="mt-4 text-lg ink-faded">
-              Create your client account and submit an inquiry today. The firm
-              attends to every communication with discretion.
+              Enroll once. Then engage counsel as needed — with the assurance
+              that every engagement, payment and document is on the record.
             </p>
             <Button
               size="lg"
               disabled={isLoading}
-              onClick={() =>
-                navigate(
-                  isAuthenticated ? "/dashboard" : "/auth?returnTo=%2Fdashboard",
-                )
-              }
+              onClick={() => navigate(portalHref)}
               className="mt-8 gap-2 px-10"
             >
-              {isAuthenticated ? "Return to the Portal" : "Sign In / Register"}
+              {isAuthenticated ? "Return to Your Workspace" : "Enroll Your Company"}
               <ArrowRight className="size-4" />
             </Button>
           </div>
@@ -272,11 +293,11 @@ export default function Landing() {
       <footer className="border-t border-border py-10">
         <div className="mx-auto flex w-full max-w-6xl flex-col items-center justify-between gap-4 px-6 sm:flex-row">
           <p className="type-label ink-faded">
-            Whitmore &amp; Hale LLP · 1 Counsellor Row, Suite 400
+            Advokate · Operated by Whitmore &amp; Hale LLP
           </p>
           <p className="text-sm ink-faded">
-            The information here does not constitute legal advice, nor does it
-            create an attorney–client relationship.
+            Nothing on this site constitutes legal advice or creates an
+            attorney–client relationship.
           </p>
         </div>
       </footer>
