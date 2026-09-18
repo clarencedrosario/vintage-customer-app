@@ -1,5 +1,4 @@
 import { ChamberShell } from "@/components/ChamberShell";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Select,
@@ -11,7 +10,6 @@ import {
 import { api } from "@/convex/_generated/api";
 import { useAuth } from "@/hooks/use-auth";
 import { useMutation, useQuery } from "convex/react";
-import { ScrollText } from "lucide-react";
 import { toast } from "sonner";
 
 export default function Team() {

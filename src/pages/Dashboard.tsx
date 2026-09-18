@@ -1,12 +1,6 @@
 import { ChamberShell } from "@/components/ChamberShell";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -204,7 +198,9 @@ export default function Dashboard() {
   const matters = useQuery(api.matters.list);
   const outstanding = useQuery(api.billing.outstanding);
 
-  const now = Date.now();
+  // Reading the clock is a render side-effect; get it once per subscription
+  // via a state initializer instead of calling Date.now() during render.
+  const [now] = useState(() => Date.now());
   const upcomingHearings = (hearings ?? [])
     .filter((h) => h.status === "scheduled" && h.at > now)
     .slice(0, 6);

@@ -21,7 +21,6 @@ import {
   formatDateTimeIN,
   formatINR,
   todayIN,
-  PRACTICE_AREAS,
 } from "@/lib/format";
 import { useMutation, useQuery } from "convex/react";
 import {
@@ -82,13 +81,10 @@ export default function MatterDetail() {
   const expenses = useQuery(api.matters.listExpenses, matterId ? { matterId } : "skip");
   const events = useQuery(api.matters.listEvents, matterId ? { matterId } : "skip");
 
-  const [status, setStatus] = useState<string>("");
   const updateStatus = useMutation(api.matters.updateStatus);
   const addHearing = useMutation(api.matters.addHearing);
-  const setHearingStatus = useMutation(api.matters.setHearingStatus);
   const addOrder = useMutation(api.matters.addOrder);
   const addTask = useMutation(api.matters.addTask);
-  const setTaskStatus = useMutation(api.matters.setTaskStatus);
   const addTime = useMutation(api.matters.addTime);
   const addExpense = useMutation(api.matters.addExpense);
   const addNote = useMutation(api.matters.addNote);
