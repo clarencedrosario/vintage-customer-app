@@ -16,51 +16,51 @@ export const roleValidator = v.union(
 );
 export type Role = Infer<typeof roleValidator>;
 
-// Statuses a client matter moves through.
+// Matter lifecycle at a chamber.
 export const MATTER_STATUSES = {
-  RECEIVED: "received",
-  UNDER_REVIEW: "under_review",
-  ENGAGED: "engaged",
+  OPEN: "open",
+  IN_PROGRESS: "in_progress",
+  ON_HOLD: "on_hold",
   CLOSED: "closed",
 } as const;
 
 export const matterStatusValidator = v.union(
-  v.literal(MATTER_STATUSES.RECEIVED),
-  v.literal(MATTER_STATUSES.UNDER_REVIEW),
-  v.literal(MATTER_STATUSES.ENGAGED),
+  v.literal(MATTER_STATUSES.OPEN),
+  v.literal(MATTER_STATUSES.IN_PROGRESS),
+  v.literal(MATTER_STATUSES.ON_HOLD),
   v.literal(MATTER_STATUSES.CLOSED),
 );
 export type MatterStatus = Infer<typeof matterStatusValidator>;
 
-// Booking lifecycle for consultations.
-export const BOOKING_STATUSES = {
-  CONFIRMED: "confirmed",
-  COMPLETED: "completed",
-  CANCELLED: "cancelled",
-} as const;
-
-export const bookingStatusValidator = v.union(
-  v.literal(BOOKING_STATUSES.CONFIRMED),
-  v.literal(BOOKING_STATUSES.COMPLETED),
-  v.literal(BOOKING_STATUSES.CANCELLED),
-);
-export type BookingStatus = Infer<typeof bookingStatusValidator>;
-
-// Payment lifecycle for orders.
-export const ORDER_STATUSES = {
+// Task states on a matter.
+export const TASK_STATUSES = {
   PENDING: "pending",
+  DONE: "done",
+} as const;
+
+export const taskStatusValidator = v.union(
+  v.literal(TASK_STATUSES.PENDING),
+  v.literal(TASK_STATUSES.DONE),
+);
+export type TaskStatus = Infer<typeof taskStatusValidator>;
+
+// Invoice lifecycle.
+export const INVOICE_STATUSES = {
+  DRAFT: "draft",
+  SENT: "sent",
+  PARTIALLY_PAID: "partially_paid",
   PAID: "paid",
-  INVOICED: "invoiced",
   CANCELLED: "cancelled",
 } as const;
 
-export const orderStatusValidator = v.union(
-  v.literal(ORDER_STATUSES.PENDING),
-  v.literal(ORDER_STATUSES.PAID),
-  v.literal(ORDER_STATUSES.INVOICED),
-  v.literal(ORDER_STATUSES.CANCELLED),
+export const invoiceStatusValidator = v.union(
+  v.literal(INVOICE_STATUSES.DRAFT),
+  v.literal(INVOICE_STATUSES.SENT),
+  v.literal(INVOICE_STATUSES.PARTIALLY_PAID),
+  v.literal(INVOICE_STATUSES.PAID),
+  v.literal(INVOICE_STATUSES.CANCELLED),
 );
-export type OrderStatus = Infer<typeof orderStatusValidator>;
+export type InvoiceStatus = Infer<typeof invoiceStatusValidator>;
 
 const schema = defineSchema(
   {
@@ -76,92 +76,197 @@ const schema = defineSchema(
       isAnonymous: v.optional(v.boolean()), // is the user anonymous. do not remove
 
       role: v.optional(roleValidator), // role of the user. do not remove
-      companyName: v.optional(v.string()), // business the user represents
+      designation: v.optional(v.string()), // e.g. Senior Advocate, Associate
+      barCouncilId: v.optional(v.string()),
+      phone: v.optional(v.string()),
     }).index("email", ["email"]), // index for the email. do not remove or modify
 
-    // ---------------- Advokate catalog & commerce ----------------
+    // ---------------------------------------------------------------
+    // ADVOKATE.IN — The Digital Chamber
+    // Organization → Team & Clients → Matters → everything else
+    // ---------------------------------------------------------------
 
-    // A bookable legal service offered to businesses.
-    services: defineTable({
+    // One row; singleton chamber profile + configurable settings.
+    settings: defineTable({
+      key: v.string(), // "chamber"
+      chamberName: v.string(),
+      addressLine1: v.string(),
+      addressLine2: v.optional(v.string()),
+      city: v.string(),
+      state: v.string(),
+      pincode: v.string(),
+      phone: v.optional(v.string()),
+      email: v.optional(v.string()),
+      website: v.optional(v.string()),
+      gstin: v.optional(v.string()),
+      currency: v.string(), // "INR"
+      timezone: v.string(), // "Asia/Kolkata"
+      financialYearStart: v.string(), // "04-01" (MM-DD)
+      taxLabel: v.string(), // "GST"
+      taxPercent: v.number(), // e.g. 18
+      invoicePrefix: v.string(), // e.g. "ADV"
+    }).index("by_key", ["key"]),
+
+    // Clients of the chamber: individuals, companies, trusts, government.
+    clients: defineTable({
       name: v.string(),
-      slug: v.string(),
-      category: v.string(),
-      summary: v.string(),
-      description: v.string(),
-      priceCents: v.number(),
-      durationMinutes: v.number(),
-      isActive: v.boolean(),
-    })
-      .index("by_slug", ["slug"])
-      .index("by_category", ["category"]),
-
-    // A scheduled consultation between a client and the firm.
-    bookings: defineTable({
-      serviceId: v.id("services"),
-      clientUserId: v.id("users"),
-      startAt: v.number(),
+      kind: v.union(
+        v.literal("individual"),
+        v.literal("company"),
+        v.literal("trust"),
+        v.literal("government"),
+      ),
+      email: v.optional(v.string()),
+      phone: v.optional(v.string()),
+      // Indian postal address
+      addressLine1: v.optional(v.string()),
+      addressLine2: v.optional(v.string()),
+      city: v.optional(v.string()),
+      state: v.optional(v.string()),
+      pincode: v.optional(v.string()),
+      gstin: v.optional(v.string()),
       notes: v.optional(v.string()),
-      status: bookingStatusValidator,
+      createdBy: v.id("users"),
       createdAt: v.number(),
-    })
-      .index("by_client", ["clientUserId"])
-      .index("by_service", ["serviceId"])
-      .index("by_start", ["startAt"]),
+    }).index("by_created_by", ["createdBy"]),
 
-    // A purchase: either a card order (paid via Stripe) or a request for an invoice.
-    orders: defineTable({
-      serviceId: v.id("services"),
-      clientUserId: v.id("users"),
-      amountCents: v.number(),
-      status: orderStatusValidator,
-      kind: v.union(v.literal("card"), v.literal("invoice")),
-      stripeSessionId: v.optional(v.string()),
-      companyName: v.optional(v.string()),
-      billingEmail: v.optional(v.string()),
-      notes: v.optional(v.string()),
-      createdAt: v.number(),
-    })
-      .index("by_client", ["clientUserId"])
-      .index("by_session", ["stripeSessionId"])
-      .index("by_status", ["status"]),
-
-    // ---------------- Existing client-portal tables ----------------
-
-    // A legal matter: a client's inquiry that the firm tracks from intake to close.
+    // A matter: the central record everything else links to.
     matters: defineTable({
       title: v.string(),
+      reference: v.string(), // chamber reference, e.g. ADV/2026/0007
+      clientId: v.id("clients"),
       practiceArea: v.string(),
-      description: v.string(),
+      court: v.optional(v.string()),
+      opposingParty: v.optional(v.string()),
       status: matterStatusValidator,
-      clientUserId: v.id("users"),
+      description: v.optional(v.string()),
+      createdBy: v.id("users"),
       createdAt: v.number(),
       updatedAt: v.number(),
     })
-      .index("by_client", ["clientUserId"])
+      .index("by_client", ["clientId"])
+      .index("by_status", ["status"])
+      .index("by_reference", ["reference"]),
+
+    // Hearings on a matter.
+    hearings: defineTable({
+      matterId: v.id("matters"),
+      title: v.string(),
+      court: v.optional(v.string()),
+      at: v.number(),
+      appearance: v.optional(v.string()), // physical / virtual
+      notes: v.optional(v.string()),
+      status: v.union(v.literal("scheduled"), v.literal("held"), v.literal("adjourned")),
+      createdAt: v.number(),
+    }).index("by_matter", ["matterId"]).index("by_at", ["at"]),
+
+    // Orders & judgments received on a matter.
+    orders: defineTable({
+      matterId: v.id("matters"),
+      title: v.string(),
+      passedOn: v.number(),
+      summary: v.optional(v.string()),
+      storageId: v.optional(v.id("_storage")),
+      createdAt: v.number(),
+    }).index("by_matter", ["matterId"]),
+
+    // Tasks & deadlines on a matter.
+    tasks: defineTable({
+      matterId: v.id("matters"),
+      title: v.string(),
+      dueAt: v.optional(v.number()),
+      status: taskStatusValidator,
+      assigneeId: v.optional(v.id("users")),
+      createdAt: v.number(),
+    })
+      .index("by_matter", ["matterId"])
+      .index("by_status", ["status"])
+      .index("by_due", ["dueAt"]),
+
+    // Time entries (fees) on a matter.
+    timeEntries: defineTable({
+      matterId: v.id("matters"),
+      userId: v.id("users"),
+      description: v.string(),
+      minutes: v.number(),
+      ratePerHour: v.number(), // in paise? no — in INR units
+      date: v.string(), // YYYY-MM-DD (financial-year bucketing)
+      invoiceId: v.optional(v.id("invoices")),
+      createdAt: v.number(),
+    })
+      .index("by_matter", ["matterId"])
+      .index("by_uninvoiced", ["matterId", "invoiceId"]),
+
+    // Expenses (disbursements) on a matter.
+    expenses: defineTable({
+      matterId: v.id("matters"),
+      description: v.string(),
+      amount: v.number(),
+      date: v.string(), // YYYY-MM-DD
+      invoiceId: v.optional(v.id("invoices")),
+      createdAt: v.number(),
+    })
+      .index("by_matter", ["matterId"])
+      .index("by_uninvoiced", ["matterId", "invoiceId"]),
+
+    // Invoices raised by the chamber.
+    invoices: defineTable({
+      number: v.string(), // ADV/2026-27/0001
+      matterId: v.id("matters"),
+      clientId: v.id("clients"),
+      status: invoiceStatusValidator,
+      subtotal: v.number(),
+      taxPercent: v.number(),
+      taxAmount: v.number(),
+      total: v.number(),
+      amountPaid: v.number(),
+      notes: v.optional(v.string()),
+      issuedOn: v.string(), // YYYY-MM-DD
+      createdBy: v.id("users"),
+      createdAt: v.number(),
+    })
+      .index("by_matter", ["matterId"])
+      .index("by_client", ["clientId"])
       .index("by_status", ["status"]),
 
-    // Firm↔client correspondence attached to a matter.
-    matterMessages: defineTable({
+    // Payments received against invoices.
+    payments: defineTable({
+      invoiceId: v.id("invoices"),
+      amount: v.number(),
+      mode: v.union(
+        v.literal("upi"),
+        v.literal("neft"),
+        v.literal("cash"),
+        v.literal("cheque"),
+        v.literal("other"),
+      ),
+      reference: v.optional(v.string()),
+      receivedOn: v.string(), // YYYY-MM-DD
+      createdAt: v.number(),
+    }).index("by_invoice", ["invoiceId"]),
+
+    // Notes on a matter.
+    matterNotes: defineTable({
       matterId: v.id("matters"),
-      authorUserId: v.id("users"),
+      authorId: v.id("users"),
       body: v.string(),
       createdAt: v.number(),
     }).index("by_matter", ["matterId"]),
 
-    // Append-only status/audit trail for a matter ("the docket").
+    // Append-only docket (audit trail) for a matter.
     matterEvents: defineTable({
       matterId: v.id("matters"),
-      kind: v.string(), // e.g. "created", "status", "message", "closed"
+      kind: v.string(), // created / hearing / order / task / time / expense / invoice / payment / note / document / status
       detail: v.optional(v.string()),
       createdAt: v.number(),
     }).index("by_matter", ["matterId"]),
 
-    // Documents uploaded by clients to a matter.
+    // Documents and communications on a matter.
     matterDocuments: defineTable({
       matterId: v.id("matters"),
-      uploaderUserId: v.id("users"),
+      uploaderId: v.id("users"),
       name: v.string(),
-      kind: v.union(v.literal("contract"), v.literal("correspondence")),
+      kind: v.union(v.literal("document"), v.literal("communication")),
       storageId: v.optional(v.id("_storage")),
       createdAt: v.number(),
     }).index("by_matter", ["matterId"]),
