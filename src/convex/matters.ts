@@ -173,6 +173,28 @@ export const updateStatus = mutation({
   },
 });
 
+/** Enable or disable client document submission on this matter. */
+export const setClientSubmission = mutation({
+  args: { matterId: v.id("matters"), enabled: v.boolean() },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    requireCapability(ac, "matter.edit");
+    await requireMatter(ctx, ac, args.matterId);
+    await ctx.db.patch(args.matterId, {
+      clientSubmission: args.enabled,
+      updatedAt: Date.now(),
+    });
+    await logEvent(
+      ctx,
+      args.matterId,
+      "status",
+      args.enabled
+        ? "Client document submission enabled."
+        : "Client document submission disabled.",
+    );
+  },
+});
+
 /** Restrict a matter to a responsible team (owner/partner/admin). */
 export const setTeam = mutation({
   args: { matterId: v.id("matters"), teamIds: v.array(v.id("users")) },

@@ -27,15 +27,19 @@ import {
   ArrowLeft,
   CalendarClock,
   CircleDashed,
+  ClipboardCheck,
   FileText,
   Gavel,
   Landmark,
   ListChecks,
+  MessageSquare,
   Paperclip,
   Plus,
   Receipt,
+  Reply,
   ScrollText,
   StickyNote,
+  Upload,
 } from "lucide-react";
 import { useRef, useState } from "react";
 import { Link, useParams } from "react-router";
@@ -91,6 +95,10 @@ export default function MatterDetail() {
   const createInvoice = useMutation(api.billing.createFromMatter);
   const generateUploadUrl = useMutation(api.matters.generateDocumentUploadUrl);
   const attachDocument = useMutation(api.matters.attachDocument);
+  const replyToClient = useMutation(api.portals.replyToClient);
+  const setDocumentRequest = useMutation(api.portals.setDocumentRequest);
+  const setSubmission = useMutation(api.matters.setClientSubmission);
+  const caps = useQuery(api.workspace.myCapabilities);
 
   const [hearingTitle, setHearingTitle] = useState("");
   const [hearingAt, setHearingAt] = useState("");
@@ -110,6 +118,10 @@ export default function MatterDetail() {
   const [noteBody, setNoteBody] = useState("");
   const [docKind, setDocKind] = useState("document");
   const [docVisibility, setDocVisibility] = useState("internal");
+  const [replyBody, setReplyBody] = useState<string | null>(null); // which note is being replied to
+  const [replyText, setReplyText] = useState("");
+  const [requestNote, setRequestNote] = useState<string | null>(null); // which doc gets checklist note
+  const [requestText, setRequestText] = useState("");
   const [busy, setBusy] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -191,6 +203,35 @@ export default function MatterDetail() {
             </p>
           </div>
           <div className="flex items-center gap-3">
+            {caps?.capabilities.includes("matter.edit") && (
+              <Button
+                size="sm"
+                variant={matter.clientSubmission ? "default" : "outline"}
+                className="gap-1.5"
+                onClick={async () => {
+                  try {
+                    await setSubmission({
+                      matterId: matterId!,
+                      enabled: !matter.clientSubmission,
+                    });
+                    toast.success(
+                      matter.clientSubmission
+                        ? "Client submission disabled."
+                        : "Client document submission enabled.",
+                    );
+                  } catch (err) {
+                    toast.error(
+                      err instanceof Error ? err.message : "Failed.",
+                    );
+                  }
+                }}
+              >
+                <Upload className="size-4" aria-hidden="true" />
+                {matter.clientSubmission
+                  ? "Client submissions on"
+                  : "Allow client submissions"}
+              </Button>
+            )}
             <Select
               value={matter.status}
               onValueChange={async (v) => {
@@ -579,17 +620,87 @@ export default function MatterDetail() {
               </Card>
             ) : (
               (documents ?? []).map((d) => (
-                <div
-                  key={d._id}
-                  className="rule-frame flex items-center justify-between gap-4 bg-card p-4"
-                >
-                  <div className="min-w-0">
-                    <p className="truncate text-sm">{d.name}</p>
-                    <p className="type-label mt-1 ink-faded">
-                      {d.kind} · {formatDateTimeIN(d.createdAt)}
-                    </p>
+                <div key={d._id} className="rule-frame bg-card p-4">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm">{d.name}</p>
+                      <p className="type-label mt-1 ink-faded">
+                        {d.kind} · {formatDateTimeIN(d.createdAt)}
+                        {d.submittedByClient
+                          ? " · submitted by client"
+                          : d.visibility === "shared_with_client"
+                            ? " · shared with client"
+                            : ""}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      {caps?.capabilities.includes("task.manage") && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="gap-1.5"
+                          onClick={() => {
+                            setRequestNote(d._id);
+                            setRequestText(d.requestedNote ?? "");
+                          }}
+                        >
+                          <ClipboardCheck
+                            className="size-4"
+                            aria-hidden="true"
+                          />
+                          {d.requestedFromClient ? "Checklist ✓" : "Request"}
+                        </Button>
+                      )}
+                      {d.storageId && <DocumentLink documentId={d._id} />}
+                    </div>
                   </div>
-                  {d.storageId && <DocumentLink documentId={d._id} />}
+                  {d.requestedFromClient && (
+                    <p className="mt-2 border-t border-border pt-2 text-xs text-[#8a6a33]">
+                      On the client's document-request checklist
+                      {d.requestedNote ? `: ${d.requestedNote}` : ""}
+                    </p>
+                  )}
+                  {requestNote === d._id && (
+                    <div className="mt-3 flex gap-2">
+                      <Input
+                        value={requestText}
+                        onChange={(e) => setRequestText(e.target.value)}
+                        placeholder="Instruction for the client (optional)…"
+                        className="flex-1"
+                      />
+                      <Button
+                        size="sm"
+                        disabled={busy}
+                        onClick={async () => {
+                          setBusy(true);
+                          try {
+                            await setDocumentRequest({
+                              documentId: d._id,
+                              requested: true,
+                              note: requestText || undefined,
+                            });
+                            toast.success("Added to the client's checklist.");
+                            setRequestNote(null);
+                          } catch (err) {
+                            toast.error(
+                              err instanceof Error ? err.message : "Failed.",
+                            );
+                          } finally {
+                            setBusy(false);
+                          }
+                        }}
+                      >
+                        Save
+      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setRequestNote(null)}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  )}
                 </div>
               ))
             )}
@@ -839,9 +950,7 @@ export default function MatterDetail() {
               their payment status.
             </CardContent>
           </Card>
-        </TabsContent>
-
-        {/* Notes */}
+        </TabsContent>        {/* Notes */}
         <TabsContent value="notes" className="mt-6">
           <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
             <div className="space-y-3">
@@ -854,10 +963,82 @@ export default function MatterDetail() {
               ) : (
                 (notes ?? []).map((n) => (
                   <div key={n._id} className="rule-frame bg-card p-4">
+                    {n.fromClient && (
+                      <p className="type-label mb-2 flex items-center gap-1.5 text-[#8a6a33]">
+                        <MessageSquare className="size-3.5" /> Message from the
+                        client
+                      </p>
+                    )}
+                    {n.toClient && (
+                      <p className="type-label mb-2 ink-faded">
+                        Reply to client
+                      </p>
+                    )}
                     <p className="whitespace-pre-wrap text-sm">{n.body}</p>
                     <p className="type-label mt-2 ink-faded">
                       {formatDateTimeIN(n.createdAt)}
                     </p>
+                    {n.fromClient &&
+                      caps?.capabilities.includes("note.write") && (
+                        <div className="mt-3 border-t border-border pt-3">
+                          {replyBody === n._id ? (
+                            <div className="flex gap-2">
+                              <Input
+                                value={replyText}
+                                onChange={(e) => setReplyText(e.target.value)}
+                                placeholder="Reply to the client…"
+                                className="flex-1"
+                                autoFocus
+                              />
+                              <Button
+                                size="sm"
+                                disabled={busy}
+                                onClick={async () => {
+                                  setBusy(true);
+                                  try {
+                                    await replyToClient({
+                                      matterId: matterId!,
+                                      body: replyText,
+                                    });
+                                    toast.success("Reply sent to the client.");
+                                    setReplyBody(null);
+                                    setReplyText("");
+                                  } catch (err) {
+                                    toast.error(
+                                      err instanceof Error
+                                        ? err.message
+                                        : "Failed.",
+                                    );
+                                  } finally {
+                                    setBusy(false);
+                                  }
+                                }}
+                              >
+                                Send
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => setReplyBody(null)}
+                              >
+                                Cancel
+                              </Button>
+                            </div>
+                          ) : (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="gap-1.5"
+                              onClick={() => {
+                                setReplyBody(n._id);
+                                setReplyText("");
+                              }}
+                            >
+                              <Reply className="size-4" /> Reply to client
+                            </Button>
+                          )}
+                        </div>
+                      )}
                   </div>
                 ))
               )}

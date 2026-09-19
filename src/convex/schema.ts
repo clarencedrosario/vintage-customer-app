@@ -255,6 +255,9 @@ const schema = defineSchema(
       // Matter-level access: null = all firm roles; otherwise only these
       // users (plus owner/partner/administrator) may open the file.
       teamIds: v.optional(v.array(v.id("users"))),
+      // When true, the connected client may upload documents from the
+      // client portal (submission is per-matter opt-in).
+      clientSubmission: v.optional(v.boolean()),
       createdBy: v.id("users"),
       createdAt: v.number(),
       updatedAt: v.number(),
@@ -296,6 +299,20 @@ const schema = defineSchema(
       dueAt: v.optional(v.number()),
       status: taskStatusValidator,
       assigneeId: v.optional(v.id("users")),
+      // Progress notes posted by support staff from the staff portal.
+      staffUpdates: v.optional(
+        v.array(v.object({ body: v.string(), at: v.number() })),
+      ),
+      // Completion evidence: filing receipts, delivery proofs, etc.
+      acknowledgements: v.optional(
+        v.array(
+          v.object({
+            name: v.string(),
+            storageId: v.id("_storage"),
+            at: v.number(),
+          }),
+        ),
+      ),
       createdAt: v.number(),
     })
       .index("by_matter", ["matterId"])
@@ -367,6 +384,12 @@ const schema = defineSchema(
       matterId: v.id("matters"),
       authorId: v.id("users"),
       body: v.string(),
+      // True when written by the client from the client portal (secure
+      // messages); false/absent = internal chamber note.
+      fromClient: v.optional(v.boolean()),
+      // True on chamber replies addressed to the client — those, and only
+      // those, are visible in the client message thread.
+      toClient: v.optional(v.boolean()),
       createdAt: v.number(),
     }).index("by_matter", ["matterId"]),
 
@@ -389,6 +412,13 @@ const schema = defineSchema(
         v.literal("shared_with_client"),
       ),
       storageId: v.optional(v.id("_storage")),
+      // Client portal submissions land here (uploader is the client user).
+      submittedByClient: v.optional(v.boolean()),
+      // Checklist: clients are asked to supply this document.
+      requestedFromClient: v.optional(v.boolean()),
+      requestedNote: v.optional(v.string()),
+      // Which client users have acknowledged this shared document.
+      seenByClient: v.optional(v.array(v.id("users"))),
       createdAt: v.number(),
     }).index("by_matter", ["matterId"]),
 
