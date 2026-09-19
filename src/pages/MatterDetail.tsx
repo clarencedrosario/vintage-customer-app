@@ -1,6 +1,12 @@
 import { ChamberShell } from "@/components/ChamberShell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -16,6 +22,7 @@ import {
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { MatterStatus } from "@/convex/schema";
+import type { Doc } from "@/convex/_generated/dataModel";
 import {
   formatDateIN,
   formatDateTimeIN,
@@ -31,10 +38,14 @@ import {
   ClipboardCheck,
   FileText,
   Gavel,
+  History,
   Landmark,
   ListChecks,
   MessageSquare,
   Paperclip,
+  Scale,
+  Trash2,
+  Users,
   Plus,
   Receipt,
   Reply,
@@ -42,9 +53,10 @@ import {
   StickyNote,
   Upload,
 } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { toast } from "sonner";
+
 
 const STATUS_LABELS: Record<MatterStatus, string> = {
   open: "Open",
@@ -85,6 +97,29 @@ export default function MatterDetail() {
   const documents = useQuery(api.matters.listDocuments, matterId ? { matterId } : "skip");
   const orders = useQuery(api.matters.allOrders);
   const markOrderReviewed = useMutation(api.matters.markOrderReviewed);
+  const updateMatter = useMutation(api.matters.update);
+  const closeMatterFn = useMutation(api.matters.closeMatter);
+  const reopenMatterFn = useMutation(api.matters.reopenMatter);
+  const setArchivedFn = useMutation(api.matters.setArchived);
+  const setLeadFn = useMutation(api.matters.setLead);
+  const addPartyFn = useMutation(api.matters.addParty);
+  const removePartyFn = useMutation(api.matters.removeParty);
+  const addIssueFn = useMutation(api.matters.addIssue);
+  const setIssueStatusFn = useMutation(api.matters.setIssueStatus);
+  const attachEvidenceFn = useMutation(api.matters.attachEvidence);
+  const parties = useQuery(
+    api.matters.listParties,
+    matterId ? { matterId } : "skip",
+  );
+  const issues = useQuery(
+    api.matters.listIssues,
+    matterId ? { matterId } : "skip",
+  );
+  const auditLog = useQuery(
+    api.matters.listAudit,
+    matterId ? { matterId } : "skip",
+  );
+  const members = useQuery(api.workspace.team);
   const timeEntries = useQuery(api.matters.listTime, matterId ? { matterId } : "skip");
   const expenses = useQuery(api.matters.listExpenses, matterId ? { matterId } : "skip");
   const events = useQuery(api.matters.listEvents, matterId ? { matterId } : "skip");
@@ -103,6 +138,17 @@ export default function MatterDetail() {
   const setDocumentRequest = useMutation(api.portals.setDocumentRequest);
   const setSubmission = useMutation(api.matters.setClientSubmission);
   const caps = useQuery(api.workspace.myCapabilities);
+  const setTeamFn = useMutation(api.matters.setTeam);
+
+  const [partyName, setPartyName] = useState("");
+  const [partySide, setPartySide] = useState("ours");
+  const [partyRole, setPartyRole] = useState("");
+  const [partyCounsel, setPartyCounsel] = useState("");
+  const [teamDraft, setTeamDraft] = useState<Id<"users">[]>([]);
+  const acIsOwnerPartnerAdmin =
+    caps?.orgRole === "owner" ||
+    caps?.orgRole === "partner" ||
+    caps?.orgRole === "administrator";
 
   const [hearingTitle, setHearingTitle] = useState("");
   const [hearingAt, setHearingAt] = useState("");
@@ -126,13 +172,17 @@ export default function MatterDetail() {
   const [replyText, setReplyText] = useState("");
   const [requestNote, setRequestNote] = useState<string | null>(null); // which doc gets checklist note
   const [requestText, setRequestText] = useState("");
+  const [editOpen, setEditOpen] = useState(false);
+  const [partyOpen, setPartyOpen] = useState(false);
+  const [issueTitle, setIssueTitle] = useState("");
+  const [issueDetail, setIssueDetail] = useState("");
   const [busy, setBusy] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   // Deep-linkable tab: /matters/:id?tab=orders (used by the attention docket).
   const tabParam = searchParams.get("tab");
   const activeTab =
     tabParam &&
-    ["hearings", "orders", "tasks", "documents", "time", "expenses", "invoices", "notes", "docket"].includes(
+    ["hearings", "orders", "tasks", "documents", "time", "expenses", "invoices", "notes", "parties", "issues", "docket", "audit"].includes(
       tabParam,
     )
       ? tabParam
@@ -140,6 +190,10 @@ export default function MatterDetail() {
   const setTab = (value: string) => {
     setSearchParams(value === "hearings" ? {} : { tab: value }, { replace: true });
   };
+
+  useEffect(() => {
+    setTeamDraft(matter?.teamIds ?? []);
+  }, [matter?.teamIds]);
 
   if (matter === undefined) {
     return (
@@ -206,6 +260,14 @@ export default function MatterDetail() {
           <div className="min-w-0">
             <p className="type-label ink-faded">
               {matter.reference} · {matter.practiceArea}
+              {matter.archivedAt ? " · ARCHIVED" : ""}
+              {matter.priority && matter.priority !== "normal" && (
+                <span
+                  className={`ml-2 ${matter.priority === "urgent" ? "text-red-700" : "text-[#8a6a33]"}`}
+                >
+                  · {matter.priority.toUpperCase()} PRIORITY
+                </span>
+              )}
             </p>
             <h1 className="mt-2 font-serif text-3xl font-semibold tracking-tight">
               {matter.title}
@@ -215,10 +277,30 @@ export default function MatterDetail() {
                 {matter.client?.name}
               </span>
               {matter.court ? ` · ${matter.court}` : ""}
+              {matter.bench ? ` · ${matter.bench}` : ""}
+              {matter.caseNumber ? ` · ${matter.caseNumber}` : ""}
               {matter.opposingParty ? ` · vs ${matter.opposingParty}` : ""}
             </p>
+            {(matter.opposingCounsel || matter.billingArrangement) && (
+              <p className="mt-1 text-sm text-muted-foreground">
+                {matter.opposingCounsel
+                  ? `Opposing counsel: ${matter.opposingCounsel}`
+                  : ""}
+                {matter.opposingCounsel && matter.billingArrangement ? " · " : ""}
+                {matter.billingArrangement ?? ""}
+              </p>
+            )}
+            {matter.keyDates && matter.keyDates.length > 0 && (
+              <p className="type-label mt-2 flex flex-wrap gap-x-4 gap-y-1 ink-faded">
+                {matter.keyDates.map((kd) => (
+                  <span key={`${kd.label}-${kd.date}`}>
+                    {kd.label}: {formatDateIN(kd.date)}
+                  </span>
+                ))}
+              </p>
+            )}
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2">
             {caps?.capabilities.includes("matter.edit") && (
               <Button
                 size="sm"
@@ -273,6 +355,101 @@ export default function MatterDetail() {
                 ))}
               </SelectContent>
             </Select>
+            {caps?.capabilities.includes("matter.edit") && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-1.5"
+                onClick={() => setEditOpen(true)}
+              >
+                Edit details
+              </Button>
+            )}
+            {matter && matterId && (
+              <EditMatterDialog
+                matterId={matterId}
+                matter={matter}
+                open={editOpen}
+                onOpenChange={setEditOpen}
+              />
+            )}
+            {caps?.capabilities.includes("matter.close") &&
+              matter.status !== "closed" && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="gap-1.5"
+                  disabled={busy}
+                  onClick={async () => {
+                    setBusy(true);
+                    try {
+                      await closeMatterFn({ matterId: matterId! });
+                      toast.success("Matter closed.");
+                    } catch (err) {
+                      toast.error(
+                        err instanceof Error ? err.message : "Failed.",
+                      );
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                >
+                  Close matter
+                </Button>
+              )}
+            {caps?.capabilities.includes("matter.edit") &&
+              matter.status === "closed" && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={async () => {
+                    setBusy(true);
+                    try {
+                      await reopenMatterFn({ matterId: matterId! });
+                      toast.success("Matter reopened.");
+                    } catch (err) {
+                      toast.error(
+                        err instanceof Error ? err.message : "Failed.",
+                      );
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                >
+                  Reopen matter
+                </Button>
+              )}
+            {caps?.capabilities.includes("matter.edit") &&
+              matter.status === "closed" && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy}
+                  onClick={async () => {
+                    setBusy(true);
+                    try {
+                      await setArchivedFn({
+                        matterId: matterId!,
+                        archived: !matter.archivedAt,
+                      });
+                      toast.success(
+                        matter.archivedAt
+                          ? "Matter restored from archive."
+                          : "Matter archived.",
+                      );
+                    } catch (err) {
+                      toast.error(
+                        err instanceof Error ? err.message : "Failed.",
+                      );
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                >
+                  {matter.archivedAt ? "Restore" : "Archive"}
+                </Button>
+              )}
           </div>
         </div>
         {matter.description && (
@@ -311,8 +488,17 @@ export default function MatterDetail() {
           <TabsTrigger value="notes" className="gap-2">
             <StickyNote className="size-4" /> Notes
           </TabsTrigger>
+          <TabsTrigger value="parties" className="gap-2">
+            <Users className="size-4" /> Parties &amp; team
+          </TabsTrigger>
+          <TabsTrigger value="issues" className="gap-2">
+            <Scale className="size-4" /> Evidence &amp; issues
+          </TabsTrigger>
           <TabsTrigger value="docket" className="gap-2">
             <CalendarClock className="size-4" /> Docket
+          </TabsTrigger>
+          <TabsTrigger value="audit" className="gap-2">
+            <History className="size-4" /> Audit
           </TabsTrigger>
         </TabsList>
 
@@ -1125,6 +1311,456 @@ export default function MatterDetail() {
           </div>
         </TabsContent>
 
+        {/* Parties & team */}
+        <TabsContent value="parties" className="mt-6">
+          <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
+            <div className="space-y-6">
+              {/* Lead lawyer */}
+              <Card className="rule-frame bg-card">
+                <CardContent className="pt-6">
+                  <h3 className="font-serif text-lg font-semibold">Responsible lead</h3>
+                  <p className="mt-1 text-sm ink-faded">
+                    The advocate answerable for the conduct of this matter.
+                  </p>
+                  {caps?.capabilities.includes("matter.edit") ? (
+                    <Select
+                      value={matter.leadLawyerId ?? ""}
+                      onValueChange={async (v) => {
+                        try {
+                          await setLeadFn({
+                            matterId: matterId!,
+                            lawyerId: v as Id<"users">,
+                          });
+                          toast.success("Lead lawyer updated.");
+                        } catch (err) {
+                          toast.error(err instanceof Error ? err.message : "Failed.");
+                        }
+                      }}
+                    >
+                      <SelectTrigger className="mt-3 w-64">
+                        <SelectValue placeholder="Assign lead lawyer" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(members ?? [])
+                          .filter(
+                            (m) =>
+                              m.status === "active" &&
+                              m.orgRole !== "support_staff" &&
+                              m.orgRole !== "accountant",
+                          )
+                          .map((m) => (
+                            <SelectItem key={m.membershipId} value={m.userId}>
+                              {m.name ?? m.email ?? "Member"}
+                            </SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <p className="mt-3 text-sm">
+                      {members?.find((m) => m.userId === matter.leadLawyerId)?.name ??
+                        "Not yet assigned."}
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Parties register */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-serif text-lg font-semibold">Parties on record</h3>
+                  {caps?.capabilities.includes("matter.edit") && (
+                    <Button size="sm" variant="outline" onClick={() => setPartyOpen(true)}>
+                      <Plus className="mr-1.5 size-4" /> Add party
+                    </Button>
+                  )}
+                </div>
+                {(parties ?? []).length === 0 ? (
+                  <Card className="border-dashed">
+                    <CardContent className="py-8 text-center text-sm ink-faded">
+                      No parties recorded. Add the petitioners, respondents and
+                      witnesses so the file reads complete.
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {(parties ?? []).map((p) => (
+                      <div key={p._id} className="rule-frame bg-card p-4">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="font-medium">{p.name}</p>
+                            <p className="type-label mt-0.5 ink-faded">
+                              {p.side === "ours"
+                                ? "On our side"
+                                : p.side === "opposing"
+                                  ? "Opposing"
+                                  : "Neutral"}
+                              {p.role ? ` · ${p.role}` : ""}
+                            </p>
+                            {p.counsel && (
+                              <p className="mt-1 text-sm ink-faded">
+                                Counsel: {p.counsel}
+                              </p>
+                            )}
+                          </div>
+                          {caps?.capabilities.includes("matter.edit") && (
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              aria-label={`Remove ${p.name}`}
+                              onClick={async () => {
+                                try {
+                                  await removePartyFn({ partyId: p._id });
+                                  toast.success("Party removed.");
+                                } catch (err) {
+                                  toast.error(
+                                    err instanceof Error ? err.message : "Failed.",
+                                  );
+                                }
+                              }}
+                            >
+                              <Trash2 className="size-4" />
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Matter team restriction */}
+              <Card className="rule-frame bg-card">
+                <CardContent className="pt-6">
+                  <h3 className="font-serif text-lg font-semibold">Matter team</h3>
+                  <p className="mt-1 text-sm ink-faded">
+                    Restricting the team limits this file to the members below
+                    (owners, partners and administrators always retain access).
+                  </p>
+                  {caps?.capabilities.includes("matter.edit") &&
+                  (acIsOwnerPartnerAdmin ?? false) ? (
+                    <div className="mt-4 space-y-2">
+                      {(members ?? [])
+                        .filter(
+                          (m) =>
+                            m.status === "active" &&
+                            m.orgRole !== "support_staff" &&
+                            m.orgRole !== "accountant",
+                        )
+                        .map((m) => {
+                          const uid = m.userId;
+                          const checked = teamDraft.includes(uid);
+                          return (
+                            <label
+                              key={uid}
+                              className="flex cursor-pointer items-center gap-2.5 text-sm"
+                            >
+                              <input
+                                type="checkbox"
+                                className="accent-[#B68A45]"
+                                checked={checked}
+                                onChange={() =>
+                                  setTeamDraft((prev) =>
+                                    checked
+                                      ? prev.filter((x) => x !== uid)
+                                      : [...prev, uid],
+                                  )
+                                }
+                              />
+                              {m.name ?? m.email ?? "Member"}
+                            </label>
+                          );
+                        })}
+                      <div className="flex gap-2 pt-2">
+                        <Button
+                          size="sm"
+                          disabled={busy}
+                          onClick={async () => {
+                            setBusy(true);
+                            try {
+                              await setTeamFn({ matterId: matterId!, teamIds: teamDraft });
+                              toast.success("Matter team saved.");
+                            } catch (err) {
+                              toast.error(err instanceof Error ? err.message : "Failed.");
+                            } finally {
+                              setBusy(false);
+                            }
+                          }}
+                        >
+                          Save team
+                        </Button>
+                        {matter.teamIds && matter.teamIds.length > 0 && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={busy}
+                            onClick={async () => {
+                              setBusy(true);
+                              try {
+                                await setTeamFn({ matterId: matterId!, teamIds: [] });
+                                setTeamDraft([]);
+                                toast.success("File opened to the whole organisation.");
+                              } catch (err) {
+                                toast.error(
+                                  err instanceof Error ? err.message : "Failed.",
+                                );
+                              } finally {
+                                setBusy(false);
+                              }
+                            }}
+                          >
+                            Open to organisation
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="mt-3 text-sm ink-faded">
+                      {matter.teamIds && matter.teamIds.length > 0
+                        ? `Restricted to ${matter.teamIds.length} team member${matter.teamIds.length === 1 ? "" : "s"}.`
+                        : "Open to all lawyers of the organisation."}
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+
+            <Card className="rule-frame h-fit bg-card">
+              <CardContent className="space-y-4 pt-6">
+                <h3 className="font-serif text-lg font-semibold">Add a party</h3>
+                <div className="space-y-2">
+                  <Label htmlFor="p-name">Name</Label>
+                  <Input
+                    id="p-name"
+                    value={partyName}
+                    onChange={(e) => setPartyName(e.target.value)}
+                    placeholder="e.g. Ramesh Kumar"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="p-side">Side</Label>
+                  <Select
+                    value={partySide}
+                    onValueChange={setPartySide}
+                  >
+                    <SelectTrigger id="p-side">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ours">On our side</SelectItem>
+                      <SelectItem value="opposing">Opposing</SelectItem>
+                      <SelectItem value="neutral">Neutral</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="p-role">Role (optional)</Label>
+                  <Input
+                    id="p-role"
+                    value={partyRole}
+                    onChange={(e) => setPartyRole(e.target.value)}
+                    placeholder="petitioner, respondent, witness…"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="p-counsel">Counsel (optional)</Label>
+                  <Input
+                    id="p-counsel"
+                    value={partyCounsel}
+                    onChange={(e) => setPartyCounsel(e.target.value)}
+                    placeholder="Their advocate on record"
+                  />
+                </div>
+                <Button
+                  className="w-full"
+                  disabled={busy || !partyName.trim()}
+                  onClick={async () => {
+                    setBusy(true);
+                    try {
+                      await addPartyFn({
+                        matterId: matterId!,
+                        name: partyName,
+                        side: partySide as "ours" | "opposing" | "neutral",
+                        role: partyRole || undefined,
+                        counsel: partyCounsel || undefined,
+                      });
+                      toast.success("Party added.");
+                      setPartyName("");
+                      setPartyRole("");
+                      setPartyCounsel("");
+                      setPartySide("ours");
+                    } catch (err) {
+                      toast.error(err instanceof Error ? err.message : "Failed.");
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                >
+                  Add party
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
+        {/* Evidence & issues */}
+        <TabsContent value="issues" className="mt-6">
+          <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
+            <div className="space-y-3">
+              {(issues ?? []).length === 0 ? (
+                <Card className="border-dashed">
+                  <CardContent className="py-8 text-center text-sm ink-faded">
+                    No issues framed yet. Note the questions of law and fact the
+                    court must decide, and track the evidence for each.
+                  </CardContent>
+                </Card>
+              ) : (
+                (issues ?? []).map((iss) => (
+                  <div key={iss._id} className="rule-frame bg-card p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="font-medium">{iss.title}</p>
+                        {iss.detail && (
+                          <p className="mt-1 text-sm ink-faded">{iss.detail}</p>
+                        )}
+                        {iss.evidence && iss.evidence.length > 0 && (
+                          <ul className="mt-2 space-y-1">
+                            {iss.evidence.map((ev, i) => (
+                              <li
+                                key={`${ev.label}-${i}`}
+                                className="type-label flex items-center gap-1.5 ink-faded"
+                              >
+                                <Paperclip className="size-3" /> {ev.label}
+                                <span
+                                  className={
+                                    ev.supports
+                                      ? "text-emerald-700"
+                                      : "text-red-700"
+                                  }
+                                >
+                                  · {ev.supports ? "supports" : "rebuts"}
+                                </span>
+                                {ev.documentId && (
+                                  <DocumentLink documentId={ev.documentId} />
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        {caps?.capabilities.includes("note.write") &&
+                          (iss.evidence?.length ?? 0) < 8 && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={async () => {
+                                const label = window.prompt(
+                                  "Evidence reference (e.g. Annexure A-4, bank statement)",
+                                );
+                                if (!label) return;
+                                const supports = window.confirm(
+                                  "Does this exhibit SUPPORT our case? (Cancel = it rebuts)",
+                                );
+                                try {
+                                  await attachEvidenceFn({
+                                    issueId: iss._id,
+                                    label,
+                                    supports,
+                                  });
+                                  toast.success("Evidence tagged.");
+                                } catch (err) {
+                                  toast.error(
+                                    err instanceof Error ? err.message : "Failed.",
+                                  );
+                                }
+                              }}
+                            >
+                              <Paperclip className="mr-1 size-3.5" /> Evidence
+                            </Button>
+                          )}
+                        {caps?.capabilities.includes("note.write") && (
+                          <Select
+                            value={iss.status}
+                            onValueChange={async (v) => {
+                              try {
+                                await setIssueStatusFn({
+                                  issueId: iss._id,
+                                  status: v as "open" | "argued" | "resolved",
+                                });
+                                toast.success("Issue updated.");
+                              } catch (err) {
+                                toast.error(
+                                  err instanceof Error ? err.message : "Failed.",
+                                );
+                              }
+                            }}
+                          >
+                            <SelectTrigger className="w-32">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="open">Open</SelectItem>
+                              <SelectItem value="argued">Argued</SelectItem>
+                              <SelectItem value="resolved">Resolved</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+            <Card className="rule-frame h-fit bg-card">
+              <CardContent className="space-y-4 pt-6">
+                <h3 className="font-serif text-lg font-semibold">Frame an issue</h3>
+                <div className="space-y-2">
+                  <Label htmlFor="i-title">Issue</Label>
+                  <Input
+                    id="i-title"
+                    value={issueTitle}
+                    onChange={(e) => setIssueTitle(e.target.value)}
+                    placeholder="e.g. Whether the sale deed of 2019 is valid"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="i-detail">Notes (optional)</Label>
+                  <Textarea
+                    id="i-detail"
+                    value={issueDetail}
+                    onChange={(e) => setIssueDetail(e.target.value)}
+                    placeholder="The question of law or fact, and the stance…"
+                    className="min-h-[80px]"
+                  />
+                </div>
+                <Button
+                  className="w-full"
+                  disabled={busy || !issueTitle.trim()}
+                  onClick={async () => {
+                    setBusy(true);
+                    try {
+                      await addIssueFn({
+                        matterId: matterId!,
+                        title: issueTitle,
+                        detail: issueDetail || undefined,
+                      });
+                      toast.success("Issue framed.");
+                      setIssueTitle("");
+                      setIssueDetail("");
+                    } catch (err) {
+                      toast.error(err instanceof Error ? err.message : "Failed.");
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                >
+                  Frame issue
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
         {/* Docket */}
         <TabsContent value="docket" className="mt-6">
           {(events ?? []).length === 0 ? (
@@ -1152,7 +1788,295 @@ export default function MatterDetail() {
             </ol>
           )}
         </TabsContent>
+
+        {/* Audit log (owner/partner/administrator) */}
+        <TabsContent value="audit" className="mt-6">
+          {(auditLog ?? []).length === 0 ? (
+            <Card className="border-dashed">
+              <CardContent className="py-8 text-center text-sm ink-faded">
+                No audit entries, or audit is not part of your role.
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="overflow-hidden rounded-lg border">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b bg-muted/40 text-left">
+                    <th className="px-4 py-2.5 font-medium">When</th>
+                    <th className="px-4 py-2.5 font-medium">Action</th>
+                    <th className="px-4 py-2.5 font-medium">Detail</th>
+                    <th className="px-4 py-2.5 font-medium">By</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(auditLog ?? []).map((a) => (
+                    <tr key={a._id} className="border-b last:border-0">
+                      <td className="whitespace-nowrap px-4 py-2.5 ink-faded">
+                        {formatDateTimeIN(a.createdAt)}
+                      </td>
+                      <td className="px-4 py-2.5">{a.action}</td>
+                      <td className="px-4 py-2.5 ink-faded">{a.detail ?? "—"}</td>
+                      <td className="px-4 py-2.5 ink-faded">{a.actorName ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </TabsContent>
       </Tabs>
     </ChamberShell>
+  );
+}
+
+/** Edit-dialog for the matter file — every administrative field. */
+function EditMatterDialog({
+  matterId,
+  matter,
+  open,
+  onOpenChange,
+}: {
+  matterId: Id<"matters">;
+  matter: Doc<"matters">;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const updateMatter = useMutation(api.matters.update);
+  const [title, setTitle] = useState(matter.title);
+  const [description, setDescription] = useState(matter.description ?? "");
+  const [practiceArea, setPracticeArea] = useState(matter.practiceArea);
+  const [court, setCourt] = useState(matter.court ?? "");
+  const [jurisdiction, setJurisdiction] = useState(matter.jurisdiction ?? "");
+  const [caseNumber, setCaseNumber] = useState(matter.caseNumber ?? "");
+  const [bench, setBench] = useState(matter.bench ?? "");
+  const [opposingParty, setOpposingParty] = useState(matter.opposingParty ?? "");
+  const [opposingCounsel, setOpposingCounsel] = useState(matter.opposingCounsel ?? "");
+  const [priority, setPriority] = useState(matter.priority ?? "normal");
+  const [billingArrangement, setBillingArrangement] = useState(
+    matter.billingArrangement ?? "",
+  );
+  const [keyDates, setKeyDates] = useState<{ label: string; date: string }[]>(
+    matter.keyDates ?? [],
+  );
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    if (!title.trim()) {
+      toast.error("The matter needs a title.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await updateMatter({
+        matterId,
+        title,
+        description: description || undefined,
+        practiceArea,
+        court: court || undefined,
+        jurisdiction: jurisdiction || undefined,
+        caseNumber: caseNumber || undefined,
+        bench: bench || undefined,
+        opposingParty: opposingParty || undefined,
+        opposingCounsel: opposingCounsel || undefined,
+        priority: priority as "normal" | "high" | "urgent",
+        billingArrangement: billingArrangement || undefined,
+        keyDates: keyDates.filter((kd) => kd.label.trim() && kd.date),
+      });
+      toast.success("Matter details saved.");
+      onOpenChange(false);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <p className="type-label ink-faded">Matter file</p>
+          <DialogTitle className="font-serif text-2xl">
+            Edit details
+          </DialogTitle>
+        </DialogHeader>
+        <div className="max-h-[62vh] space-y-4 overflow-y-auto pr-1">
+          <div className="space-y-2">
+            <Label htmlFor="em-title">Title</Label>
+            <Input
+              id="em-title"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="em-desc">Description</Label>
+            <Textarea
+              id="em-desc"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              className="min-h-[90px]"
+              placeholder="Nature of the dispute, relief sought, background…"
+            />
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="em-area">Category</Label>
+              <Input
+                id="em-area"
+                value={practiceArea}
+                onChange={(e) => setPracticeArea(e.target.value)}
+                placeholder="Civil, criminal, family…"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Priority</Label>
+              <Select value={priority} onValueChange={setPriority}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="normal">Normal</SelectItem>
+                  <SelectItem value="high">High</SelectItem>
+                  <SelectItem value="urgent">Urgent</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="em-court">Court</Label>
+              <Input
+                id="em-court"
+                value={court}
+                onChange={(e) => setCourt(e.target.value)}
+                placeholder="e.g. High Court of Delhi"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="em-bench">Bench</Label>
+              <Input
+                id="em-bench"
+                value={bench}
+                onChange={(e) => setBench(e.target.value)}
+                placeholder="e.g. Division Bench"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="em-case">Case number</Label>
+              <Input
+                id="em-case"
+                value={caseNumber}
+                onChange={(e) => setCaseNumber(e.target.value)}
+                placeholder="e.g. W.P.(C) 4321/2026"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="em-jur">Jurisdiction</Label>
+              <Input
+                id="em-jur"
+                value={jurisdiction}
+                onChange={(e) => setJurisdiction(e.target.value)}
+                placeholder="e.g. Original side, Delhi"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="em-opp">Opposing party</Label>
+              <Input
+                id="em-opp"
+                value={opposingParty}
+                onChange={(e) => setOpposingParty(e.target.value)}
+                placeholder="Named opposite party"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="em-counsel">Opposing counsel</Label>
+              <Input
+                id="em-counsel"
+                value={opposingCounsel}
+                onChange={(e) => setOpposingCounsel(e.target.value)}
+                placeholder="Their advocate on record"
+              />
+            </div>
+            <div className="space-y-2 sm:col-span-2">
+              <Label htmlFor="em-bill">Billing arrangement</Label>
+              <Input
+                id="em-bill"
+                value={billingArrangement}
+                onChange={(e) => setBillingArrangement(e.target.value)}
+                placeholder="e.g. Fixed fee ₹50,000 per stage · Hourly ₹3,000/hr"
+              />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label>Key dates</Label>
+              <Button
+                size="sm"
+                variant="ghost"
+                type="button"
+                onClick={() =>
+                  setKeyDates((prev) => [...prev, { label: "", date: "" }])
+                }
+              >
+                <Plus className="mr-1 size-3.5" /> Add date
+              </Button>
+            </div>
+            {keyDates.length === 0 ? (
+              <p className="text-sm ink-faded">
+                Limitation dates, filing cut-offs, next appearances…
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {keyDates.map((kd, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <Input
+                      value={kd.label}
+                      onChange={(e) =>
+                        setKeyDates((prev) =>
+                          prev.map((x, j) =>
+                            j === i ? { ...x, label: e.target.value } : x,
+                          ),
+                        )
+                      }
+                      placeholder="Label — e.g. Limitation expires"
+                    />
+                    <Input
+                      type="date"
+                      className="w-40"
+                      value={kd.date}
+                      onChange={(e) =>
+                        setKeyDates((prev) =>
+                          prev.map((x, j) =>
+                            j === i ? { ...x, date: e.target.value } : x,
+                          ),
+                        )
+                      }
+                    />
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      aria-label="Remove date"
+                      type="button"
+                      onClick={() =>
+                        setKeyDates((prev) => prev.filter((_, j) => j !== i))
+                      }
+                    >
+                      <Trash2 className="size-4" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button onClick={submit} disabled={busy || !title.trim()}>
+            Save details
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

@@ -61,16 +61,32 @@ const FIRM_VIEW_ROLES: readonly OrgRole[] = [
 
 function NewMatterDialog() {
   const clients = useQuery(api.clients.list);
+  const members = useQuery(api.workspace.team);
   const createMatter = useMutation(api.matters.create);
 
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState("");
+  const conflict = useQuery(
+    api.clients.conflictCheck,
+    title.trim().length >= 3 ? { name: title.trim() } : "skip",
+  );
   const [clientId, setClientId] = useState("");
   const [practiceArea, setPracticeArea] = useState("");
   const [court, setCourt] = useState("");
+  const [jurisdiction, setJurisdiction] = useState("");
+  const [caseNumber, setCaseNumber] = useState("");
+  const [bench, setBench] = useState("");
   const [opposingParty, setOpposingParty] = useState("");
+  const [opposingCounsel, setOpposingCounsel] = useState("");
   const [description, setDescription] = useState("");
+  const [leadLawyerId, setLeadLawyerId] = useState("");
+  const [priority, setPriority] = useState("normal");
+  const [billingArrangement, setBillingArrangement] = useState("");
   const [busy, setBusy] = useState(false);
+
+  const lawyerOptions = (members ?? []).filter(
+    (m) => m.status === "active" && m.orgRole !== "support_staff",
+  );
 
   const handleCreate = async () => {
     if (!title.trim() || !clientId || !practiceArea) {
@@ -84,8 +100,15 @@ function NewMatterDialog() {
         clientId: clientId as never,
         practiceArea,
         court: court || undefined,
+        jurisdiction: jurisdiction || undefined,
+        caseNumber: caseNumber || undefined,
+        bench: bench || undefined,
         opposingParty: opposingParty || undefined,
+        opposingCounsel: opposingCounsel || undefined,
         description: description || undefined,
+        leadLawyerId: (leadLawyerId || undefined) as never,
+        priority: priority as "normal" | "high" | "urgent",
+        billingArrangement: billingArrangement || undefined,
       });
       toast.success("Matter opened. The reference has been assigned.");
       setOpen(false);
@@ -93,8 +116,15 @@ function NewMatterDialog() {
       setClientId("");
       setPracticeArea("");
       setCourt("");
+      setJurisdiction("");
+      setCaseNumber("");
+      setBench("");
       setOpposingParty("");
+      setOpposingCounsel("");
       setDescription("");
+      setLeadLawyerId("");
+      setPriority("normal");
+      setBillingArrangement("");
     } catch (err) {
       toast.error(
         err instanceof Error ? err.message : "Could not open the matter.",
@@ -112,14 +142,14 @@ function NewMatterDialog() {
           Open a matter
         </Button>
       </DialogTrigger>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-xl">
         <DialogHeader>
           <p className="type-label ink-faded">New Entry</p>
           <DialogTitle className="font-serif text-2xl">
             Open a matter
           </DialogTitle>
         </DialogHeader>
-        <div className="space-y-4">
+        <div className="max-h-[65vh] space-y-4 overflow-y-auto pr-1">
           <div className="space-y-2">
             <Label htmlFor="nm-title">Matter title</Label>
             <Input
@@ -128,41 +158,59 @@ function NewMatterDialog() {
               onChange={(e) => setTitle(e.target.value)}
               placeholder="e.g. Writ petition — land acquisition"
             />
-          </div>
-          <div className="space-y-2">
-            <Label>Client</Label>
-            <Select value={clientId} onValueChange={setClientId}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select a client" />
-              </SelectTrigger>
-              <SelectContent>
-                {(clients ?? []).map((c) => (
-                  <SelectItem key={c._id} value={c._id}>
-                    {c.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {(clients ?? []).length === 0 && (
-              <p className="text-xs text-muted-foreground">
-                No clients yet — add one from the Clients page first.
-              </p>
+            {conflict && conflict.matches.length > 0 && (
+              <div className="rounded-lg border border-[#B68A45]/50 bg-[#f6f1e6] p-3">
+                <p className="text-xs font-medium text-[#8a6a33]">
+                  {conflict.matches.length} possible conflict
+                  {conflict.matches.length === 1 ? "" : "s"} — for human
+                  review, not an automatic bar.
+                </p>
+                <ul className="mt-1 space-y-1">
+                  {conflict.matches.slice(0, 4).map((m) => (
+                    <li key={m.clientId} className="text-xs text-muted-foreground">
+                      · {m.clientName}: {m.evidence[0]}
+                    </li>
+                  ))}
+                </ul>
+              </div>
             )}
           </div>
-          <div className="space-y-2">
-            <Label>Practice area</Label>
-            <Select value={practiceArea} onValueChange={setPracticeArea}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select practice area" />
-              </SelectTrigger>
-              <SelectContent>
-                {PRACTICE_AREAS.map((a) => (
-                  <SelectItem key={a} value={a}>
-                    {a}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Client</Label>
+              <Select value={clientId} onValueChange={setClientId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select a client" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(clients ?? []).map((c) => (
+                    <SelectItem key={c._id} value={c._id}>
+                      {c.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {(clients ?? []).length === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  No clients yet — add one from the Clients page first.
+                </p>
+              )}
+            </div>
+            <div className="space-y-2">
+              <Label>Category / practice area</Label>
+              <Select value={practiceArea} onValueChange={setPracticeArea}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select practice area" />
+                </SelectTrigger>
+                <SelectContent>
+                  {PRACTICE_AREAS.map((a) => (
+                    <SelectItem key={a} value={a}>
+                      {a}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
@@ -175,6 +223,37 @@ function NewMatterDialog() {
               />
             </div>
             <div className="space-y-2">
+              <Label htmlFor="nm-bench">Bench</Label>
+              <Input
+                id="nm-bench"
+                value={bench}
+                onChange={(e) => setBench(e.target.value)}
+                placeholder="e.g. Division Bench I"
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="nm-jur">Jurisdiction</Label>
+              <Input
+                id="nm-jur"
+                value={jurisdiction}
+                onChange={(e) => setJurisdiction(e.target.value)}
+                placeholder="e.g. Maharashtra — original side"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="nm-caseno">Case number</Label>
+              <Input
+                id="nm-caseno"
+                value={caseNumber}
+                onChange={(e) => setCaseNumber(e.target.value)}
+                placeholder="e.g. WP/1234/2026"
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
               <Label htmlFor="nm-opp">Opposing party</Label>
               <Input
                 id="nm-opp"
@@ -183,6 +262,55 @@ function NewMatterDialog() {
                 placeholder="e.g. State of Maharashtra"
               />
             </div>
+            <div className="space-y-2">
+              <Label htmlFor="nm-oppc">Opposing counsel</Label>
+              <Input
+                id="nm-oppc"
+                value={opposingCounsel}
+                onChange={(e) => setOpposingCounsel(e.target.value)}
+                placeholder="e.g. Adv. S. Deshmukh"
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Lead lawyer</Label>
+              <Select value={leadLawyerId} onValueChange={setLeadLawyerId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Unassigned" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">— Unassigned —</SelectItem>
+                  {lawyerOptions.map((m) => (
+                    <SelectItem key={m.userId} value={m.userId}>
+                      {m.name ?? m.email}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Priority</Label>
+              <Select value={priority} onValueChange={setPriority}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="normal">Normal</SelectItem>
+                  <SelectItem value="high">High</SelectItem>
+                  <SelectItem value="urgent">Urgent</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="nm-bill">Billing arrangement</Label>
+            <Input
+              id="nm-bill"
+              value={billingArrangement}
+              onChange={(e) => setBillingArrangement(e.target.value)}
+              placeholder="e.g. Fixed fee ₹50,000 per stage · hourly ₹3,000/hr"
+            />
           </div>
           <div className="space-y-2">
             <Label htmlFor="nm-desc">Brief description</Label>

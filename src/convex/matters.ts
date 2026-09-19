@@ -10,6 +10,7 @@ import {
   requireAccess,
   requireCapability,
   requireMatter,
+  type AccessContext,
 } from "./access";
 import {
   MATTER_STATUSES,
@@ -31,6 +32,25 @@ async function logEvent(
   await ctx.db.insert("matterEvents", {
     matterId,
     kind,
+    detail,
+    createdAt: Date.now(),
+  });
+}
+
+/** Audit-trail entry: who did what. Called on important changes. */
+async function audit(
+  ctx: MutationCtx,
+  ac: AccessContext,
+  matterId: Id<"matters">,
+  action: string,
+  detail?: string,
+) {
+  await ctx.db.insert("auditLog", {
+    orgId: ac.org._id,
+    matterId,
+    actorId: ac.user._id,
+    actorName: ac.user.name,
+    action,
     detail,
     createdAt: Date.now(),
   });
@@ -96,9 +116,21 @@ export const create = mutation({
     clientId: v.id("clients"),
     practiceArea: v.string(),
     court: v.optional(v.string()),
+    jurisdiction: v.optional(v.string()),
+    caseNumber: v.optional(v.string()),
+    bench: v.optional(v.string()),
     opposingParty: v.optional(v.string()),
+    opposingCounsel: v.optional(v.string()),
     description: v.optional(v.string()),
     teamIds: v.optional(v.array(v.id("users"))),
+    leadLawyerId: v.optional(v.id("users")),
+    priority: v.optional(
+      v.union(v.literal("normal"), v.literal("high"), v.literal("urgent")),
+    ),
+    billingArrangement: v.optional(v.string()),
+    keyDates: v.optional(
+      v.array(v.object({ label: v.string(), date: v.string() })),
+    ),
   },
   handler: async (ctx, args) => {
     const ac = await requireAccess(ctx);
@@ -135,17 +167,360 @@ export const create = mutation({
       clientId: args.clientId,
       practiceArea: args.practiceArea.trim(),
       court: args.court?.trim() || undefined,
+      jurisdiction: args.jurisdiction?.trim() || undefined,
+      caseNumber: args.caseNumber?.trim() || undefined,
+      bench: args.bench?.trim() || undefined,
       opposingParty: args.opposingParty?.trim() || undefined,
+      opposingCounsel: args.opposingCounsel?.trim() || undefined,
       description: args.description?.trim() || undefined,
       status: MATTER_STATUSES.OPEN,
       teamIds,
+      leadLawyerId: args.leadLawyerId || undefined,
+      priority: args.priority ?? undefined,
+      billingArrangement: args.billingArrangement?.trim() || undefined,
+      keyDates: args.keyDates?.length ? args.keyDates : undefined,
       createdBy: ac.user._id,
       createdAt: now,
       updatedAt: now,
     });
 
     await logEvent(ctx, matterId, "created", `Matter opened — ${reference}.`);
+    await audit(ctx, ac, matterId, "Matter opened", `${reference} — ${title}.`);
     return matterId;
+  },
+});
+
+/** Edit the matter record (court details, parties, priority, billing). */
+export const update = mutation({
+  args: {
+    matterId: v.id("matters"),
+    title: v.optional(v.string()),
+    practiceArea: v.optional(v.string()),
+    court: v.optional(v.string()),
+    jurisdiction: v.optional(v.string()),
+    caseNumber: v.optional(v.string()),
+    bench: v.optional(v.string()),
+    opposingParty: v.optional(v.string()),
+    opposingCounsel: v.optional(v.string()),
+    description: v.optional(v.string()),
+    priority: v.optional(
+      v.union(v.literal("normal"), v.literal("high"), v.literal("urgent")),
+    ),
+    billingArrangement: v.optional(v.string()),
+    keyDates: v.optional(
+      v.array(v.object({ label: v.string(), date: v.string() })),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    requireCapability(ac, "matter.edit");
+    const matter = await requireMatter(ctx, ac, args.matterId);
+
+    const { matterId, ...patch } = args;
+    const changes: string[] = [];
+    if (patch.title !== undefined && patch.title.trim() !== matter.title)
+      changes.push("title");
+    if (patch.court !== undefined && patch.court.trim() !== (matter.court ?? ""))
+      changes.push("court");
+    if (
+      patch.caseNumber !== undefined &&
+      patch.caseNumber.trim() !== (matter.caseNumber ?? "")
+    )
+      changes.push("case number");
+    if (patch.priority !== undefined && patch.priority !== (matter.priority ?? "normal"))
+      changes.push("priority");
+    if (
+      patch.billingArrangement !== undefined &&
+      patch.billingArrangement.trim() !== (matter.billingArrangement ?? "")
+    )
+      changes.push("billing arrangement");
+    if (patch.keyDates !== undefined)
+      changes.push("key dates");
+
+    const clean = Object.fromEntries(
+      Object.entries(patch).map(([k, val]) => [
+        k,
+        typeof val === "string" && !(k === "keyDates")
+          ? (val as string).trim() || undefined
+          : val,
+      ]),
+    );
+    if (clean.keyDates !== undefined) {
+      const kd = clean.keyDates as { label: string; date: string }[] | undefined;
+      clean.keyDates = kd && kd.length > 0 ? kd : undefined;
+    }
+
+    await ctx.db.patch(matterId, { ...clean, updatedAt: Date.now() });
+    if (changes.length > 0) {
+      await logEvent(
+        ctx,
+        matterId,
+        "status",
+        `Matter details updated — ${changes.join(", ")} changed.`,
+      );
+      await audit(ctx, ac, matterId, "Matter edited", `${changes.join(", ")} changed.`);
+    }
+  },
+});
+
+/** Close a matter (matter.close capability). */
+export const closeMatter = mutation({
+  args: { matterId: v.id("matters") },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    requireCapability(ac, "matter.close");
+    await requireMatter(ctx, ac, args.matterId);
+    await ctx.db.patch(args.matterId, {
+      status: MATTER_STATUSES.CLOSED,
+      updatedAt: Date.now(),
+    });
+    await logEvent(ctx, args.matterId, "status", "Matter closed.");
+    await audit(ctx, ac, args.matterId, "Matter closed", undefined);
+  },
+});
+
+/** Reopen a closed matter. */
+export const reopenMatter = mutation({
+  args: { matterId: v.id("matters") },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    requireCapability(ac, "matter.edit");
+    await requireMatter(ctx, ac, args.matterId);
+    await ctx.db.patch(args.matterId, {
+      status: MATTER_STATUSES.IN_PROGRESS,
+      updatedAt: Date.now(),
+    });
+    await logEvent(ctx, args.matterId, "status", "Matter reopened.");
+    await audit(ctx, ac, args.matterId, "Matter reopened", undefined);
+  },
+});
+
+/** Archive (soft) a closed matter; restore it. */
+export const setArchived = mutation({
+  args: { matterId: v.id("matters"), archived: v.boolean() },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    requireCapability(ac, "matter.edit");
+    const matter = await requireMatter(ctx, ac, args.matterId);
+    if (args.archived && matter.status !== "closed") {
+      throw new Error("Only closed matters can be archived.");
+    }
+    await ctx.db.patch(args.matterId, {
+      archivedAt: args.archived ? Date.now() : undefined,
+      archivedBy: args.archived ? ac.user._id : undefined,
+      updatedAt: Date.now(),
+    });
+    await logEvent(
+      ctx,
+      args.matterId,
+      "status",
+      args.archived ? "Matter archived." : "Matter restored from archive.",
+    );
+    await audit(
+      ctx,
+      ac,
+      args.matterId,
+      args.archived ? "Matter archived" : "Matter restored",
+      undefined,
+    );
+  },
+});
+
+/** Set the lead lawyer (matter.edit; recorded in timeline + audit). */
+export const setLead = mutation({
+  args: { matterId: v.id("matters"), lawyerId: v.optional(v.id("users")) },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    requireCapability(ac, "matter.edit");
+    await requireMatter(ctx, ac, args.matterId);
+    const lawyer = args.lawyerId
+      ? await ctx.db.get(args.lawyerId)
+      : null;
+    await ctx.db.patch(args.matterId, {
+      leadLawyerId: args.lawyerId || undefined,
+      updatedAt: Date.now(),
+    });
+    const label = lawyer?.name ?? lawyer?.email ?? "unassigned";
+    await logEvent(ctx, args.matterId, "status", `Lead lawyer set — ${label}.`);
+    await audit(ctx, ac, args.matterId, "Lead lawyer changed", label);
+  },
+});
+
+// ---------------- Parties & issues ----------------
+
+export const listParties = query({
+  args: { matterId: v.id("matters") },
+  handler: async (ctx, args) => {
+    const ac = await getAccessContext(ctx);
+    if (!ac) return [];
+    await requireMatter(ctx, ac, args.matterId);
+    return ctx.db
+      .query("matterParties")
+      .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))
+      .collect();
+  },
+});
+
+export const addParty = mutation({
+  args: {
+    matterId: v.id("matters"),
+    name: v.string(),
+    side: v.union(
+      v.literal("ours"),
+      v.literal("opposing"),
+      v.literal("neutral"),
+    ),
+    role: v.optional(v.string()),
+    counsel: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    requireCapability(ac, "matter.edit");
+    await requireMatter(ctx, ac, args.matterId);
+    const name = args.name.trim();
+    if (!name) throw new Error("Party name is required.");
+    await ctx.db.insert("matterParties", {
+      orgId: ac.org._id,
+      matterId: args.matterId,
+      name,
+      side: args.side,
+      role: args.role?.trim() || undefined,
+      counsel: args.counsel?.trim() || undefined,
+      createdBy: ac.user._id,
+      createdAt: Date.now(),
+    });
+    await logEvent(
+      ctx,
+      args.matterId,
+      "party",
+      `Party added — ${name} (${args.side}).`,
+    );
+    await audit(ctx, ac, args.matterId, "Party added", name);
+  },
+});
+
+export const removeParty = mutation({
+  args: { partyId: v.id("matterParties") },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    requireCapability(ac, "matter.edit");
+    const party = await ctx.db.get(args.partyId);
+    if (!party) throw new Error("Party not found.");
+    await requireMatter(ctx, ac, party.matterId);
+    await ctx.db.delete(args.partyId);
+    await logEvent(ctx, party.matterId, "party", `Party removed — ${party.name}.`);
+    await audit(ctx, ac, party.matterId, "Party removed", party.name);
+  },
+});
+
+export const listIssues = query({
+  args: { matterId: v.id("matters") },
+  handler: async (ctx, args) => {
+    const ac = await getAccessContext(ctx);
+    if (!ac) return [];
+    await requireMatter(ctx, ac, args.matterId);
+    return ctx.db
+      .query("matterIssues")
+      .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))
+      .collect();
+  },
+});
+
+export const addIssue = mutation({
+  args: {
+    matterId: v.id("matters"),
+    title: v.string(),
+    detail: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    requireCapability(ac, "note.write");
+    await requireMatter(ctx, ac, args.matterId);
+    const title = args.title.trim();
+    if (!title) throw new Error("Issue title is required.");
+    await ctx.db.insert("matterIssues", {
+      orgId: ac.org._id,
+      matterId: args.matterId,
+      title,
+      detail: args.detail?.trim() || undefined,
+      status: "open",
+      createdBy: ac.user._id,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    await logEvent(ctx, args.matterId, "issue", `Issue framed — ${title}.`);
+    await audit(ctx, ac, args.matterId, "Issue framed", title);
+  },
+});
+
+export const setIssueStatus = mutation({
+  args: {
+    issueId: v.id("matterIssues"),
+    status: v.union(
+      v.literal("open"),
+      v.literal("argued"),
+      v.literal("resolved"),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    requireCapability(ac, "note.write");
+    const issue = await ctx.db.get(args.issueId);
+    if (!issue) throw new Error("Issue not found.");
+    await requireMatter(ctx, ac, issue.matterId);
+    await ctx.db.patch(args.issueId, {
+      status: args.status,
+      updatedAt: Date.now(),
+    });
+    await logEvent(
+      ctx,
+      issue.matterId,
+      "issue",
+      `Issue “${issue.title}” marked ${args.status}.`,
+    );
+  },
+});
+
+export const attachEvidence = mutation({
+  args: {
+    issueId: v.id("matterIssues"),
+    label: v.string(),
+    documentId: v.optional(v.id("matterDocuments")),
+    supports: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    requireCapability(ac, "note.write");
+    const issue = await ctx.db.get(args.issueId);
+    if (!issue) throw new Error("Issue not found.");
+    const matter = await requireMatter(ctx, ac, issue.matterId);
+    if (args.documentId) {
+      const doc = await ctx.db.get(args.documentId);
+      if (!doc || doc.matterId !== matter._id) {
+        throw new Error("That document is not on this matter.");
+      }
+    }
+    const evidence = issue.evidence ?? [];
+    if (evidence.length >= 20) {
+      throw new Error("Up to 20 exhibits per issue.");
+    }
+    await ctx.db.patch(args.issueId, {
+      evidence: [
+        ...evidence,
+        {
+          label: args.label.trim().slice(0, 200),
+          documentId: args.documentId,
+          supports: args.supports,
+        },
+      ],
+      updatedAt: Date.now(),
+    });
+    await logEvent(
+      ctx,
+      issue.matterId,
+      "issue",
+      `Exhibit linked to “${issue.title}” — ${args.label.trim()}.`,
+    );
   },
 });
 
@@ -561,6 +936,30 @@ export const listEvents = query({
       .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))
       .collect();
     return events.sort((a, b) => a.createdAt - b.createdAt);
+  },
+});
+
+/** Audit log for a matter (who changed what) — audit-capable roles. */
+export const listAudit = query({
+  args: { matterId: v.id("matters") },
+  handler: async (ctx, args) => {
+    const ac = await getAccessContext(ctx);
+    if (!ac) return [];
+    await requireMatter(ctx, ac, args.matterId);
+    if (
+      !can(ac, "matter.edit") &&
+      !can(ac, "permissions.edit") &&
+      ac.membership.orgRole !== "owner" &&
+      ac.membership.orgRole !== "partner" &&
+      ac.membership.orgRole !== "administrator"
+    ) {
+      return [];
+    }
+    return ctx.db
+      .query("auditLog")
+      .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))
+      .collect()
+      .then((rows) => rows.sort((a, b) => b.createdAt - a.createdAt));
   },
 });
 

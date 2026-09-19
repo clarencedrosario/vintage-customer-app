@@ -296,12 +296,38 @@ const schema = defineSchema(
       opposingParty: v.optional(v.string()),
       status: matterStatusValidator,
       description: v.optional(v.string()),
+      // Court record
+      jurisdiction: v.optional(v.string()),
+      caseNumber: v.optional(v.string()),
+      bench: v.optional(v.string()),
+      // People
+      leadLawyerId: v.optional(v.id("users")),
+      opposingCounsel: v.optional(v.string()),
       // Matter-level access: null = all firm roles; otherwise only these
       // users (plus owner/partner/administrator) may open the file.
       teamIds: v.optional(v.array(v.id("users"))),
+      // Priority: normal / high / urgent. Key dates (filling, limitation,
+      // next appearance) as a small typed list.
+      priority: v.optional(
+        v.union(v.literal("normal"), v.literal("high"), v.literal("urgent")),
+      ),
+      keyDates: v.optional(
+        v.array(
+          v.object({
+            label: v.string(),
+            date: v.string(), // YYYY-MM-DD
+          }),
+        ),
+      ),
+      // Billing arrangement summary (e.g. "Fixed fee ₹50,000 per stage",
+      // "Hourly ₹3,000/hr, monthly billing").
+      billingArrangement: v.optional(v.string()),
       // When true, the connected client may upload documents from the
       // client portal (submission is per-matter opt-in).
       clientSubmission: v.optional(v.boolean()),
+      // Soft archive.
+      archivedAt: v.optional(v.number()),
+      archivedBy: v.optional(v.id("users")),
       createdBy: v.id("users"),
       createdAt: v.number(),
       updatedAt: v.number(),
@@ -309,7 +335,61 @@ const schema = defineSchema(
       .index("by_org", ["orgId"])
       .index("by_client", ["clientId"])
       .index("by_status", ["status"])
-      .index("by_reference", ["reference"]),
+      .index("by_reference", ["reference"])
+      .index("by_lead", ["leadLawyerId"]),
+
+    // Parties to a matter (petitioners, respondents, witnesses,
+    // intervenors…). Opposing counsel lives on the matter; named
+    // party rows make the Parties & team area editable.
+    matterParties: defineTable({
+      orgId: v.id("organizations"),
+      matterId: v.id("matters"),
+      name: v.string(),
+      side: v.union(v.literal("ours"), v.literal("opposing"), v.literal("neutral")),
+      role: v.optional(v.string()), // petitioner, respondent, witness…
+      counsel: v.optional(v.string()), // their counsel on record
+      createdBy: v.id("users"),
+      createdAt: v.number(),
+    }).index("by_matter", ["matterId"]),
+
+    // Evidence & issues board: contested issues and the exhibits that
+    // support or rebut them.
+    matterIssues: defineTable({
+      orgId: v.id("organizations"),
+      matterId: v.id("matters"),
+      title: v.string(),
+      detail: v.optional(v.string()),
+      status: v.union(
+        v.literal("open"),
+        v.literal("argued"),
+        v.literal("resolved"),
+      ),
+      evidence: v.optional(
+        v.array(
+          v.object({
+            label: v.string(),
+            documentId: v.optional(v.id("matterDocuments")),
+            supports: v.boolean(), // supports our case, or rebuts
+          }),
+        ),
+      ),
+      createdBy: v.id("users"),
+      createdAt: v.number(),
+      updatedAt: v.number(),
+    }).index("by_matter", ["matterId"]),
+
+    // Append-only audit log: who changed what, beyond matter events.
+    auditLog: defineTable({
+      orgId: v.id("organizations"),
+      matterId: v.optional(v.id("matters")),
+      actorId: v.id("users"),
+      actorName: v.optional(v.string()),
+      action: v.string(),
+      detail: v.optional(v.string()),
+      createdAt: v.number(),
+    })
+      .index("by_matter", ["matterId"])
+      .index("by_org", ["orgId"]),
 
     hearings: defineTable({
       matterId: v.id("matters"),
