@@ -1,18 +1,19 @@
 import { v } from "convex/values";
-import { mutation, query, MutationCtx, QueryCtx } from "./_generated/server";
-import { getCurrentUser } from "./users";
-import { getOrCreateChamber } from "./chamber";
+import { mutation, query, MutationCtx } from "./_generated/server";
+import {
+  getAccessContext,
+  requireAccess,
+  requireCapability,
+  requireMatter,
+  canViewMatter,
+  can,
+} from "./access";
 import { INVOICE_STATUSES } from "./schema";
-
-async function requireUser(ctx: QueryCtx) {
-  const user = await getCurrentUser(ctx);
-  if (!user) throw new Error("You must be signed in.");
-  return user;
-}
+import type { Id } from "./_generated/dataModel";
 
 async function logEvent(
   ctx: MutationCtx,
-  matterId: any,
+  matterId: Id<"matters">,
   kind: string,
   detail: string,
 ) {
@@ -24,8 +25,13 @@ async function logEvent(
   });
 }
 
-/** Invoice numbers like ADV/2026-27/0001 based on financial year. */
-async function nextInvoiceNumber(ctx: MutationCtx, prefix: string, fyStart: string) {
+/** Invoice numbers like ADV/2026-27/0001 based on the org's financial year. */
+async function nextInvoiceNumber(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  prefix: string,
+  fyStart: string,
+) {
   const today = new Date();
   const [sm, sd] = fyStart.split("-").map(Number);
   const year =
@@ -33,18 +39,25 @@ async function nextInvoiceNumber(ctx: MutationCtx, prefix: string, fyStart: stri
       ? today.getFullYear()
       : today.getFullYear() - 1;
   const fyLabel = `${year}-${String((year + 1) % 100).padStart(2, "0")}`;
-  const all = await ctx.db.query("invoices").collect();
+  const invoices = await ctx.db
+    .query("invoices")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
   const fyPrefix = `${prefix}/${fyLabel}/`;
-  const count = all.filter((i) => i.number.startsWith(fyPrefix)).length;
+  const count = invoices.filter((i) => i.number.startsWith(fyPrefix)).length;
   return `${prefix}/${fyLabel}/${String(count + 1).padStart(4, "0")}`;
 }
 
-/** All invoices with matter and client joined, newest first. */
+/** Invoices of the active org the caller may see, newest first. */
 export const list = query({
   args: {},
   handler: async (ctx) => {
-    await requireUser(ctx);
-    const invoices = await ctx.db.query("invoices").collect();
+    const ac = await getAccessContext(ctx);
+    if (!ac) return [];
+    const invoices = await ctx.db
+      .query("invoices")
+      .withIndex("by_org", (q) => q.eq("orgId", ac.org._id))
+      .collect();
     const sorted = invoices.sort((a, b) => b.createdAt - a.createdAt);
     return Promise.all(
       sorted.map(async (i) => ({
@@ -56,13 +69,20 @@ export const list = query({
   },
 });
 
-/** One invoice with its matter, client, time lines, expenses and payments. */
+/** One invoice with matter, client, lines and payments. */
 export const get = query({
   args: { invoiceId: v.id("invoices") },
   handler: async (ctx, args) => {
-    await requireUser(ctx);
+    const ac = await getAccessContext(ctx);
+    if (!ac) return null;
     const invoice = await ctx.db.get(args.invoiceId);
-    if (!invoice) return null;
+    if (!invoice || invoice.orgId !== ac.org._id) return null;
+    if (!can(ac, "billing.invoice") && !can(ac, "billing.payment")) {
+      // Members without billing capability still see invoices for matters
+      // they can access, but only when explicitly granted view via matter.
+      const matter = await ctx.db.get(invoice.matterId);
+      if (!matter || !canViewMatter(ac, matter)) return null;
+    }
 
     const [time, exps, pays] = await Promise.all([
       ctx.db
@@ -96,8 +116,7 @@ export const get = query({
 
 /**
  * Draft an invoice on a matter from its uninvoiced time entries and
- * expenses. Applies the chamber's tax settings; line amounts derive from
- * recorded time and disbursements.
+ * expenses, applying the organization's tax settings.
  */
 export const createFromMatter = mutation({
   args: {
@@ -105,10 +124,9 @@ export const createFromMatter = mutation({
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const user = await requireUser(ctx);
-
-    const matter = await ctx.db.get(args.matterId);
-    if (!matter) throw new Error("Matter not found.");
+    const ac = await requireAccess(ctx);
+    requireCapability(ac, "billing.invoice");
+    const matter = await requireMatter(ctx, ac, args.matterId);
 
     const time = await ctx.db
       .query("timeEntries")
@@ -136,19 +154,20 @@ export const createFromMatter = mutation({
     const expenseTotal = exps.reduce((sum, e) => sum + e.amount, 0);
     const subtotal = timeTotal + expenseTotal;
 
-    const chamber = await getOrCreateChamber(ctx);
-    const taxPercent = chamber?.taxPercent ?? 0;
+    const taxPercent = ac.org.taxPercent;
     const taxAmount = Math.round((subtotal * taxPercent) / 100);
     const total = subtotal + taxAmount;
 
     const number = await nextInvoiceNumber(
       ctx,
-      chamber?.invoicePrefix ?? "ADV",
-      chamber?.financialYearStart ?? "04-01",
+      ac.org._id,
+      ac.org.invoicePrefix,
+      ac.org.financialYearStart,
     );
 
     const today = new Date().toISOString().slice(0, 10);
     const invoiceId = await ctx.db.insert("invoices", {
+      orgId: ac.org._id,
       number,
       matterId: args.matterId,
       clientId: matter.clientId,
@@ -160,17 +179,12 @@ export const createFromMatter = mutation({
       amountPaid: 0,
       notes: args.notes?.trim() || undefined,
       issuedOn: today,
-      createdBy: user._id,
+      createdBy: ac.user._id,
       createdAt: Date.now(),
     });
 
-    // Link the line items to this invoice.
-    for (const t of time) {
-      await ctx.db.patch(t._id, { invoiceId });
-    }
-    for (const e of exps) {
-      await ctx.db.patch(e._id, { invoiceId });
-    }
+    for (const t of time) await ctx.db.patch(t._id, { invoiceId });
+    for (const e of exps) await ctx.db.patch(e._id, { invoiceId });
 
     await logEvent(
       ctx,
@@ -178,7 +192,6 @@ export const createFromMatter = mutation({
       "invoice",
       `Invoice ${number} drafted — ₹${total.toLocaleString("en-IN")}.`,
     );
-
     return invoiceId;
   },
 });
@@ -195,9 +208,12 @@ export const setStatus = mutation({
     ),
   },
   handler: async (ctx, args) => {
-    await requireUser(ctx);
+    const ac = await requireAccess(ctx);
+    requireCapability(ac, "billing.invoice");
     const invoice = await ctx.db.get(args.invoiceId);
-    if (!invoice) throw new Error("Invoice not found.");
+    if (!invoice || invoice.orgId !== ac.org._id) {
+      throw new Error("Invoice not found.");
+    }
     await ctx.db.patch(args.invoiceId, { status: args.status });
     await logEvent(
       ctx,
@@ -224,10 +240,13 @@ export const recordPayment = mutation({
     receivedOn: v.string(),
   },
   handler: async (ctx, args) => {
-    await requireUser(ctx);
+    const ac = await requireAccess(ctx);
+    requireCapability(ac, "billing.payment");
 
     const invoice = await ctx.db.get(args.invoiceId);
-    if (!invoice) throw new Error("Invoice not found.");
+    if (!invoice || invoice.orgId !== ac.org._id) {
+      throw new Error("Invoice not found.");
+    }
     if (args.amount <= 0) throw new Error("Payment amount must be positive.");
 
     const totalDue = invoice.total - invoice.amountPaid;
@@ -267,8 +286,12 @@ export const recordPayment = mutation({
 export const outstanding = query({
   args: {},
   handler: async (ctx) => {
-    await requireUser(ctx);
-    const invoices = await ctx.db.query("invoices").collect();
+    const ac = await getAccessContext(ctx);
+    if (!ac) return [];
+    const invoices = await ctx.db
+      .query("invoices")
+      .withIndex("by_org", (q) => q.eq("orgId", ac.org._id))
+      .collect();
     return invoices
       .filter(
         (i) =>
@@ -280,21 +303,31 @@ export const outstanding = query({
   },
 });
 
-/** Chamber revenue snapshot. */
+/** Org revenue snapshot (billing capabilities only). */
 export const stats = query({
   args: {},
   handler: async (ctx) => {
-    await requireUser(ctx);
+    const ac = await getAccessContext(ctx);
+    if (!ac) return null;
+    if (!can(ac, "billing.invoice") && !can(ac, "billing.payment")) {
+      return null;
+    }
 
     const [invoices, payments] = await Promise.all([
-      ctx.db.query("invoices").collect(),
+      ctx.db
+        .query("invoices")
+        .withIndex("by_org", (q) => q.eq("orgId", ac.org._id))
+        .collect(),
       ctx.db.query("payments").collect(),
     ]);
 
+    const orgInvoiceIds = new Set(invoices.map((i) => i._id));
     const billed = invoices
       .filter((i) => i.status !== "cancelled" && i.status !== "draft")
       .reduce((s, i) => s + i.total, 0);
-    const collected = payments.reduce((s, p) => s + p.amount, 0);
+    const collected = payments
+      .filter((p) => orgInvoiceIds.has(p.invoiceId))
+      .reduce((s, p) => s + p.amount, 0);
     const outstandingAmount = invoices
       .filter((i) => i.status !== "paid" && i.status !== "cancelled")
       .reduce((s, i) => s + (i.total - i.amountPaid), 0);

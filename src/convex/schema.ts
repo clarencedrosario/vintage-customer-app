@@ -3,18 +3,14 @@ import { defineSchema, defineTable } from "convex/server";
 import { Infer, v } from "convex/values";
 
 // ---------------------------------------------------------------------
-// ADVOKATE.IN roles — four entry experiences, one system.
-// firm_owner / lawyer see the chamber console; staff see assigned work;
-// clients see their own matters. Legacy values (admin/user/member) are
-// kept and mapped so existing accounts keep working:
-//   admin → firm_owner · user → lawyer · member → staff
+// ADVOKATE.IN roles. Four portal experiences; the working roles inside a
+// firm are the nine legal-industry roles. Legacy values are mapped.
 // ---------------------------------------------------------------------
 export const ROLES = {
   FIRM_OWNER: "firm_owner",
   LAWYER: "lawyer",
   STAFF: "staff",
   CLIENT: "client",
-  // legacy values, still accepted
   ADMIN: "admin",
   USER: "user",
   MEMBER: "member",
@@ -31,7 +27,46 @@ export const roleValidator = v.union(
 );
 export type Role = Infer<typeof roleValidator>;
 
-/** Normalize a role (including legacy values) to one of the four portals. */
+/** Working roles inside an organization, in seniority order. */
+export const ORG_ROLES = [
+  "owner",
+  "partner",
+  "senior_associate",
+  "associate",
+  "junior",
+  "paralegal",
+  "accountant",
+  "administrator",
+  "support_staff",
+] as const;
+export const orgRoleValidator = v.union(...ORG_ROLES.map((r) => v.literal(r)));
+export type OrgRole = Infer<typeof orgRoleValidator>;
+
+export const ORG_ROLE_LABELS: Record<OrgRole, string> = {
+  owner: "Owner",
+  partner: "Partner",
+  senior_associate: "Senior Associate",
+  associate: "Associate",
+  junior: "Junior",
+  paralegal: "Paralegal",
+  accountant: "Accountant",
+  administrator: "Administrator",
+  support_staff: "Support Staff",
+};
+
+export const MEMBERSHIP_STATUSES = {
+  ACTIVE: "active",
+  SUSPENDED: "suspended",
+  INVITED: "invited",
+} as const;
+export const membershipStatusValidator = v.union(
+  v.literal(MEMBERSHIP_STATUSES.ACTIVE),
+  v.literal(MEMBERSHIP_STATUSES.SUSPENDED),
+  v.literal(MEMBERSHIP_STATUSES.INVITED),
+);
+export type MembershipStatus = Infer<typeof membershipStatusValidator>;
+
+/** Legacy single-role → portal mapping (used for portal gating). */
 export function portalForRole(
   role: string | undefined,
 ): "firm" | "lawyer" | "staff" | "client" | null {
@@ -52,13 +87,10 @@ export function portalForRole(
   }
 }
 
-/** Roles allowed into the chamber console (firm + lawyer experiences). */
-export const CONSOLE_ROLES = [
-  ROLES.FIRM_OWNER,
-  ROLES.ADMIN,
-  ROLES.LAWYER,
-  ROLES.USER,
-] as const;
+/** Org roles that may open the chamber console (never support staff). */
+export const CONSOLE_ORG_ROLES: readonly OrgRole[] = ORG_ROLES.filter(
+  (r) => r !== "support_staff",
+);
 
 // Matter lifecycle at a chamber.
 export const MATTER_STATUSES = {
@@ -106,62 +138,85 @@ export const invoiceStatusValidator = v.union(
 );
 export type InvoiceStatus = Infer<typeof invoiceStatusValidator>;
 
-// Invitation targets: staff are invited into the chamber; clients are
-// connected to their client record. Lawyers/firm owners self-register.
-export const INVITE_KINDS = {
-  STAFF: "staff",
-  CLIENT: "client",
-} as const;
-
 const schema = defineSchema(
   {
     // default auth tables using convex auth.
     ...authTables, // do not remove or modify
 
-    // the users table is the default users table that is brought in by the authTables
     users: defineTable({
-      name: v.optional(v.string()), // name of the user. do not remove
-      image: v.optional(v.string()), // image of the user. do not remove
-      email: v.optional(v.string()), // email of the user. do not remove
-      emailVerificationTime: v.optional(v.number()), // email verification time. do not remove
-      isAnonymous: v.optional(v.boolean()), // is the user anonymous. do not remove
+      name: v.optional(v.string()),
+      image: v.optional(v.string()),
+      email: v.optional(v.string()),
+      emailVerificationTime: v.optional(v.number()),
+      isAnonymous: v.optional(v.boolean()),
 
-      role: v.optional(roleValidator), // role of the user. do not remove
-      designation: v.optional(v.string()), // e.g. Senior Advocate, Associate
+      role: v.optional(roleValidator), // legacy portal role
+      activeOrgId: v.optional(v.id("organizations")), // active membership
+      designation: v.optional(v.string()),
       barCouncilId: v.optional(v.string()),
       phone: v.optional(v.string()),
-    }).index("email", ["email"]), // index for the email. do not remove or modify
+    }).index("email", ["email"]),
 
     // ---------------------------------------------------------------
-    // ADVOKATE.IN — The Digital Chamber
-    // Organization → Team & Clients → Matters → everything else
+    // Organizations — independent chambers & multi-lawyer firms.
     // ---------------------------------------------------------------
-
-    // One row; singleton chamber profile + configurable settings.
-    settings: defineTable({
-      key: v.string(), // "chamber"
-      chamberName: v.string(),
-      addressLine1: v.string(),
+    organizations: defineTable({
+      name: v.string(),
+      slug: v.string(), // unique short key
+      kind: v.union(v.literal("chamber"), v.literal("firm")),
+      logoStorageId: v.optional(v.id("_storage")),
+      // Billing identity & address
+      addressLine1: v.optional(v.string()),
       addressLine2: v.optional(v.string()),
-      city: v.string(),
-      state: v.string(),
-      pincode: v.string(),
+      city: v.optional(v.string()),
+      state: v.optional(v.string()),
+      pincode: v.optional(v.string()),
+      gstin: v.optional(v.string()),
       phone: v.optional(v.string()),
       email: v.optional(v.string()),
       website: v.optional(v.string()),
-      gstin: v.optional(v.string()),
-      currency: v.string(), // "INR"
-      timezone: v.string(), // "Asia/Kolkata"
-      financialYearStart: v.string(), // "04-01" (MM-DD)
-      taxLabel: v.string(), // "GST"
-      taxPercent: v.number(), // e.g. 18
-      invoicePrefix: v.string(), // e.g. "ADV"
-    }).index("by_key", ["key"]),
+      // Conventions
+      currency: v.string(),
+      timezone: v.string(),
+      financialYearStart: v.string(),
+      taxLabel: v.string(),
+      taxPercent: v.number(),
+      invoicePrefix: v.string(),
+      createdBy: v.id("users"),
+      createdAt: v.number(),
+    }).index("by_slug", ["slug"]),
 
-    // Clients of the chamber: individuals, companies, trusts, government.
-    // userId is the explicit access grant: a client-portal user may only
-    // ever reach records of client rows where userId === their own id.
+    // Membership: a user belongs to many organizations, one role each.
+    memberships: defineTable({
+      orgId: v.id("organizations"),
+      userId: v.id("users"),
+      orgRole: orgRoleValidator,
+      status: membershipStatusValidator, // active / suspended / invited
+      invitedBy: v.optional(v.id("users")),
+      invitedEmail: v.optional(v.string()), // for pending invitations
+      createdAt: v.number(),
+      updatedAt: v.number(),
+    })
+      .index("by_org", ["orgId"])
+      .index("by_user", ["userId"])
+      .index("by_org_user", ["orgId", "userId"])
+      .index("by_invited_email", ["invitedEmail"]),
+
+    // Editable per-org permission overrides. Absent keys fall back to
+    // the documented defaults in convex/access.ts.
+    rolePermissions: defineTable({
+      orgId: v.id("organizations"),
+      orgRole: orgRoleValidator,
+      permissions: v.array(v.string()), // capability keys granted
+      updatedBy: v.id("users"),
+      updatedAt: v.number(),
+    })
+      .index("by_org", ["orgId"])
+      .index("by_org_role", ["orgId", "orgRole"]),
+
+    // Clients belong to an organization and may be bound to a portal user.
     clients: defineTable({
+      orgId: v.id("organizations"),
       name: v.string(),
       kind: v.union(
         v.literal("individual"),
@@ -171,7 +226,6 @@ const schema = defineSchema(
       ),
       email: v.optional(v.string()),
       phone: v.optional(v.string()),
-      // Indian postal address
       addressLine1: v.optional(v.string()),
       addressLine2: v.optional(v.string()),
       city: v.optional(v.string()),
@@ -182,39 +236,51 @@ const schema = defineSchema(
       userId: v.optional(v.id("users")), // portal access grant
       createdBy: v.id("users"),
       createdAt: v.number(),
-    }).index("by_created_by", ["createdBy"]).index("by_user", ["userId"]),
+    })
+      .index("by_org", ["orgId"])
+      .index("by_user", ["userId"]),
 
-    // A matter: the central record everything else links to.
+    // Matters belong to an organization; access is further restricted
+    // to the responsible team (see access.ts matter-level rules).
     matters: defineTable({
+      orgId: v.id("organizations"),
       title: v.string(),
-      reference: v.string(), // chamber reference, e.g. ADV/2026/0007
+      reference: v.string(),
       clientId: v.id("clients"),
       practiceArea: v.string(),
       court: v.optional(v.string()),
       opposingParty: v.optional(v.string()),
       status: matterStatusValidator,
       description: v.optional(v.string()),
+      // Matter-level access: null = all firm roles; otherwise only these
+      // users (plus owner/partner/administrator) may open the file.
+      teamIds: v.optional(v.array(v.id("users"))),
       createdBy: v.id("users"),
       createdAt: v.number(),
       updatedAt: v.number(),
     })
+      .index("by_org", ["orgId"])
       .index("by_client", ["clientId"])
       .index("by_status", ["status"])
       .index("by_reference", ["reference"]),
 
-    // Hearings on a matter.
     hearings: defineTable({
       matterId: v.id("matters"),
       title: v.string(),
       court: v.optional(v.string()),
       at: v.number(),
-      appearance: v.optional(v.string()), // physical / virtual
+      appearance: v.optional(v.string()),
       notes: v.optional(v.string()),
-      status: v.union(v.literal("scheduled"), v.literal("held"), v.literal("adjourned")),
+      status: v.union(
+        v.literal("scheduled"),
+        v.literal("held"),
+        v.literal("adjourned"),
+      ),
       createdAt: v.number(),
-    }).index("by_matter", ["matterId"]).index("by_at", ["at"]),
+    })
+      .index("by_matter", ["matterId"])
+      .index("by_at", ["at"]),
 
-    // Orders & judgments received on a matter.
     orders: defineTable({
       matterId: v.id("matters"),
       title: v.string(),
@@ -224,7 +290,6 @@ const schema = defineSchema(
       createdAt: v.number(),
     }).index("by_matter", ["matterId"]),
 
-    // Tasks & deadlines on a matter.
     tasks: defineTable({
       matterId: v.id("matters"),
       title: v.string(),
@@ -238,35 +303,33 @@ const schema = defineSchema(
       .index("by_due", ["dueAt"])
       .index("by_assignee", ["assigneeId"]),
 
-    // Time entries (fees) on a matter.
     timeEntries: defineTable({
       matterId: v.id("matters"),
       userId: v.id("users"),
       description: v.string(),
       minutes: v.number(),
-      ratePerHour: v.number(), // in INR units
-      date: v.string(), // YYYY-MM-DD (financial-year bucketing)
+      ratePerHour: v.number(),
+      date: v.string(),
       invoiceId: v.optional(v.id("invoices")),
       createdAt: v.number(),
     })
       .index("by_matter", ["matterId"])
       .index("by_uninvoiced", ["matterId", "invoiceId"]),
 
-    // Expenses (disbursements) on a matter.
     expenses: defineTable({
       matterId: v.id("matters"),
       description: v.string(),
       amount: v.number(),
-      date: v.string(), // YYYY-MM-DD
+      date: v.string(),
       invoiceId: v.optional(v.id("invoices")),
       createdAt: v.number(),
     })
       .index("by_matter", ["matterId"])
       .index("by_uninvoiced", ["matterId", "invoiceId"]),
 
-    // Invoices raised by the chamber.
     invoices: defineTable({
-      number: v.string(), // ADV/2026-27/0001
+      orgId: v.id("organizations"),
+      number: v.string(),
       matterId: v.id("matters"),
       clientId: v.id("clients"),
       status: invoiceStatusValidator,
@@ -276,15 +339,15 @@ const schema = defineSchema(
       total: v.number(),
       amountPaid: v.number(),
       notes: v.optional(v.string()),
-      issuedOn: v.string(), // YYYY-MM-DD
+      issuedOn: v.string(),
       createdBy: v.id("users"),
       createdAt: v.number(),
     })
+      .index("by_org", ["orgId"])
       .index("by_matter", ["matterId"])
       .index("by_client", ["clientId"])
       .index("by_status", ["status"]),
 
-    // Payments received against invoices.
     payments: defineTable({
       invoiceId: v.id("invoices"),
       amount: v.number(),
@@ -296,11 +359,10 @@ const schema = defineSchema(
         v.literal("other"),
       ),
       reference: v.optional(v.string()),
-      receivedOn: v.string(), // YYYY-MM-DD
+      receivedOn: v.string(),
       createdAt: v.number(),
     }).index("by_invoice", ["invoiceId"]),
 
-    // Notes on a matter.
     matterNotes: defineTable({
       matterId: v.id("matters"),
       authorId: v.id("users"),
@@ -308,55 +370,56 @@ const schema = defineSchema(
       createdAt: v.number(),
     }).index("by_matter", ["matterId"]),
 
-    // Append-only docket (audit trail) for a matter.
     matterEvents: defineTable({
       matterId: v.id("matters"),
-      kind: v.string(), // created / hearing / order / task / time / expense / invoice / payment / note / document / status
+      kind: v.string(),
       detail: v.optional(v.string()),
       createdAt: v.number(),
     }).index("by_matter", ["matterId"]),
 
-    // Documents and communications on a matter.
+    // Document-level access: `internal` files are never exposed to the
+    // client portal; `shared_with_client` files are.
     matterDocuments: defineTable({
       matterId: v.id("matters"),
       uploaderId: v.id("users"),
       name: v.string(),
       kind: v.union(v.literal("document"), v.literal("communication")),
+      visibility: v.union(
+        v.literal("internal"),
+        v.literal("shared_with_client"),
+      ),
       storageId: v.optional(v.id("_storage")),
       createdAt: v.number(),
     }).index("by_matter", ["matterId"]),
 
     // ---------------------------------------------------------------
-    // Invitations — staff & clients are connected by authorized people.
-    // Raw tokens are never stored: only a SHA-256 hash lives here, the
-    // token is shown once to the inviter to share out-of-band.
+    // Invitations (staff into organizations; clients to the portal).
+    // Raw tokens never touch the database — only salted SHA-256 hashes.
     // ---------------------------------------------------------------
     invitations: defineTable({
+      orgId: v.optional(v.id("organizations")),
       email: v.string(),
       kind: v.union(v.literal("staff"), v.literal("client")),
-      clientId: v.optional(v.id("clients")), // for client connections
-      role: v.optional(roleValidator), // role granted on acceptance
-      salt: v.string(), // per-invite salt for the token hash
-      tokenHash: v.string(), // sha256(salt:token) hex
+      clientId: v.optional(v.id("clients")),
+      orgRole: v.optional(orgRoleValidator),
+      salt: v.string(),
+      tokenHash: v.string(),
       invitedBy: v.id("users"),
       expiresAt: v.number(),
       usedAt: v.optional(v.number()),
       revokedAt: v.optional(v.number()),
       createdAt: v.number(),
-    })
-      .index("by_token", ["tokenHash"])
-      .index("by_email", ["email"]),
+    }).index("by_email", ["email"]),
 
-    // Authenticator-based two-factor enrolment (TOTP), one per user.
+    // Two-factor enrollment (TOTP).
     twoFactor: defineTable({
       userId: v.id("users"),
-      secret: v.string(), // base32 TOTP secret
-      enabled: v.boolean(), // true once confirmed with a valid code
+      secret: v.string(),
+      enabled: v.boolean(),
       createdAt: v.number(),
       confirmedAt: v.optional(v.number()),
     }).index("by_user", ["userId"]),
 
-    // Single-use recovery codes for two-factor (hashed at rest).
     recoveryCodes: defineTable({
       userId: v.id("users"),
       codeHash: v.string(),
@@ -364,8 +427,6 @@ const schema = defineSchema(
       createdAt: v.number(),
     }).index("by_user", ["userId"]),
 
-    // Marks a signed-in session as having passed two-factor verification,
-    // so protected portals can gate every request server-side.
     twoFactorSessions: defineTable({
       userId: v.id("users"),
       sessionId: v.string(),
