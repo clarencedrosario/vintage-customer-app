@@ -35,15 +35,14 @@ export function RequireAuth({
     const returnTo = `${location.pathname}${location.search}`;
     return (
       <Navigate
-        to={`/login${portal ? `/${portal}` : ""}?returnTo=${encodeURIComponent(returnTo)}`}
+        to={`/login?returnTo=${encodeURIComponent(returnTo)}`}
         replace
       />
     );
   }
 
-  // Two-factor gate: console portals require the session challenge.
-  const consolePortal =
-    !portal || portal === "firm" || portal === "lawyer";
+  // Two-factor gate: console routes require the session challenge.
+  const consolePortal = !portal || portal === "firm";
   if (
     twoFactor !== undefined &&
     twoFactor.needed &&
@@ -52,7 +51,7 @@ export function RequireAuth({
   ) {
     return (
       <Navigate
-        to={`/login/${portal ?? "firm"}?returnTo=${encodeURIComponent(location.pathname + location.search)}`}
+        to={`/login?returnTo=${encodeURIComponent(location.pathname + location.search)}`}
         replace
       />
     );
@@ -63,11 +62,10 @@ export function RequireAuth({
     mine === "client" ? "/portal" : mine === "staff" ? "/staff" : mine === "firm" ? "/dashboard" : "/login";
 
   if (portal) {
-    // "lawyer" and "firm" cards both open the console for org members;
-    // the card choice is presentation, authorization is membership.
+    // Portal routes authorize server-side from memberships.
     const wanted = portal === "client" ? "client" : portal === "staff" ? "staff" : "firm";
     if (mine !== wanted) {
-      return <Navigate to={mine ? home : `/login/${portal}`} replace />;
+      return <Navigate to={mine ? home : "/login"} replace />;
     }
   } else if (mine !== "firm") {
     // Console routes: clients and staff go to their own portals.

@@ -130,7 +130,6 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/" element={<Landing />} />
               <Route path="/auth" element={<Navigate to="/login" replace />} />
               <Route path="/login" element={<LoginPage />} />
-              <Route path="/login/:portal" element={<LoginPage />} />
               <Route
                 path="/find-a-lawyer"
                 element={<FindALawyer />}

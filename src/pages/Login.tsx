@@ -8,47 +8,15 @@ import { useAuth } from "@/hooks/use-auth";
 import {
   ArrowLeft,
   ArrowRight,
-  Briefcase,
-  Landmark,
   Loader2,
   Mail,
+  ScrollText,
   ShieldCheck,
-  UserRound,
-  CalendarClock,
 } from "lucide-react";
 import { Suspense, useEffect, useState } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { useMutation, useQuery } from "convex/react";
-
-const PORTALS = {
-  lawyer: {
-    icon: Briefcase,
-    title: "Lawyer Login",
-    blurb: "Manage your matters, clients and court schedule.",
-    registerable: true,
-  },
-  firm: {
-    icon: Landmark,
-    title: "Law Firm Login",
-    blurb: "Manage your firm, legal team and practice.",
-    registerable: true,
-  },
-  staff: {
-    icon: CalendarClock,
-    title: "Peon / Support Staff Login",
-    blurb: "Staff join by invitation from the firm — sign in with the email you were invited on.",
-    registerable: false,
-  },
-  client: {
-    icon: UserRound,
-    title: "Client Login",
-    blurb: "Clients are connected by their lawyer. Sign in with the email your lawyer invited.",
-    registerable: false,
-  },
-} as const;
-
-type PortalId = keyof typeof PORTALS;
 
 function resolveRedirectAfterAuth(returnTo: string | null): string {
   if (returnTo?.startsWith("/") && !returnTo.startsWith("//")) return returnTo;
@@ -57,15 +25,13 @@ function resolveRedirectAfterAuth(returnTo: string | null): string {
 
 /** OTP codes can also be 6-hex recovery codes typed into the same box. */
 function Login() {
-  const { portal } = useParams<{ portal: string }>();
   const [searchParams] = useSearchParams();
   const { isLoading, isAuthenticated, user } = useAuth();
   const twoFactor = useQuery(api.twofactor.sessionSatisfied);
 
-  const validPortal = (portal && portal in PORTALS ? portal : null) as PortalId | null;
   const inviteToken = searchParams.get("invite");
 
-  // Successful logout lands on the selector; preserve existing sessions.
+  // Successful logout lands here with a confirmation toast.
   useEffect(() => {
     if (searchParams.get("reason") === "signedout") {
       toast.info("You have been signed out.");
@@ -77,28 +43,21 @@ function Login() {
     return <InviteFlow token={inviteToken} />;
   }
 
-  if (!validPortal) {
-    return <PortalSelector />;
-  }
-
-  const P = PORTALS[validPortal];
-
-  // A session exists: offer continuation into an authorized portal.
+  // A session exists: offer continuation to the account's own workspace.
   if (!isLoading && isAuthenticated && user) {
     if (twoFactor === undefined) {
       return <LoadingScreen />;
     }
     return (
-      <PortalGate
-        portal={validPortal}
+      <SessionGate
         twoFactorNeeded={twoFactor.needed && !twoFactor.satisfied}
       />
     );
   }
 
   return (
-    <AuthLayout subtitle={P.title}>
-      <SignInCard portal={validPortal} inviteToken={inviteToken} />
+    <AuthLayout>
+      <SignInCard inviteToken={inviteToken} />
     </AuthLayout>
   );
 }
@@ -113,58 +72,6 @@ function LoadingScreen() {
     </AuthLayout>
   );
 }
-
-// ---------------------------------------------------------------
-// Selector shown at /login (and for invalid portal values)
-// ---------------------------------------------------------------
-
-function PortalSelector() {
-  const entries = Object.entries(PORTALS) as [PortalId, (typeof PORTALS)[PortalId]][];
-  return (
-    <AuthLayout wide>
-      <p className="type-label ink-faded">Member &amp; Client Access</p>
-      <h1 className="mt-2 font-serif text-3xl font-semibold tracking-tight">
-        Choose your portal
-      </h1>
-      <p className="mt-2 max-w-md text-sm ink-faded">
-        Four ways in, one chamber. Each opens its own sign-in.
-      </p>
-      <div className="mt-8 grid gap-4 sm:grid-cols-2">
-        {entries.map(([id, P]) => (
-          <Link
-            key={id}
-            to={`/login/${id}`}
-            className="group rounded-xl border border-border bg-card p-5 shadow-sm transition-shadow hover:shadow-md"
-          >
-            <span className="flex size-9 items-center justify-center rounded-md border border-border text-primary">
-              <P.icon className="size-4.5" aria-hidden="true" />
-            </span>
-            <h2 className="mt-3 font-serif text-lg font-semibold">{P.title}</h2>
-            <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-              {P.blurb}
-            </p>
-            <span className="mt-3 inline-flex items-center gap-1 text-sm font-medium text-[#8a6a33]">
-              Login Now
-              <ArrowRight className="size-3.5" aria-hidden="true" />
-            </span>
-          </Link>
-        ))}
-      </div>
-      <div className="mt-8 text-center">
-        <Link
-          to="/find-a-lawyer"
-          className="text-sm font-medium text-[#8a6a33] underline-offset-4 hover:underline"
-        >
-          Find a Lawyer — for public visitors
-        </Link>
-      </div>
-    </AuthLayout>
-  );
-}
-
-// ---------------------------------------------------------------
-// Identified sign-in / registration for a selected portal
-// ---------------------------------------------------------------
 
 // ---------------------------------------------------------------
 // Invitation claim: signed-in users accept directly; others sign in
@@ -212,32 +119,17 @@ function InviteFlow({ token }: { token: string }) {
   }
 
   if (!isAuthenticated) {
-    // Route through the identified sign-in; the token rides along and is
-    // accepted immediately after the email code is verified.
-    const portal: PortalId = info.kind === "client" ? "client" : "staff";
+    // The identified sign-in renders right here; the token rides along and
+    // is accepted immediately after the email code is verified.
     return (
       <AuthLayout subtitle="Accept your invitation">
-        <Card className="rule-frame min-w-[350px] bg-card shadow-md">
-          <CardHeader className="text-center">
-            <CardTitle className="font-serif text-2xl">
-              You are invited
-            </CardTitle>
-            <CardDescription>
-              {info.kind === "client"
-                ? `You have been invited as a client${info.email ? ` (${info.email})` : ""}.`
-                : `You have been invited to join as ${info.orgRole ? info.orgRole.replace(/_/g, " ") : "staff"}${info.email ? ` (${info.email})` : ""}.`}{' '}
-              Sign in with the invited email to accept.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button asChild className="w-full">
-              <Link to={`/login/${portal}?invite=${encodeURIComponent(token)}`}>
-                Sign in to accept
-                <ArrowRight className="ml-2 size-4" />
-              </Link>
-            </Button>
-          </CardContent>
-        </Card>
+        <p className="mb-4 max-w-sm text-center text-sm text-muted-foreground">
+          {info.kind === "client"
+            ? `You have been invited as a client${info.email ? ` (${info.email})` : ""}.`
+            : `You have been invited to join as ${info.orgRole ? info.orgRole.replace(/_/g, " ") : "staff"}${info.email ? ` (${info.email})` : ""}.`}{" "}
+          Sign in with the invited email to accept.
+        </p>
+        <SignInCard inviteToken={token} />
       </AuthLayout>
     );
   }
@@ -280,8 +172,13 @@ function InviteFlow({ token }: { token: string }) {
   );
 }
 
-function SignInCard({ portal, inviteToken }: { portal: PortalId; inviteToken?: string | null }) {
-  const P = PORTALS[portal];
+// ---------------------------------------------------------------
+// Unified sign-in / registration. Roles, portals and permissions
+// are resolved server-side after authentication — never from the
+// page a visitor arrives on.
+// ---------------------------------------------------------------
+
+function SignInCard({ inviteToken }: { inviteToken?: string | null }) {
   const { signIn } = useAuth();
   const acceptInvite = useMutation(api.invitations.accept);
   const [mode, setMode] = useState<"signin" | "register">("signin");
@@ -292,8 +189,7 @@ function SignInCard({ portal, inviteToken }: { portal: PortalId; inviteToken?: s
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
-
-  const registerable = P.registerable;
+  const [searchParams] = useSearchParams();
 
   const handleEmailSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -324,7 +220,9 @@ function SignInCard({ portal, inviteToken }: { portal: PortalId; inviteToken?: s
         try {
           await acceptInvite({ token: inviteToken });
           toast.success("Invitation accepted — welcome aboard.");
-          navigate(portal === "client" ? "/portal" : "/staff", { replace: true });
+          // RequireAuth resolves the new membership server-side and routes
+          // staff to /staff, clients to /portal.
+          navigate("/dashboard", { replace: true });
           return;
         } catch (err) {
           setError(err instanceof Error ? err.message : "Could not accept the invitation.");
@@ -332,8 +230,12 @@ function SignInCard({ portal, inviteToken }: { portal: PortalId; inviteToken?: s
           return;
         }
       }
-      // Role and portal are resolved server-side after sign-in.
-      navigate(resolveRedirectAfterAuth(new URLSearchParams(window.location.search).get("returnTo")), { replace: true });
+      // Role and portal are resolved server-side after sign-in; RequireAuth
+      // routes each account to its own workspace.
+      navigate(
+        resolveRedirectAfterAuth(searchParams.get("returnTo")),
+        { replace: true },
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Verification failed.");
       setOtp("");
@@ -342,13 +244,15 @@ function SignInCard({ portal, inviteToken }: { portal: PortalId; inviteToken?: s
     }
   };
 
+  const twoFactorVerify = useMutation(api.twofactor.verifyForSession);
+
   const handleTwoFactor = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setBusy(true);
     setError(null);
     try {
       await twoFactorVerify({ code });
-      navigate(0); // reload: reload picks up the satisfied session guard
+      navigate(0); // reload picks up the satisfied session guard
     } catch (err) {
       setError(err instanceof Error ? err.message : "Verification failed.");
       setCode("");
@@ -357,38 +261,39 @@ function SignInCard({ portal, inviteToken }: { portal: PortalId; inviteToken?: s
     }
   };
 
-  const twoFactorVerify = useMutation(api.twofactor.verifyForSession);
-
   return (
     <Card className="rule-frame min-w-[350px] bg-card pb-0 shadow-md">
       {step === "email" && (
         <>
           <CardHeader className="text-center">
             <span className="mx-auto flex size-10 items-center justify-center rounded-md border border-border text-primary">
-              <P.icon className="size-5" aria-hidden="true" />
+              <ScrollText className="size-5" aria-hidden="true" />
             </span>
-            <CardTitle className="mt-3 font-serif text-2xl">{P.title}</CardTitle>
-            <CardDescription>{P.blurb}</CardDescription>
-            {registerable && (
-              <div className="mt-3 flex justify-center gap-1 text-sm">
-                <button
-                  type="button"
-                  onClick={() => setMode("signin")}
-                  className={mode === "signin" ? "font-semibold text-foreground" : "text-muted-foreground hover:text-foreground"}
-                >
-                  Sign in
-                </button>
-                <span className="text-border">·</span>
-                <button
-                  type="button"
-                  onClick={() => setMode("register")}
-                  className={mode === "register" ? "font-semibold text-foreground" : "text-muted-foreground hover:text-foreground"}
-                >
-                  Register
-                </button>
-                <span className="sr-only">Toggle between sign in and registration</span>
-              </div>
-            )}
+            <CardTitle className="mt-3 font-serif text-2xl">
+              Sign in to Advokate
+            </CardTitle>
+            <CardDescription>
+              One entrance for advocates, firms, staff and clients — your
+              workspace opens according to your account.
+            </CardDescription>
+            <div className="mt-3 flex justify-center gap-1 text-sm">
+              <button
+                type="button"
+                onClick={() => setMode("signin")}
+                className={mode === "signin" ? "font-semibold text-foreground" : "text-muted-foreground hover:text-foreground"}
+              >
+                Sign in
+              </button>
+              <span className="text-border">·</span>
+              <button
+                type="button"
+                onClick={() => setMode("register")}
+                className={mode === "register" ? "font-semibold text-foreground" : "text-muted-foreground hover:text-foreground"}
+              >
+                Register your practice
+              </button>
+              <span className="sr-only">Toggle between sign in and registration</span>
+            </div>
           </CardHeader>
           <form onSubmit={handleEmailSubmit}>
             <CardContent>
@@ -399,7 +304,11 @@ function SignInCard({ portal, inviteToken }: { portal: PortalId; inviteToken?: s
                     name="email"
                     type="email"
                     required
-                    placeholder={portal === "client" ? "email your lawyer invited" : "name@example.com"}
+                    placeholder={
+                      mode === "register"
+                        ? "your name@example.com"
+                        : "name@example.com"
+                    }
                     className="pl-9"
                     disabled={busy}
                   />
@@ -409,11 +318,11 @@ function SignInCard({ portal, inviteToken }: { portal: PortalId; inviteToken?: s
                 </Button>
               </div>
               {error && <p className="mt-2 text-sm text-destructive">{error}</p>}
-              {!registerable && (
-                <p className="mt-3 text-xs ink-faded">
-                  Staff and clients cannot self-register. Ask your firm to invite you.
-                </p>
-              )}
+              <p className="mt-3 text-xs ink-faded">
+                {mode === "register"
+                  ? "Registering creates a new chamber. Staff and clients join by invitation — sign in with the invited email instead."
+                  : "We email a six-digit code — no password to remember. Staff and clients: use the email your firm invited."}
+              </p>
             </CardContent>
           </form>
         </>
@@ -448,7 +357,7 @@ function SignInCard({ portal, inviteToken }: { portal: PortalId; inviteToken?: s
                   </>
                 ) : (
                   <>
-                    Verify & continue <ArrowRight className="ml-2 h-4 w-4" />
+                    Verify &amp; continue <ArrowRight className="ml-2 h-4 w-4" />
                   </>
                 )}
               </Button>
@@ -526,22 +435,16 @@ function TwoFactorStep({
 }
 
 // ---------------------------------------------------------------
-// Signed-in visitor at /login/:portal — gate or bounce
+// Signed-in visitor at /login — continue to their workspace
 // ---------------------------------------------------------------
 
-function PortalGate({
-  portal,
-  twoFactorNeeded,
-}: {
-  portal: PortalId;
-  twoFactorNeeded: boolean;
-}) {
+function SessionGate({ twoFactorNeeded }: { twoFactorNeeded: boolean }) {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
   const searchParams = useSearchParams()[0];
   const returnTo = searchParams.get("returnTo");
   // Authorization resolved from memberships server-side; the legacy role
-  // is only a fallback. Clicking a card never grants privileges.
+  // is only a fallback. Arriving on this page never grants privileges.
   const resolved = useQuery(api.orgs.resolve);
 
   if (twoFactorNeeded) {
@@ -554,7 +457,7 @@ function PortalGate({
 
   if (resolved === undefined) {
     return (
-      <AuthLayout subtitle={PORTALS[portal].title}>
+      <AuthLayout subtitle="Member & Client Access">
         <div className="flex items-center gap-3 text-sm text-muted-foreground">
           <Loader2 className="size-4 animate-spin" />
           Checking your access…
@@ -563,7 +466,7 @@ function PortalGate({
     );
   }
 
-  // Which home does this account's resolved portal lead to?
+  // Where does this account's resolved portal lead?
   const mine = resolved.portal;
   const home =
     mine === "client"
@@ -574,33 +477,25 @@ function PortalGate({
           ? "/dashboard"
           : "/login";
 
-  // "lawyer" and "firm" cards both open the console for org members.
-  const wanted =
-    portal === "client" ? "client" : portal === "staff" ? "staff" : "firm";
-  const authorized = mine !== null && mine === wanted;
-
   return (
-    <AuthLayout subtitle={PORTALS[portal].title}>
+    <AuthLayout subtitle="Member & Client Access">
       <Card className="rule-frame min-w-[350px] bg-card shadow-md">
         <CardHeader className="text-center">
           <CardTitle className="font-serif text-2xl">
-            {authorized ? `Continue to ${PORTALS[portal].title.replace(" Login", "")}` : "Different portal"}
+            You are already signed in
           </CardTitle>
           <CardDescription>
-            {authorized
-              ? `You are signed in as ${user?.email ?? "a member"} and authorized for this portal.`
-              : `Your account (${user?.email ?? ""}) is not authorized for this portal.`}
+            {user?.email
+              ? `Signed in as ${user.email}. Continue to your workspace.`
+              : "Continue to your workspace."}
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-2">
           <Button asChild className="w-full">
-            <Link to={authorized ? (returnTo ? resolveRedirectAfterAuth(returnTo) : home) : home}>
+            <Link to={returnTo ? resolveRedirectAfterAuth(returnTo) : home}>
               Continue
               <ArrowRight className="ml-2 size-4" />
             </Link>
-          </Button>
-          <Button variant="outline" className="w-full" onClick={() => navigate("/login")}>
-            Choose another portal
           </Button>
           <Button
             variant="ghost"
@@ -679,11 +574,11 @@ function AuthLayout({
           {children}
           <div className="mt-6 w-full text-center">
             <Link
-              to="/login"
+              to="/"
               className="inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground"
             >
               <ArrowLeft className="size-4" />
-              Choose another portal
+              Back to Advokate home
             </Link>
           </div>
         </div>

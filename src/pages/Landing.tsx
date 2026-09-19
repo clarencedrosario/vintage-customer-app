@@ -2,47 +2,13 @@ import { Link } from "react-router";
 import { Button } from "@/components/ui/button";
 import {
   ArrowRight,
-  Briefcase,
   CalendarClock,
   FileText,
   Gavel,
-  Landmark,
   Scale,
   Search,
-  UserRound,
+  Users,
 } from "lucide-react";
-
-/**
- * The four entry experiences. Cards choose which login form opens; they
- * never grant privileges themselves — authorization is resolved
- * server-side from the account's role after sign-in.
- */
-const PORTALS = [
-  {
-    id: "lawyer",
-    icon: Briefcase,
-    title: "Lawyer Login",
-    text: "Manage your matters, clients and court schedule.",
-  },
-  {
-    id: "firm",
-    icon: Landmark,
-    title: "Law Firm Login",
-    text: "Manage your firm, legal team and practice.",
-  },
-  {
-    id: "staff",
-    icon: CalendarClock,
-    title: "Peon / Support Staff Login",
-    text: "View assigned tasks, filing work and shared documents.",
-  },
-  {
-    id: "client",
-    icon: UserRound,
-    title: "Client Login",
-    text: "Access case updates and documents shared by your lawyer.",
-  },
-] as const;
 
 const CAPABILITIES = [
   {
@@ -61,9 +27,24 @@ const CAPABILITIES = [
     text: "Record time and disbursements, draft invoices with configurable tax, and receipt payments by UPI, NEFT, cash or cheque.",
   },
   {
-    icon: Scale,
+    icon: Users,
     title: "One chamber, every role",
-    text: "Advocates, firm administration, support staff and clients each work in their own portal over the same live records.",
+    text: "Advocates, firm administration, support staff and clients each work in their own space over the same live records.",
+  },
+];
+
+const PROOF = [
+  {
+    title: "Organisation-first",
+    text: "Independent chambers and multi-lawyer firms each hold their own register, permission matrix and billing identity.",
+  },
+  {
+    title: "Roles with restraint",
+    text: "Nine working roles from Owner to Support Staff, each with an editable permission matrix — support staff can never see what they should not.",
+  },
+  {
+    title: "Clients in the loop",
+    text: "Approved updates, shared chronology, hearing dates and secure messages — never internal strategy.",
   },
 ];
 
@@ -86,12 +67,20 @@ export default function Landing() {
               </span>
             </span>
           </Link>
-          <Button
-            asChild
-            className="bg-sidebar-primary text-sidebar-primary-foreground hover:bg-[#C39A52]"
-          >
-            <Link to="/login">Member Sign-In</Link>
-          </Button>
+          <div className="flex items-center gap-3">
+            <Link
+              to="/find-a-lawyer"
+              className="hidden text-sm font-medium text-slate-300 underline-offset-4 hover:text-white hover:underline sm:inline"
+            >
+              Find a Lawyer
+            </Link>
+            <Button
+              asChild
+              className="bg-sidebar-primary text-sidebar-primary-foreground hover:bg-[#C39A52]"
+            >
+              <Link to="/login">Member Sign-In</Link>
+            </Button>
+          </div>
         </div>
       </header>
 
@@ -109,47 +98,28 @@ export default function Landing() {
             Research. Intelligence — your entire legal practice in one
             intelligent workspace.
           </p>
-        </section>
-
-        {/* Portal selector: / always shows these four cards, session or not */}
-        <section
-          aria-label="Choose your portal"
-          className="mx-auto w-full max-w-6xl px-6 pb-16"
-        >
-          <div className="grid gap-4 text-left sm:grid-cols-2 xl:grid-cols-4">
-            {PORTALS.map((p) => (
-              <div
-                key={p.id}
-                className="flex h-full flex-col rounded-xl border border-sidebar-border bg-card p-5 shadow-sm"
-              >
-                <span className="flex size-9 items-center justify-center rounded-md border border-border text-primary">
-                  <p.icon className="size-4.5" aria-hidden="true" />
-                </span>
-                <h2 className="mt-4 font-serif text-lg font-semibold text-foreground">
-                  {p.title}
-                </h2>
-                <p className="mt-1.5 flex-1 text-sm leading-relaxed text-muted-foreground">
-                  {p.text}
-                </p>
-                <Button asChild className="mt-5 w-full">
-                  <Link to={`/login/${p.id}`}>
-                    Login Now
-                    <ArrowRight className="ml-1.5 size-4" aria-hidden="true" />
-                  </Link>
-                </Button>
-              </div>
-            ))}
-          </div>
-
-          {/* Public directory link — for visitors, not members */}
-          <div className="mt-8 text-center">
-            <Link
-              to="/find-a-lawyer"
-              className="inline-flex items-center gap-2 text-sm font-medium text-sidebar-primary underline-offset-4 hover:underline"
+          <div className="mt-8 flex items-center justify-center gap-3">
+            <Button
+              size="lg"
+              asChild
+              className="gap-2 bg-sidebar-primary px-8 text-sidebar-primary-foreground hover:bg-[#C39A52]"
             >
-              <Search className="size-4" aria-hidden="true" />
-              Find a Lawyer — search advocates on Advokate
-            </Link>
+              <Link to="/login">
+                Sign in to the chamber
+                <ArrowRight className="size-4" aria-hidden="true" />
+              </Link>
+            </Button>
+            <Button
+              size="lg"
+              asChild
+              variant="outline"
+              className="gap-2 border-sidebar-border bg-transparent px-8 text-slate-200 hover:bg-white/5 hover:text-white"
+            >
+              <Link to="/find-a-lawyer">
+                <Search className="size-4" aria-hidden="true" />
+                Find a Lawyer
+              </Link>
+            </Button>
           </div>
         </section>
 
@@ -186,6 +156,25 @@ export default function Landing() {
           </div>
         </section>
 
+        {/* Proof points */}
+        <section className="paper-texture pb-20">
+          <div className="mx-auto w-full max-w-6xl px-6">
+            <div className="grid gap-4 sm:grid-cols-3">
+              {PROOF.map((p) => (
+                <div
+                  key={p.title}
+                  className="rounded-xl border border-border bg-card p-6 shadow-sm"
+                >
+                  <h3 className="font-serif text-lg font-semibold">{p.title}</h3>
+                  <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+                    {p.text}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
         {/* Navy closing band */}
         <section className="bg-sidebar py-20">
           <div className="mx-auto w-full max-w-2xl px-6 text-center">
@@ -200,7 +189,7 @@ export default function Landing() {
               asChild
               className="mt-8 gap-2 bg-sidebar-primary px-10 text-sidebar-primary-foreground hover:bg-[#C39A52]"
             >
-              <Link to="/login/firm">
+              <Link to="/login">
                 Enroll Your Chamber
                 <ArrowRight className="size-4" aria-hidden="true" />
               </Link>
