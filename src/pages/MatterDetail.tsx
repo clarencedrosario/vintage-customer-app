@@ -1931,7 +1931,12 @@ function EditMatterDialog({
             </div>
             <div className="space-y-2">
               <Label>Priority</Label>
-              <Select value={priority} onValueChange={setPriority}>
+              <Select
+                value={priority}
+                onValueChange={(v) =>
+                  setPriority(v as "normal" | "high" | "urgent")
+                }
+              >
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>

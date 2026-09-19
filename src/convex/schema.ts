@@ -322,6 +322,9 @@ const schema = defineSchema(
       // Billing arrangement summary (e.g. "Fixed fee ₹50,000 per stage",
       // "Hourly ₹3,000/hr, monthly billing").
       billingArrangement: v.optional(v.string()),
+      // Denormalised next hearing time, maintained automatically on
+      // hearing create/cancel/complete so lists and calendars stay fast.
+      nextHearingAt: v.optional(v.number()),
       // When true, the connected client may upload documents from the
       // client portal (submission is per-matter opt-in).
       clientSubmission: v.optional(v.boolean()),
@@ -402,6 +405,23 @@ const schema = defineSchema(
         v.literal("scheduled"),
         v.literal("held"),
         v.literal("adjourned"),
+        v.literal("cancelled"),
+      ),
+      // Court-day detail (all optional).
+      courtroom: v.optional(v.string()),
+      judge: v.optional(v.string()),
+      purpose: v.optional(v.string()),
+      appearingAdvocateId: v.optional(v.id("users")),
+      prepNotes: v.optional(v.string()),
+      requiredDocuments: v.optional(v.array(v.string())),
+      // Outcome recorded after the hearing.
+      outcome: v.optional(v.string()),
+      nextAction: v.optional(v.string()),
+      outcomeRecordedBy: v.optional(v.id("users")),
+      outcomeRecordedAt: v.optional(v.number()),
+      // Manually maintained authorities / source links for the court brief.
+      authorities: v.optional(
+        v.array(v.object({ label: v.string(), url: v.string() })),
       ),
       createdAt: v.number(),
     })
@@ -414,6 +434,18 @@ const schema = defineSchema(
       passedOn: v.number(),
       summary: v.optional(v.string()),
       storageId: v.optional(v.id("_storage")),
+      // The hearing this order was passed in (optional link).
+      hearingId: v.optional(v.id("hearings")),
+      // Directions extracted from the order and their follow-up state.
+      directions: v.optional(
+        v.array(
+          v.object({
+            text: v.string(),
+            done: v.boolean(),
+          }),
+        ),
+      ),
+      followUp: v.optional(v.string()),
       // Review trail for the attention docket (unreviewed orders).
       reviewedAt: v.optional(v.number()),
       reviewedBy: v.optional(v.id("users")),
@@ -525,7 +557,38 @@ const schema = defineSchema(
       kind: v.string(),
       detail: v.optional(v.string()),
       createdAt: v.number(),
-    }).index("by_matter", ["matterId"]),
+      // Chronology enrichment (v1 fields, all optional for legacy rows).
+      authorId: v.optional(v.id("users")),
+      // When the event actually occurred (local chamber date/time). Falls
+      // back to createdAt when not set.
+      occurredAt: v.optional(v.number()),
+      // "day" = date-only certainty about the day (no time precision
+      // implied); "approx" = uncertain/circa date; undefined = exact.
+      datePrecision: v.optional(
+        v.union(v.literal("exact"), v.literal("day"), v.literal("approx")),
+      ),
+      sourceRef: v.optional(v.string()), // e.g. "Order dt. 03.02.2026", p.14 paper book
+      linkKind: v.optional(
+        v.union(
+          v.literal("document"),
+          v.literal("hearing"),
+          v.literal("order"),
+          v.literal("message"),
+        ),
+      ),
+      linkId: v.optional(v.string()),
+      visibility: v.optional(
+        v.union(v.literal("internal"), v.literal("shared_with_client")),
+      ),
+      correctedAt: v.optional(v.number()),
+      correctedBy: v.optional(v.id("users")),
+      supersedes: v.optional(v.id("matterEvents")), // correction chain
+      // AI-extracted chronology suggestions stay invisible until reviewed.
+      aiSuggested: v.optional(v.boolean()),
+      reviewed: v.optional(v.boolean()),
+    })
+      .index("by_matter", ["matterId"])
+      .index("by_matter_time", ["matterId", "occurredAt"]),
 
     // Document-level access: `internal` files are never exposed to the
     // client portal; `shared_with_client` files are.
