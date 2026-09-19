@@ -298,6 +298,22 @@ export const addOrder = mutation({
   },
 });
 
+/** Mark an order as reviewed (order.record holders on visible matters). */
+export const markOrderReviewed = mutation({
+  args: { orderId: v.id("orders") },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    requireCapability(ac, "order.record");
+    const order = await ctx.db.get(args.orderId);
+    if (!order) throw new Error("Order not found.");
+    await requireMatter(ctx, ac, order.matterId);
+    await ctx.db.patch(args.orderId, {
+      reviewedAt: Date.now(),
+      reviewedBy: ac.user._id,
+    });
+  },
+});
+
 // ---------------- Tasks ----------------
 
 export const addTask = mutation({

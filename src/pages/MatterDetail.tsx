@@ -26,6 +26,7 @@ import { useMutation, useQuery } from "convex/react";
 import {
   ArrowLeft,
   CalendarClock,
+  CheckCircle2,
   CircleDashed,
   ClipboardCheck,
   FileText,
@@ -42,7 +43,7 @@ import {
   Upload,
 } from "lucide-react";
 import { useRef, useState } from "react";
-import { Link, useParams } from "react-router";
+import { Link, useParams, useSearchParams } from "react-router";
 import { toast } from "sonner";
 
 const STATUS_LABELS: Record<MatterStatus, string> = {
@@ -76,11 +77,14 @@ function DocumentLink({ documentId }: { documentId: Id<"matterDocuments"> }) {
 
 export default function MatterDetail() {
   const { matterId: rawId } = useParams<{ matterId: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
   const matterId = rawId as Id<"matters"> | undefined;
 
   const matter = useQuery(api.matters.get, matterId ? { matterId } : "skip");
   const notes = useQuery(api.matters.listNotes, matterId ? { matterId } : "skip");
   const documents = useQuery(api.matters.listDocuments, matterId ? { matterId } : "skip");
+  const orders = useQuery(api.matters.allOrders);
+  const markOrderReviewed = useMutation(api.matters.markOrderReviewed);
   const timeEntries = useQuery(api.matters.listTime, matterId ? { matterId } : "skip");
   const expenses = useQuery(api.matters.listExpenses, matterId ? { matterId } : "skip");
   const events = useQuery(api.matters.listEvents, matterId ? { matterId } : "skip");
@@ -124,6 +128,18 @@ export default function MatterDetail() {
   const [requestText, setRequestText] = useState("");
   const [busy, setBusy] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  // Deep-linkable tab: /matters/:id?tab=orders (used by the attention docket).
+  const tabParam = searchParams.get("tab");
+  const activeTab =
+    tabParam &&
+    ["hearings", "orders", "tasks", "documents", "time", "expenses", "invoices", "notes", "docket"].includes(
+      tabParam,
+    )
+      ? tabParam
+      : "hearings";
+  const setTab = (value: string) => {
+    setSearchParams(value === "hearings" ? {} : { tab: value }, { replace: true });
+  };
 
   if (matter === undefined) {
     return (
@@ -269,7 +285,7 @@ export default function MatterDetail() {
         )}
       </div>
 
-      <Tabs defaultValue="hearings" className="mt-8">
+      <Tabs value={activeTab} onValueChange={setTab} className="mt-8">
         <TabsList className="flex-wrap">
           <TabsTrigger value="hearings" className="gap-2">
             <Gavel className="size-4" /> Hearings
@@ -394,22 +410,56 @@ export default function MatterDetail() {
         <TabsContent value="orders" className="mt-6">
           <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
             <div className="space-y-3">
-              {(events ?? []).filter((e) => e.kind === "order").length === 0 ? (
+              {(orders ?? []).filter((o) => o.matter?._id === matterId).length === 0 ? (
                 <Card className="border-dashed">
                   <CardContent className="py-8 text-center text-sm ink-faded">
                     No orders recorded yet.
                   </CardContent>
                 </Card>
               ) : (
-                (events ?? [])
-                  .filter((e) => e.kind === "order")
-                  .reverse()
-                  .map((e) => (
-                    <div key={e._id} className="rule-frame bg-card p-4">
-                      <p className="text-sm">{e.detail}</p>
-                      <p className="type-label mt-1 ink-faded">
-                        {formatDateTimeIN(e.createdAt)}
-                      </p>
+                (orders ?? [])
+                  .filter((o) => o.matter?._id === matterId)
+                  .map((o) => (
+                    <div key={o._id} className="rule-frame bg-card p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium">{o.title}</p>
+                          {o.summary && (
+                            <p className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">
+                              {o.summary}
+                            </p>
+                          )}
+                          <p className="type-label mt-1.5 ink-faded">
+                            Passed on {formatDateIN(o.passedOn)}
+                            {o.reviewedAt
+                              ? ` · reviewed ${formatDateIN(o.reviewedAt)}`
+                              : ""}
+                          </p>
+                        </div>
+                        {!o.reviewedAt &&
+                          caps?.capabilities.includes("order.record") && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="shrink-0 gap-1.5"
+                              onClick={async () => {
+                                try {
+                                  await markOrderReviewed({ orderId: o._id });
+                                  toast.success("Order marked reviewed.");
+                                } catch (err) {
+                                  toast.error(
+                                    err instanceof Error
+                                      ? err.message
+                                      : "Failed.",
+                                  );
+                                }
+                              }}
+                            >
+                              <CheckCircle2 className="size-4" aria-hidden="true" />
+                              Mark reviewed
+                            </Button>
+                          )}
+                      </div>
                     </div>
                   ))
               )}

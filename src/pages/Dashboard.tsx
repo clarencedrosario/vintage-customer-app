@@ -221,6 +221,7 @@ function EmptyRow({ children }: { children: React.ReactNode }) {
 /** The personal desk every console member sees. */
 function LawyerDesk() {
   const data = useQuery(api.portals.lawyerDashboard);
+  const attention = useQuery(api.attention.feed);
   const [now] = useState(() => Date.now());
 
   if (!data) {
@@ -261,8 +262,35 @@ function LawyerDesk() {
     return null;
   };
 
+  const attentionCounts = attention?.items ?? [];
+  const criticalCount = attentionCounts.filter((i) => i.critical).length;
+
   return (
     <>
+      {/* What needs my attention */}
+      {attention !== undefined && attention !== null && (
+        <Link
+          to="/attention"
+          className="rule-frame mb-6 flex items-center justify-between gap-4 rounded-lg bg-card p-4 transition-colors hover:bg-accent/30"
+        >
+          <div className="min-w-0">
+            <p className="flex items-center gap-2 font-serif text-lg font-semibold">
+              <TriangleAlert
+                className={`size-4 ${criticalCount > 0 ? "text-red-700" : "text-[#B68A45]"}`}
+                aria-hidden="true"
+              />
+              What needs my attention
+            </p>
+            <p className="mt-0.5 text-sm text-muted-foreground">
+              {attentionCounts.length === 0
+                ? "Nothing right now — the docket is clear."
+                : `${attentionCounts.length} item${attentionCounts.length === 1 ? "" : "s"} today${criticalCount > 0 ? `, ${criticalCount} critical` : ""} — hearings, deadlines, messages and more.`}
+            </p>
+          </div>
+          <ArrowRight className="size-4 shrink-0 text-[#8a6a33]" aria-hidden="true" />
+        </Link>
+      )}
+
       {/* Stat cards */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         {stats.map((s) => (

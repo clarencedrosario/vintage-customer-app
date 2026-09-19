@@ -290,6 +290,9 @@ const schema = defineSchema(
       passedOn: v.number(),
       summary: v.optional(v.string()),
       storageId: v.optional(v.id("_storage")),
+      // Review trail for the attention docket (unreviewed orders).
+      reviewedAt: v.optional(v.number()),
+      reviewedBy: v.optional(v.id("users")),
       createdAt: v.number(),
     }).index("by_matter", ["matterId"]),
 
@@ -464,6 +467,21 @@ const schema = defineSchema(
     })
       .index("by_session", ["sessionId"])
       .index("by_user", ["userId"]),
+
+    // ---------------------------------------------------------------
+    // Attention docket: per-user dismissals and snoozes. Items reappear
+    // when their data changes; critical deadlines cannot be dismissed.
+    // ---------------------------------------------------------------
+    attentionStates: defineTable({
+      userId: v.id("users"),
+      orgId: v.id("organizations"),
+      itemId: v.string(), // e.g. "hearing:<id>", "deadline:<taskId>"
+      dismissedAt: v.optional(v.number()),
+      snoozedUntil: v.optional(v.number()),
+      updatedAt: v.number(),
+    })
+      .index("by_user_org", ["userId", "orgId"])
+      .index("by_user_item", ["userId", "itemId"]),
   },
   {
     schemaValidation: false,
