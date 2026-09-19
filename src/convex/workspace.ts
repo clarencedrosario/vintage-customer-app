@@ -56,6 +56,31 @@ export const team = query({
   },
 });
 
+/**
+ * My effective capabilities in the active organization — drives which
+ * UI affordances render. Frontend use only; every mutation re-checks.
+ */
+export const myCapabilities = query({
+  args: {},
+  handler: async (ctx) => {
+    const ac = await getAccessContext(ctx);
+    if (!ac) {
+      return {
+        orgId: null as Id<"organizations"> | null,
+        orgName: null as string | null,
+        orgRole: null as OrgRole | null,
+        capabilities: [] as Capability[],
+      };
+    }
+    return {
+      orgId: ac.org._id,
+      orgName: ac.org.name,
+      orgRole: ac.membership.orgRole,
+      capabilities: [...ac.permissions],
+    };
+  },
+});
+
 /** Update your own profile. */
 export const updateProfile = mutation({
   args: {

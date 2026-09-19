@@ -63,6 +63,7 @@ function Login() {
   const twoFactor = useQuery(api.twofactor.sessionSatisfied);
 
   const validPortal = (portal && portal in PORTALS ? portal : null) as PortalId | null;
+  const inviteToken = searchParams.get("invite");
 
   // Successful logout lands on the selector; preserve existing sessions.
   useEffect(() => {
@@ -70,6 +71,11 @@ function Login() {
       toast.info("You have been signed out.");
     }
   }, [searchParams]);
+
+  // Invitation links take priority: /login?invite=…
+  if (inviteToken) {
+    return <InviteFlow token={inviteToken} />;
+  }
 
   if (!validPortal) {
     return <PortalSelector />;
@@ -92,7 +98,7 @@ function Login() {
 
   return (
     <AuthLayout subtitle={P.title}>
-      <SignInCard portal={validPortal} />
+      <SignInCard portal={validPortal} inviteToken={inviteToken} />
     </AuthLayout>
   );
 }
@@ -160,9 +166,124 @@ function PortalSelector() {
 // Identified sign-in / registration for a selected portal
 // ---------------------------------------------------------------
 
-function SignInCard({ portal }: { portal: PortalId }) {
+// ---------------------------------------------------------------
+// Invitation claim: signed-in users accept directly; others sign in
+// with the invited email first. Identity + token must both match.
+// ---------------------------------------------------------------
+
+function InviteFlow({ token }: { token: string }) {
+  const { isLoading, isAuthenticated } = useAuth();
+  const info = useQuery(api.invitations.inspect, { token });
+  const accept = useMutation(api.invitations.accept);
+  const navigate = useNavigate();
+
+  if (isLoading || info === undefined) {
+    return (
+      <AuthLayout subtitle="Invitation">
+        <div className="flex items-center gap-3 text-sm text-muted-foreground">
+          <Loader2 className="size-4 animate-spin" />
+          Checking your invitation…
+        </div>
+      </AuthLayout>
+    );
+  }
+
+  if (!info) {
+    return (
+      <AuthLayout subtitle="Invitation">
+        <Card className="rule-frame min-w-[350px] bg-card shadow-md">
+          <CardHeader className="text-center">
+            <CardTitle className="font-serif text-2xl">
+              Invitation unavailable
+            </CardTitle>
+            <CardDescription>
+              This invitation is invalid, expired, revoked, or already used.
+              Ask the firm to issue a new one.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button asChild className="w-full">
+              <Link to="/login">Back to sign in</Link>
+            </Button>
+          </CardContent>
+        </Card>
+      </AuthLayout>
+    );
+  }
+
+  if (!isAuthenticated) {
+    // Route through the identified sign-in; the token rides along and is
+    // accepted immediately after the email code is verified.
+    const portal: PortalId = info.kind === "client" ? "client" : "staff";
+    return (
+      <AuthLayout subtitle="Accept your invitation">
+        <Card className="rule-frame min-w-[350px] bg-card shadow-md">
+          <CardHeader className="text-center">
+            <CardTitle className="font-serif text-2xl">
+              You are invited
+            </CardTitle>
+            <CardDescription>
+              {info.kind === "client"
+                ? `You have been invited as a client${info.email ? ` (${info.email})` : ""}.`
+                : `You have been invited to join as ${info.orgRole ? info.orgRole.replace(/_/g, " ") : "staff"}${info.email ? ` (${info.email})` : ""}.`}{' '}
+              Sign in with the invited email to accept.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button asChild className="w-full">
+              <Link to={`/login/${portal}?invite=${encodeURIComponent(token)}`}>
+                Sign in to accept
+                <ArrowRight className="ml-2 size-4" />
+              </Link>
+            </Button>
+          </CardContent>
+        </Card>
+      </AuthLayout>
+    );
+  }
+
+  return (
+    <AuthLayout subtitle="Accept your invitation">
+      <Card className="rule-frame min-w-[350px] bg-card shadow-md">
+        <CardHeader className="text-center">
+          <CardTitle className="font-serif text-2xl">Confirm</CardTitle>
+          <CardDescription>
+            {info.kind === "client"
+              ? "Accepting connects your account to the client record your lawyer prepared."
+              : "Accepting grants you membership with the stated role."}{" "}
+            You are signed in and ready to accept.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Button
+            className="w-full"
+            onClick={async () => {
+              try {
+                await accept({ token });
+                toast.success("Invitation accepted — welcome aboard.");
+                navigate(info.kind === "client" ? "/portal" : "/staff", {
+                  replace: true,
+                });
+              } catch (err) {
+                toast.error(
+                  err instanceof Error ? err.message : "Could not accept.",
+                );
+              }
+            }}
+          >
+            Accept invitation
+            <ArrowRight className="ml-2 size-4" />
+          </Button>
+        </CardContent>
+      </Card>
+    </AuthLayout>
+  );
+}
+
+function SignInCard({ portal, inviteToken }: { portal: PortalId; inviteToken?: string | null }) {
   const P = PORTALS[portal];
   const { signIn } = useAuth();
+  const acceptInvite = useMutation(api.invitations.accept);
   const [mode, setMode] = useState<"signin" | "register">("signin");
   const [email, setEmail] = useState("");
   const [step, setStep] = useState<"email" | "code" | "twofactor">("email");
@@ -197,6 +318,20 @@ function SignInCard({ portal }: { portal: PortalId }) {
     setError(null);
     try {
       await signIn("email-otp", { email, code: otp });
+      if (inviteToken) {
+        // Verified identity now binds the invitation: membership or
+        // client grant, single-use, checked server-side.
+        try {
+          await acceptInvite({ token: inviteToken });
+          toast.success("Invitation accepted — welcome aboard.");
+          navigate(portal === "client" ? "/portal" : "/staff", { replace: true });
+          return;
+        } catch (err) {
+          setError(err instanceof Error ? err.message : "Could not accept the invitation.");
+          setBusy(false);
+          return;
+        }
+      }
       // Role and portal are resolved server-side after sign-in.
       navigate(resolveRedirectAfterAuth(new URLSearchParams(window.location.search).get("returnTo")), { replace: true });
     } catch (err) {
@@ -405,6 +540,9 @@ function PortalGate({
   const navigate = useNavigate();
   const searchParams = useSearchParams()[0];
   const returnTo = searchParams.get("returnTo");
+  // Authorization resolved from memberships server-side; the legacy role
+  // is only a fallback. Clicking a card never grants privileges.
+  const resolved = useQuery(api.orgs.resolve);
 
   if (twoFactorNeeded) {
     return (
@@ -414,21 +552,32 @@ function PortalGate({
     );
   }
 
-  // Resolve where this role may actually go.
-  const role = user?.role;
-  const home =
-    role === "client"
-      ? "/portal"
-      : role === "staff" || role === "member"
-        ? "/staff"
-        : "/dashboard";
+  if (resolved === undefined) {
+    return (
+      <AuthLayout subtitle={PORTALS[portal].title}>
+        <div className="flex items-center gap-3 text-sm text-muted-foreground">
+          <Loader2 className="size-4 animate-spin" />
+          Checking your access…
+        </div>
+      </AuthLayout>
+    );
+  }
 
-  // Asking for a portal the role cannot enter → show where they CAN go.
-  const authorized =
-    (portal === "client" && role === "client") ||
-    (portal === "staff" && (role === "staff" || role === "member")) ||
-    (portal === "lawyer" && (role === "lawyer" || role === "user")) ||
-    (portal === "firm" && (role === "firm_owner" || role === "admin"));
+  // Which home does this account's resolved portal lead to?
+  const mine = resolved.portal;
+  const home =
+    mine === "client"
+      ? "/portal"
+      : mine === "staff"
+        ? "/staff"
+        : mine === "firm"
+          ? "/dashboard"
+          : "/login";
+
+  // "lawyer" and "firm" cards both open the console for org members.
+  const wanted =
+    portal === "client" ? "client" : portal === "staff" ? "staff" : "firm";
+  const authorized = mine !== null && mine === wanted;
 
   return (
     <AuthLayout subtitle={PORTALS[portal].title}>

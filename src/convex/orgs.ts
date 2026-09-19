@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { getCurrentUser } from "./users";
+import type { OrgRole } from "./schema";
 import { getAccessContext, requireAccess } from "./access";
 import type { Id } from "./_generated/dataModel";
 import { MEMBERSHIP_STATUSES } from "./schema";
@@ -22,21 +23,25 @@ export const myOrganizations = query({
       .collect();
 
     const active = rows.filter((m) => m.status !== "suspended");
-    const orgs = await Promise.all(
-      active.map(async (m) => {
-        const org = await ctx.db.get(m.orgId);
-        return org
-          ? {
-              orgId: org._id,
-              name: org.name,
-              kind: org.kind,
-              orgRole: m.orgRole,
-              status: m.status,
-            }
-          : null;
-      }),
-    );
-    return orgs.filter(Boolean);
+    const list: {
+      orgId: Id<"organizations">;
+      name: string;
+      kind: "chamber" | "firm";
+      orgRole: OrgRole;
+      status: "active" | "invited";
+    }[] = [];
+    for (const m of active) {
+      const org = await ctx.db.get(m.orgId);
+      if (!org) continue;
+      list.push({
+        orgId: org._id,
+        name: org.name,
+        kind: org.kind,
+        orgRole: m.orgRole,
+        status: m.status === "invited" ? "invited" : "active",
+      });
+    }
+    return list;
   },
 });
 

@@ -1,7 +1,18 @@
 import { useState } from "react";
 import { Link, NavLink, useNavigate } from "react-router";
+import { useQuery, useMutation } from "convex/react";
+import { api } from "@/convex/_generated/api";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Check, ChevronsUpDown, Building2 } from "lucide-react";
 import {
   Sheet,
   SheetContent,
@@ -45,6 +56,68 @@ function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
         </NavLink>
       ))}
     </nav>
+  );
+}
+
+/** Org switcher for members of more than one organisation. */
+function OrgSwitcher({ onNavigate }: { onNavigate?: () => void }) {
+  const orgs = useQuery(api.orgs.myOrganizations);
+  const caps = useQuery(api.workspace.myCapabilities);
+  const setActive = useMutation(api.orgs.setActiveOrganization);
+
+  if (!orgs || orgs.length === 0) return null;
+  const currentId = caps?.orgId ?? null;
+  const current = orgs.find((o) => o.orgId === currentId) ?? orgs[0]!;
+  const roleLabel = (r: string) =>
+    r.replace("_", " ").replace(/\b\w/g, (c) => c.toUpperCase());
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="flex w-full items-center justify-between gap-2 rounded-md border border-sidebar-border px-3 py-2 text-left hover:bg-white/5"
+          aria-label="Switch organisation"
+        >
+          <span className="flex min-w-0 items-center gap-2">
+            <Building2 className="size-4 shrink-0 text-sidebar-primary" aria-hidden="true" />
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-medium text-sidebar-foreground">
+                {current.name}
+              </span>
+              <span className="block truncate text-[11px] text-slate-400">
+                {roleLabel(current.orgRole)}
+              </span>
+            </span>
+          </span>
+          <ChevronsUpDown className="size-3.5 shrink-0 text-slate-400" aria-hidden="true" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-60">
+        <DropdownMenuLabel>Your organisations</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {orgs.map((o) => (
+          <DropdownMenuItem
+            key={o.orgId}
+            onClick={async () => {
+              if (o.orgId === currentId) return;
+              try {
+                await setActive({ orgId: o.orgId });
+                onNavigate?.();
+                window.location.reload();
+              } catch {
+                // Suspended membership etc.; leave selection unchanged.
+              }
+            }}
+          >
+            <span className="min-w-0 flex-1 truncate">{o.name}</span>
+            {o.orgId === currentId && (
+              <Check className="size-4 text-[#8a6a33]" aria-hidden="true" />
+            )}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -106,13 +179,16 @@ export function ChamberShell({
         <div className="flex-1 overflow-y-auto py-4">
           <SidebarNav />
         </div>
-        <div className="border-t border-sidebar-border px-5 py-4">
-          <p className="truncate text-sm font-medium text-sidebar-foreground">
-            {user?.name ?? "Member"}
-          </p>
-          <p className="truncate text-xs text-slate-400">
-            {user?.email ?? ""}
-          </p>
+        <div className="space-y-3 border-t border-sidebar-border px-4 py-4">
+          <OrgSwitcher />
+          <div className="px-1">
+            <p className="truncate text-sm font-medium text-sidebar-foreground">
+              {user?.name ?? "Member"}
+            </p>
+            <p className="truncate text-xs text-slate-400">
+              {user?.email ?? ""}
+            </p>
+          </div>
         </div>
       </aside>
 
@@ -146,8 +222,11 @@ export function ChamberShell({
                       The Digital Chamber
                     </p>
                   </SheetHeader>
-                  <div className="py-3">
+                  <div className="space-y-3 py-3">
                     <SidebarNav onNavigate={() => setMobileOpen(false)} />
+                    <div className="px-3 pt-2">
+                      <OrgSwitcher onNavigate={() => setMobileOpen(false)} />
+                    </div>
                   </div>
                 </SheetContent>
               </Sheet>

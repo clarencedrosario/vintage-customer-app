@@ -109,6 +109,7 @@ export default function MatterDetail() {
   const [expenseDate, setExpenseDate] = useState(todayIN());
   const [noteBody, setNoteBody] = useState("");
   const [docKind, setDocKind] = useState("document");
+  const [docVisibility, setDocVisibility] = useState("internal");
   const [busy, setBusy] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -154,6 +155,7 @@ export default function MatterDetail() {
         matterId,
         name: file.name,
         kind: docKind as "document" | "communication",
+        visibility: docVisibility as "internal" | "shared_with_client",
         storageId: storageId as Id<"_storage"> | undefined,
       });
       toast.success("Document filed to the matter.");
@@ -528,6 +530,25 @@ export default function MatterDetail() {
                 <SelectContent>
                   <SelectItem value="document">Document</SelectItem>
                   <SelectItem value="communication">Communication</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="w-56">
+              <Label>Visibility</Label>
+              <Select
+                value={docVisibility}
+                onValueChange={setDocVisibility}
+              >
+                <SelectTrigger className="mt-2">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="internal">
+                    Internal (chamber only)
+                  </SelectItem>
+                  <SelectItem value="shared_with_client">
+                    Shared with client
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </div>

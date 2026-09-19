@@ -11,6 +11,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -18,12 +25,36 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { api } from "@/convex/_generated/api";
-import { useAuth } from "@/hooks/use-auth";
+import type { Id } from "@/convex/_generated/dataModel";
 import { useMutation, useQuery } from "convex/react";
+import { MoreHorizontal, UserPlus } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
-const CONSOLE = new Set(["firm_owner", "admin", "lawyer", "user"]);
+const ORG_ROLE_OPTIONS = [
+  "partner",
+  "senior_associate",
+  "associate",
+  "junior",
+  "paralegal",
+  "accountant",
+  "administrator",
+  "support_staff",
+] as const;
+
+type AssignableRole = (typeof ORG_ROLE_OPTIONS)[number];
+
+const ROLE_LABEL: Record<string, string> = {
+  owner: "Owner",
+  partner: "Partner",
+  senior_associate: "Senior Associate",
+  associate: "Associate",
+  junior: "Junior",
+  paralegal: "Paralegal",
+  accountant: "Accountant",
+  administrator: "Administrator",
+  support_staff: "Support Staff",
+};
 
 function generateToken(): string {
   const bytes = new Uint8Array(24);
@@ -34,21 +65,18 @@ function generateToken(): string {
     .replace(/=+$/, "");
 }
 
-const ROLE_LABEL: Record<string, string> = {
-  firm_owner: "Firm Owner",
-  admin: "Administrator",
-  lawyer: "Advocate",
-  user: "Advocate",
-  staff: "Staff",
-  member: "Staff",
-  client: "Client",
-};
-
 export default function Team() {
-  const { user: me } = useAuth();
+  // Effective permissions from the server decide what renders; every
+  // mutation re-checks server-side, so this UI gating is cosmetic only.
+  const caps = useQuery(api.workspace.myCapabilities);
   const team = useQuery(api.workspace.team);
   const invites = useQuery(api.invitations.listInvitations);
   const clients = useQuery(api.clients.list);
+
+  const setRole = useMutation(api.workspace.setMemberRole);
+  const suspend = useMutation(api.workspace.suspendMember);
+  const reactivate = useMutation(api.workspace.reactivateMember);
+  const remove = useMutation(api.workspace.removeMember);
   const inviteStaff = useMutation(api.invitations.inviteStaff);
   const inviteClient = useMutation(api.invitations.inviteClient);
   const revoke = useMutation(api.invitations.revokeInvitation);
@@ -56,12 +84,15 @@ export default function Team() {
   const [open, setOpen] = useState(false);
   const [kind, setKind] = useState<"staff" | "client">("staff");
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState<"lawyer" | "staff">("staff");
+  const [orgRole, setOrgRole] = useState<AssignableRole>("junior");
   const [clientId, setClientId] = useState<string>("");
   const [busy, setBusy] = useState(false);
-  const [issuedToken, setIssuedToken] = useState<string | null>(null);
+  const [issued, setIssued] = useState<{ email: string; token: string } | null>(
+    null,
+  );
 
-  const canManage = me ? CONSOLE.has(me.role ?? "") : false;
+  const canInvite = caps?.capabilities.includes("team.invite") ?? false;
+  const canManage = caps?.capabilities.includes("team.manage") ?? false;
 
   const handleInvite = async () => {
     if (!email.trim()) {
@@ -72,7 +103,7 @@ export default function Team() {
     try {
       const token = generateToken();
       if (kind === "staff") {
-        await inviteStaff({ email, role, token });
+        await inviteStaff({ email, orgRole, token });
       } else {
         if (!clientId) {
           toast.error("Choose the client record to connect.");
@@ -80,12 +111,12 @@ export default function Team() {
           return;
         }
         await inviteClient({
-          clientId: clientId as never,
+          clientId: clientId as Id<"clients">,
           email,
           token,
         });
       }
-      setIssuedToken(token);
+      setIssued({ email, token });
       setEmail("");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed.");
@@ -94,34 +125,48 @@ export default function Team() {
     }
   };
 
+  const act = async (fn: () => Promise<unknown>, done: string) => {
+    try {
+      await fn();
+      toast.success(done);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed.");
+    }
+  };
+
   return (
-    <ChamberShell subtitle="The Digital Chamber">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <p className="type-label ink-faded">Members of Chambers</p>
-          <h1 className="mt-2 font-serif text-3xl font-semibold tracking-tight">
-            Team
-          </h1>
-          <p className="mt-2 max-w-2xl ink-faded">
-            Advocates and staff with access to this chamber. Staff and clients
-            join by invitation only.
-          </p>
-        </div>
-        {canManage && (
+    <ChamberShell
+      subtitle="The Digital Chamber"
+      title="Team"
+      actions={
+        canInvite ? (
           <Button
+            size="sm"
             onClick={() => {
-              setIssuedToken(null);
+              setIssued(null);
               setOpen(true);
             }}
           >
+            <UserPlus className="mr-1.5 size-4" aria-hidden="true" />
             Invite
           </Button>
-        )}
-      </div>
+        ) : undefined
+      }
+    >
+      <p className="max-w-2xl text-sm text-muted-foreground">
+        Advocates, paralegals, accountants and staff of this organisation. A
+        member's role decides what they may do — the full matrix is under
+        Settings → Permissions. Support staff never hold lawyers' privileges.
+      </p>
 
       {/* Members */}
       {team === undefined ? (
-        <p className="mt-10 text-sm ink-faded">Calling the roll…</p>
+        <p className="mt-10 text-sm text-muted-foreground">Calling the roll…</p>
+      ) : team.length === 0 ? (
+        <p className="mt-10 text-sm text-muted-foreground">
+          You are not an active member of an organisation yet. Create one under
+          Settings → Organisation, or accept an invitation.
+        </p>
       ) : (
         <div className="mt-8 overflow-hidden rounded-lg border border-border bg-card">
           <table className="data-table">
@@ -130,30 +175,141 @@ export default function Team() {
                 <th>Member</th>
                 <th>Email</th>
                 <th>Role</th>
+                <th>Status</th>
+                {canManage && <th className="w-10" aria-label="Actions" />}
               </tr>
             </thead>
             <tbody>
               {team.map((m) => (
-                <tr key={m._id}>
+                <tr key={m.membershipId}>
                   <td>
-                    <p className="font-medium">
-                      {m.name ?? "—"}
-                      {m._id === me?._id && (
-                        <span className="type-label ml-2 ink-faded">(you)</span>
-                      )}
-                    </p>
+                    <p className="font-medium">{m.name ?? "—"}</p>
                     {m.barCouncilId ? (
                       <p className="type-label mt-0.5 ink-faded">
                         Bar ID {m.barCouncilId}
                       </p>
                     ) : null}
                   </td>
-                  <td className="text-sm text-muted-foreground">{m.email ?? "—"}</td>
+                  <td className="text-sm text-muted-foreground">
+                    {m.email ?? "—"}
+                  </td>
                   <td>
-                    <span className="stamp text-primary">
-                      {ROLE_LABEL[m.role ?? ""] ?? "Member"}
+                    {canManage && m.status !== "invited" ? (
+                      <Select
+                        value={m.orgRole}
+                        onValueChange={(v) =>
+                          act(
+                            () =>
+                              setRole({
+                                membershipId: m.membershipId,
+                                orgRole: v as AssignableRole,
+                              }),
+                            "Role updated.",
+                          )
+                        }
+                      >
+                        <SelectTrigger
+                          size="sm"
+                          className="h-7 w-[150px] text-xs"
+                          aria-label={`Role for ${m.name ?? m.email ?? "member"}`}
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {/* Owner appears only on owner rows and cannot be
+                              granted here; last-owner protection is enforced
+                              server-side. */}
+                          {m.orgRole === "owner" && (
+                            <SelectItem value="owner">Owner</SelectItem>
+                          )}
+                          {ORG_ROLE_OPTIONS.map((r) => (
+                            <SelectItem key={r} value={r}>
+                              {ROLE_LABEL[r]}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <span className="stamp text-primary">
+                        {ROLE_LABEL[m.orgRole] ?? m.orgRole}
+                      </span>
+                    )}
+                  </td>
+                  <td>
+                    <span
+                      className={`stamp ${
+                        m.status === "active"
+                          ? "text-emerald-700"
+                          : m.status === "suspended"
+                            ? "text-destructive"
+                            : "text-muted-foreground"
+                      }`}
+                    >
+                      {m.status}
                     </span>
                   </td>
+                  {canManage && (
+                    <td className="text-right">
+                      {m.status !== "invited" && (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="size-7"
+                              aria-label={`Actions for ${m.name ?? m.email ?? "member"}`}
+                            >
+                              <MoreHorizontal className="size-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            {m.status === "active" ? (
+                              <DropdownMenuItem
+                                onClick={() =>
+                                  act(
+                                    () =>
+                                      suspend({
+                                        membershipId: m.membershipId,
+                                      }),
+                                    "Member suspended.",
+                                  )
+                                }
+                              >
+                                Suspend access
+                              </DropdownMenuItem>
+                            ) : m.status === "suspended" ? (
+                              <DropdownMenuItem
+                                onClick={() =>
+                                  act(
+                                    () =>
+                                      reactivate({
+                                        membershipId: m.membershipId,
+                                      }),
+                                    "Member reactivated.",
+                                  )
+                                }
+                              >
+                                Reactivate
+                              </DropdownMenuItem>
+                            ) : null}
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              className="text-destructive"
+                              onClick={() =>
+                                act(
+                                  () =>
+                                    remove({ membershipId: m.membershipId }),
+                                  "Member removed.",
+                                )
+                              }
+                            >
+                              Remove from organisation
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      )}
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -162,7 +318,7 @@ export default function Team() {
       )}
 
       {/* Invitation register */}
-      {canManage && invites !== undefined && invites.length > 0 && (
+      {canInvite && invites !== undefined && invites.length > 0 && (
         <section aria-label="Invitations" className="mt-10">
           <p className="type-label ink-faded">Invitations</p>
           <div className="mt-3 overflow-hidden rounded-lg border border-border bg-card">
@@ -171,6 +327,7 @@ export default function Team() {
                 <tr>
                   <th>Email</th>
                   <th>Kind</th>
+                  <th>Role</th>
                   <th>Status</th>
                   <th className="text-right">—</th>
                 </tr>
@@ -180,6 +337,11 @@ export default function Team() {
                   <tr key={inv._id}>
                     <td className="text-sm">{inv.email}</td>
                     <td className="type-label ink-faded">{inv.kind}</td>
+                    <td className="type-label ink-faded">
+                      {inv.orgRole
+                        ? (ROLE_LABEL[inv.orgRole] ?? inv.orgRole)
+                        : "—"}
+                    </td>
                     <td>
                       <span
                         className={`stamp ${
@@ -198,16 +360,12 @@ export default function Team() {
                         <Button
                           size="sm"
                           variant="ghost"
-                          onClick={async () => {
-                            try {
-                              await revoke({ invitationId: inv._id });
-                              toast.success("Invitation revoked.");
-                            } catch (err) {
-                              toast.error(
-                                err instanceof Error ? err.message : "Failed.",
-                              );
-                            }
-                          }}
+                          onClick={() =>
+                            act(
+                              () => revoke({ invitationId: inv._id }),
+                              "Invitation revoked.",
+                            )
+                          }
                         >
                           Revoke
                         </Button>
@@ -224,20 +382,20 @@ export default function Team() {
       {/* Invite dialog */}
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="sm:max-w-md">
-          {issuedToken ? (
+          {issued ? (
             <>
               <DialogHeader>
                 <DialogTitle className="font-serif text-2xl">
                   Invitation created
                 </DialogTitle>
                 <DialogDescription>
-                  Share this link with {email || "the invitee"}. It is shown
-                  once and stored only as a hash — copy it now.
+                  Share this link with {issued.email}. It is shown once and
+                  stored only as a hash — copy it now.
                 </DialogDescription>
               </DialogHeader>
               <div className="rounded-md border border-border bg-muted p-3">
                 <code className="block break-all text-xs">
-                  {`${window.location.origin}/login?invite=${issuedToken}`}
+                  {`${window.location.origin}/login?invite=${issued.token}`}
                 </code>
               </div>
               <DialogFooter>
@@ -245,13 +403,13 @@ export default function Team() {
                   className="w-full"
                   onClick={() => {
                     void navigator.clipboard?.writeText(
-                      `${window.location.origin}/login?invite=${issuedToken}`,
+                      `${window.location.origin}/login?invite=${issued.token}`,
                     );
                     toast.success("Link copied.");
                     setOpen(false);
                   }}
                 >
-                  Copy link & close
+                  Copy link &amp; close
                 </Button>
               </DialogFooter>
             </>
@@ -262,8 +420,9 @@ export default function Team() {
                   Invite someone
                 </DialogTitle>
                 <DialogDescription>
-                  Staff join with a role; clients are connected to their
-                  matters. Invitations expire in 14 days and are single-use.
+                  Staff join with an organisation role; clients are connected
+                  to their record. Invitations expire in 14 days, are
+                  single-use, and can be revoked.
                 </DialogDescription>
               </DialogHeader>
               <div className="space-y-4">
@@ -285,17 +444,20 @@ export default function Team() {
                   </div>
                   {kind === "staff" && (
                     <div className="space-y-2">
-                      <Label>Role</Label>
+                      <Label>Organisation role</Label>
                       <Select
-                        value={role}
-                        onValueChange={(v) => setRole(v as "lawyer" | "staff")}
+                        value={orgRole}
+                        onValueChange={(v) => setOrgRole(v as AssignableRole)}
                       >
                         <SelectTrigger>
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="lawyer">Advocate</SelectItem>
-                          <SelectItem value="staff">Support staff</SelectItem>
+                          {ORG_ROLE_OPTIONS.map((r) => (
+                            <SelectItem key={r} value={r}>
+                              {ROLE_LABEL[r]}
+                            </SelectItem>
+                          ))}
                         </SelectContent>
                       </Select>
                     </div>
@@ -303,10 +465,7 @@ export default function Team() {
                   {kind === "client" && (
                     <div className="space-y-2">
                       <Label>Client record</Label>
-                      <Select
-                        value={clientId}
-                        onValueChange={setClientId}
-                      >
+                      <Select value={clientId} onValueChange={setClientId}>
                         <SelectTrigger>
                           <SelectValue placeholder="Choose client" />
                         </SelectTrigger>
@@ -333,7 +492,11 @@ export default function Team() {
                 </div>
               </div>
               <DialogFooter>
-                <Button className="w-full" onClick={handleInvite} disabled={busy}>
+                <Button
+                  className="w-full"
+                  onClick={handleInvite}
+                  disabled={busy}
+                >
                   {busy ? "Creating…" : "Create invitation"}
                 </Button>
               </DialogFooter>

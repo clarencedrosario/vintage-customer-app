@@ -16,14 +16,14 @@ export default function FindALawyer() {
 
   const advocates = useMemo(() => {
     const rows = (team ?? []).filter(
-      (m) => m.role !== "client" && m.role !== "staff" && m.role !== "member",
+      (m) => m.status === "active" && m.orgRole !== "support_staff",
     );
     const needle = q.trim().toLowerCase();
     if (!needle) return rows;
     return rows.filter(
       (m) =>
         (m.name ?? "").toLowerCase().includes(needle) ||
-        (m.designation ?? "").toLowerCase().includes(needle),
+        (m.email ?? "").toLowerCase().includes(needle),
     );
   }, [team, q]);
 
@@ -67,7 +67,7 @@ export default function FindALawyer() {
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="Search by name or designation…"
+              placeholder="Search by name or email…"
               aria-label="Search advocates"
               className="w-full rounded-md border border-input bg-card py-2.5 pl-9 pr-3 text-sm outline-none focus:border-ring"
             />
@@ -83,15 +83,16 @@ export default function FindALawyer() {
             ) : (
               advocates.map((m) => (
                 <div
-                  key={m._id}
+                  key={m.membershipId}
                   className="rule-frame rounded-xl p-5 shadow-sm"
                 >
                   <p className="font-serif text-lg font-semibold">
                     {m.name ?? "Advocate"}
                   </p>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    {m.designation ?? "Advocate"}
-                    {m.barCouncilId ? ` · Bar ID ${m.barCouncilId}` : ""}
+                    {m.barCouncilId
+                      ? `Bar Council ID ${m.barCouncilId}`
+                      : "Member of the chamber"}
                   </p>
                 </div>
               ))
