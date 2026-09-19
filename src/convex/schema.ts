@@ -234,11 +234,55 @@ const schema = defineSchema(
       gstin: v.optional(v.string()),
       notes: v.optional(v.string()),
       userId: v.optional(v.id("users")), // portal access grant
+      // Account management
+      responsibleLawyerId: v.optional(v.id("users")),
+      archivedAt: v.optional(v.number()),
+      archivedBy: v.optional(v.id("users")),
       createdBy: v.id("users"),
       createdAt: v.number(),
     })
       .index("by_org", ["orgId"])
       .index("by_user", ["userId"]),
+
+    // Additional contacts on a client record (referred-by, accounts,
+    // family members, authorised representatives, etc.).
+    clientContacts: defineTable({
+      orgId: v.id("organizations"),
+      clientId: v.id("clients"),
+      name: v.string(),
+      relation: v.optional(v.string()),
+      email: v.optional(v.string()),
+      phone: v.optional(v.string()),
+      isPrimary: v.optional(v.boolean()),
+      createdBy: v.id("users"),
+      createdAt: v.number(),
+    })
+      .index("by_client", ["clientId"])
+      .index("by_org", ["orgId"]),
+
+    // Conflict checks: possible matches surfaced for HUMAN review.
+    // A cleared record is an editorial judgement recorded by a person;
+    // the system never asserts that clearance is guaranteed.
+    conflictChecks: defineTable({
+      orgId: v.id("organizations"),
+      clientId: v.optional(v.id("clients")), // set when run during create
+      subject: v.string(), // the name searched
+      matches: v.array(
+        v.object({
+          clientId: v.id("clients"),
+          clientName: v.string(),
+          evidence: v.array(v.string()),
+        }),
+      ),
+      status: v.union(
+        v.literal("open"),
+        v.literal("reviewed"),
+      ),
+      reviewedBy: v.optional(v.id("users")),
+      reviewedNote: v.optional(v.string()),
+      createdBy: v.id("users"),
+      createdAt: v.number(),
+    }).index("by_org", ["orgId"]),
 
     // Matters belong to an organization; access is further restricted
     // to the responsible team (see access.ts matter-level rules).
