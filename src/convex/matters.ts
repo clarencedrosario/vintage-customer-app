@@ -28,12 +28,30 @@ async function logEvent(
   matterId: Id<"matters">,
   kind: string,
   detail: string,
+  opts?: {
+    authorId?: Id<"users">;
+    occurredAt?: number;
+    datePrecision?: "exact" | "day" | "approx";
+    sourceRef?: string;
+    linkKind?: "document" | "hearing" | "order" | "message";
+    linkId?: string;
+    visibility?: "internal" | "shared_with_client";
+    aiSuggested?: boolean;
+  },
 ) {
   await ctx.db.insert("matterEvents", {
     matterId,
     kind,
     detail,
     createdAt: Date.now(),
+    authorId: opts?.authorId,
+    occurredAt: opts?.occurredAt ?? Date.now(),
+    datePrecision: opts?.datePrecision ?? "exact",
+    sourceRef: opts?.sourceRef,
+    linkKind: opts?.linkKind,
+    linkId: opts?.linkId,
+    visibility: opts?.visibility,
+    aiSuggested: opts?.aiSuggested,
   });
 }
 
@@ -596,6 +614,38 @@ export const setTeam = mutation({
 
 // ---------------- Hearings ----------------
 
+/** Maintain matters.nextHearingAt = earliest scheduled (non-cancelled) hearing. */
+export async function refreshNextHearing(
+  ctx: MutationCtx,
+  matterId: Id<"matters">,
+  now = Date.now(),
+) {
+  const hearings = await ctx.db
+    .query("hearings")
+    .withIndex("by_matter", (q) => q.eq("matterId", matterId))
+    .collect();
+  const next = hearings
+    .filter((h) => h.status === "scheduled" && h.at > now - 2 * 60 * 60 * 1000)
+    .sort((a, b) => a.at - b.at)[0];
+  await ctx.db.patch(matterId, { nextHearingAt: next?.at ?? undefined });
+}
+
+/** A hearing is editable until its outcome is recorded. */
+async function requireEditableHearing(
+  ctx: MutationCtx,
+  hearingId: Id<"hearings">,
+) {
+  const hearing = await ctx.db.get(hearingId);
+  if (!hearing) throw new Error("Hearing not found.");
+  if (hearing.status === "cancelled") {
+    throw new Error("Cancelled hearings cannot be edited.");
+  }
+  if (hearing.outcomeRecordedAt) {
+    throw new Error("Outcome already recorded — this hearing is final.");
+  }
+  return hearing;
+}
+
 export const addHearing = mutation({
   args: {
     matterId: v.id("matters"),
@@ -604,11 +654,41 @@ export const addHearing = mutation({
     at: v.number(),
     appearance: v.optional(v.string()),
     notes: v.optional(v.string()),
+    // Court-day detail.
+    courtroom: v.optional(v.string()),
+    judge: v.optional(v.string()),
+    purpose: v.optional(v.string()),
+    appearingAdvocateId: v.optional(v.id("users")),
+    prepNotes: v.optional(v.string()),
+    requiredDocuments: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     const ac = await requireAccess(ctx);
     requireCapability(ac, "hearing.manage");
-    await requireMatter(ctx, ac, args.matterId);
+    const matter = await requireMatter(ctx, ac, args.matterId);
+
+    // Duplicate-submission guard: identical matter + time + title within
+    // five minutes is treated as a double-click, not a new hearing.
+    const recent = await ctx.db
+      .query("hearings")
+      .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))
+      .collect();
+    const fiveMin = 5 * 60 * 1000;
+    if (
+      recent.some(
+        (h) =>
+          Math.abs(h.at - args.at) < fiveMin &&
+          h.title === args.title.trim() &&
+          Date.now() - h.createdAt < fiveMin,
+      )
+    ) {
+      throw new Error(
+        "A hearing with the same title and time was just recorded.",
+      );
+    }
+    if (args.at < Date.now() - 24 * 60 * 60 * 1000) {
+      throw new Error("Pick a future date for the hearing.");
+    }
 
     await ctx.db.insert("hearings", {
       matterId: args.matterId,
@@ -617,15 +697,100 @@ export const addHearing = mutation({
       at: args.at,
       appearance: args.appearance?.trim() || undefined,
       notes: args.notes?.trim() || undefined,
+      courtroom: args.courtroom?.trim() || undefined,
+      judge: args.judge?.trim() || undefined,
+      purpose: args.purpose?.trim() || undefined,
+      appearingAdvocateId: args.appearingAdvocateId,
+      prepNotes: args.prepNotes?.trim() || undefined,
+      requiredDocuments: args.requiredDocuments?.length
+        ? args.requiredDocuments
+        : undefined,
       status: "scheduled",
       createdAt: Date.now(),
     });
+    await refreshNextHearing(ctx, args.matterId);
     const when = new Date(args.at).toLocaleString("en-IN", {
       timeZone: ac.org.timezone,
       dateStyle: "medium",
       timeStyle: "short",
     });
     await logEvent(ctx, args.matterId, "hearing", `Hearing scheduled — ${when}.`);
+    await audit(ctx, ac, args.matterId, "Hearing scheduled", when);
+    void matter;
+  },
+});
+
+export const editHearing = mutation({
+  args: {
+    hearingId: v.id("hearings"),
+    title: v.optional(v.string()),
+    court: v.optional(v.string()),
+    at: v.optional(v.number()),
+    courtroom: v.optional(v.string()),
+    judge: v.optional(v.string()),
+    purpose: v.optional(v.string()),
+    appearingAdvocateId: v.optional(v.id("users")),
+    prepNotes: v.optional(v.string()),
+    requiredDocuments: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    requireCapability(ac, "hearing.manage");
+    const hearing = await requireEditableHearing(ctx, args.hearingId);
+    await requireMatter(ctx, ac, hearing.matterId);
+
+    const patch: Record<string, unknown> = {};
+    if (args.title !== undefined && args.title.trim())
+      patch.title = args.title.trim();
+    if (args.court !== undefined) patch.court = args.court.trim() || undefined;
+    if (args.at !== undefined) {
+      if (args.at < Date.now() - 24 * 60 * 60 * 1000)
+        throw new Error("Pick a future date for the hearing.");
+      patch.at = args.at;
+    }
+    if (args.courtroom !== undefined)
+      patch.courtroom = args.courtroom.trim() || undefined;
+    if (args.judge !== undefined) patch.judge = args.judge.trim() || undefined;
+    if (args.purpose !== undefined)
+      patch.purpose = args.purpose.trim() || undefined;
+    if (args.appearingAdvocateId !== undefined)
+      patch.appearingAdvocateId = args.appearingAdvocateId || undefined;
+    if (args.prepNotes !== undefined)
+      patch.prepNotes = args.prepNotes.trim() || undefined;
+    if (args.requiredDocuments !== undefined)
+      patch.requiredDocuments = args.requiredDocuments.length
+        ? args.requiredDocuments
+        : undefined;
+
+    await ctx.db.patch(args.hearingId, patch);
+    if (patch.at !== undefined) {
+      await refreshNextHearing(ctx, hearing.matterId);
+    }
+    await logEvent(
+      ctx,
+      hearing.matterId,
+      "hearing",
+      `Hearing details updated${patch.at !== undefined ? " (date/time changed)" : ""}.`,
+    );
+  },
+});
+
+export const cancelHearing = mutation({
+  args: { hearingId: v.id("hearings") },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    requireCapability(ac, "hearing.manage");
+    const hearing = await requireEditableHearing(ctx, args.hearingId);
+    await requireMatter(ctx, ac, hearing.matterId);
+    await ctx.db.patch(args.hearingId, { status: "cancelled" });
+    await refreshNextHearing(ctx, hearing.matterId);
+    await logEvent(
+      ctx,
+      hearing.matterId,
+      "hearing",
+      `Hearing cancelled — ${hearing.title}.`,
+    );
+    await audit(ctx, ac, hearing.matterId, "Hearing cancelled", hearing.title);
   },
 });
 
@@ -636,7 +801,103 @@ export const setHearingStatus = mutation({
       v.literal("held"),
       v.literal("adjourned"),
       v.literal("scheduled"),
+      v.literal("cancelled"),
     ),
+  },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    requireCapability(ac, "hearing.manage");
+    const hearing = await requireEditableHearing(ctx, args.hearingId);
+    await requireMatter(ctx, ac, hearing.matterId);
+    await ctx.db.patch(args.hearingId, { status: args.status });
+    if (args.status !== "scheduled") {
+      await refreshNextHearing(ctx, hearing.matterId);
+    }
+    await logEvent(ctx, hearing.matterId, "hearing", `Hearing marked ${args.status}.`);
+  },
+});
+
+/** Record the post-hearing outcome; optionally create the next hearing. */
+export const recordHearingOutcome = mutation({
+  args: {
+    hearingId: v.id("hearings"),
+    status: v.union(v.literal("held"), v.literal("adjourned")),
+    outcome: v.string(),
+    nextAction: v.optional(v.string()),
+    nextHearing: v.optional(
+      v.object({
+        title: v.string(),
+        at: v.number(),
+        purpose: v.optional(v.string()),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    requireCapability(ac, "hearing.manage");
+    const hearing = await requireEditableHearing(ctx, args.hearingId);
+    const matter = await requireMatter(ctx, ac, hearing.matterId);
+    if (!args.outcome.trim()) throw new Error("Record what happened.");
+
+    await ctx.db.patch(args.hearingId, {
+      status: args.status,
+      outcome: args.outcome.trim().slice(0, MAX_TEXT),
+      nextAction: args.nextAction?.trim() || undefined,
+      outcomeRecordedBy: ac.user._id,
+      outcomeRecordedAt: Date.now(),
+    });
+    await refreshNextHearing(ctx, hearing.matterId);
+    await logEvent(
+      ctx,
+      hearing.matterId,
+      "hearing",
+      `Hearing ${args.status} — ${args.outcome.trim().slice(0, 160)}`,
+    );
+    await audit(
+      ctx,
+      ac,
+      hearing.matterId,
+      "Hearing outcome recorded",
+      hearing.title,
+    );
+
+    // Optional next hearing, created atomically with the outcome.
+    if (args.nextHearing) {
+      const nh = args.nextHearing;
+      if (!nh.title.trim() || !nh.at)
+        throw new Error("Next hearing needs a title and date.");
+      if (nh.at < Date.now()) throw new Error("Next hearing must be in the future.");
+      await ctx.db.insert("hearings", {
+        matterId: hearing.matterId,
+        title: nh.title.trim(),
+        court: hearing.court,
+        at: nh.at,
+        purpose: nh.purpose?.trim() || undefined,
+        status: "scheduled",
+        createdAt: Date.now(),
+      });
+      await refreshNextHearing(ctx, hearing.matterId);
+      const when = new Date(nh.at).toLocaleString("en-IN", {
+        timeZone: ac.org.timezone,
+        dateStyle: "medium",
+        timeStyle: "short",
+      });
+      await logEvent(
+        ctx,
+        hearing.matterId,
+        "hearing",
+        `Next hearing scheduled — ${when}.`,
+      );
+    }
+    void matter;
+  },
+});
+
+/** Maintain the authorities list on a hearing (court-day brief). */
+export const setHearingAuthorities = mutation({
+  args: {
+    hearingId: v.id("hearings"),
+    authorities: v.array(v.object({ label: v.string(), url: v.string() })),
   },
   handler: async (ctx, args) => {
     const ac = await requireAccess(ctx);
@@ -644,8 +905,17 @@ export const setHearingStatus = mutation({
     const hearing = await ctx.db.get(args.hearingId);
     if (!hearing) throw new Error("Hearing not found.");
     await requireMatter(ctx, ac, hearing.matterId);
-    await ctx.db.patch(args.hearingId, { status: args.status });
-    await logEvent(ctx, hearing.matterId, "hearing", `Hearing marked ${args.status}.`);
+    const clean = args.authorities
+      .map((a) => ({ label: a.label.trim().slice(0, 200), url: a.url.trim() }))
+      .filter((a) => a.label && /^https?:\/\//i.test(a.url))
+      .slice(0, 12);
+    await ctx.db.patch(args.hearingId, { authorities: clean });
+    await logEvent(
+      ctx,
+      hearing.matterId,
+      "hearing",
+      `Authorities list updated (${clean.length} link${clean.length === 1 ? "" : "s"}).`,
+    );
   },
 });
 
@@ -657,19 +927,100 @@ export const addOrder = mutation({
     title: v.string(),
     passedOn: v.number(),
     summary: v.optional(v.string()),
+    hearingId: v.optional(v.id("hearings")),
+    directions: v.optional(v.array(v.string())),
+    followUp: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const ac = await requireAccess(ctx);
     requireCapability(ac, "order.record");
-    await requireMatter(ctx, ac, args.matterId);
+    const matter = await requireMatter(ctx, ac, args.matterId);
+    if (args.hearingId) {
+      const hearing = await ctx.db.get(args.hearingId);
+      if (!hearing || hearing.matterId !== args.matterId) {
+        throw new Error("That hearing is not on this matter.");
+      }
+    }
     await ctx.db.insert("orders", {
       matterId: args.matterId,
       title: args.title.trim(),
       passedOn: args.passedOn,
       summary: args.summary?.trim() || undefined,
+      hearingId: args.hearingId,
+      directions: args.directions?.length
+        ? args.directions
+            .map((d) => d.trim().slice(0, 300))
+            .filter(Boolean)
+            .map((text) => ({ text, done: false }))
+        : undefined,
+      followUp: args.followUp?.trim() || undefined,
       createdAt: Date.now(),
     });
-    await logEvent(ctx, args.matterId, "order", `Order recorded — ${args.title.trim()}.`);
+    await logEvent(
+      ctx,
+      args.matterId,
+      "order",
+      `Order recorded — ${args.title.trim()}.`,
+      { linkKind: "order", linkId: undefined },
+    );
+    void matter;
+  },
+});
+
+/** Record/confirm directions and follow-up on an order. */
+export const setOrderDirections = mutation({
+  args: {
+    orderId: v.id("orders"),
+    directions: v.optional(v.array(v.string())),
+    followUp: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    requireCapability(ac, "order.record");
+    const order = await ctx.db.get(args.orderId);
+    if (!order) throw new Error("Order not found.");
+    await requireMatter(ctx, ac, order.matterId);
+    const patch: Record<string, unknown> = {};
+    if (args.directions !== undefined) {
+      patch.directions = args.directions
+        .map((d) => d.trim().slice(0, 300))
+        .filter(Boolean)
+        .map((text) => ({ text, done: false }));
+    }
+    if (args.followUp !== undefined)
+      patch.followUp = args.followUp.trim() || undefined;
+    await ctx.db.patch(args.orderId, patch);
+    await logEvent(
+      ctx,
+      order.matterId,
+      "order",
+      `Order directions updated — ${order.title}.`,
+    );
+  },
+});
+
+/** Toggle a single direction's completion. */
+export const toggleDirection = mutation({
+  args: { orderId: v.id("orders"), index: v.number() },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    requireCapability(ac, "order.record");
+    const order = await ctx.db.get(args.orderId);
+    if (!order) throw new Error("Order not found.");
+    await requireMatter(ctx, ac, order.matterId);
+    const dirs = order.directions ?? [];
+    if (args.index < 0 || args.index >= dirs.length)
+      throw new Error("No such direction.");
+    const next = dirs.map((d, i) =>
+      i === args.index ? { ...d, done: !d.done } : d,
+    );
+    await ctx.db.patch(args.orderId, { directions: next });
+    await logEvent(
+      ctx,
+      order.matterId,
+      "order",
+      `Direction marked ${next[args.index].done ? "done" : "pending"} — ${next[args.index].text.slice(0, 80)}.`,
+    );
   },
 });
 
@@ -686,6 +1037,13 @@ export const markOrderReviewed = mutation({
       reviewedAt: Date.now(),
       reviewedBy: ac.user._id,
     });
+    await logEvent(
+      ctx,
+      order.matterId,
+      "order",
+      `Order reviewed — ${order.title}.`,
+      { linkKind: "order", linkId: order._id },
+    );
   },
 });
 
@@ -856,7 +1214,10 @@ export const addNote = mutation({
       body,
       createdAt: Date.now(),
     });
-    await logEvent(ctx, args.matterId, "note", "Note added to the file.");
+    await logEvent(ctx, args.matterId, "note", "Note added to the file.", {
+      authorId: ac.user._id,
+      visibility: "internal",
+    });
   },
 });
 
@@ -899,11 +1260,29 @@ export const attachDocument = mutation({
       storageId: args.storageId,
       createdAt: Date.now(),
     });
+    const docId = await ctx.db.insert("matterDocuments", {
+      matterId: args.matterId,
+      uploaderId: ac.user._id,
+      name,
+      kind: args.kind,
+      visibility: args.visibility,
+      storageId: args.storageId,
+      createdAt: Date.now(),
+    });
     await logEvent(
       ctx,
       args.matterId,
       "document",
       `Document filed — ${name}${args.visibility === "shared_with_client" ? " (shared with client)" : ""}.`,
+      {
+        authorId: ac.user._id,
+        linkKind: "document",
+        linkId: docId,
+        visibility:
+          args.visibility === "shared_with_client"
+            ? "shared_with_client"
+            : "internal",
+      },
     );
   },
 });

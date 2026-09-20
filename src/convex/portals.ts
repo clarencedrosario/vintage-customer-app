@@ -137,8 +137,10 @@ export const clientPortal = query({
             .collect(),
         ),
       ).then((rows) => rows.flat()),
-      // Safe chronology only — internal strategy never leaks. Event kinds
-      // "note" and "task" are internal and filtered out.
+      // Safe chronology only — internal strategy never leaks. A row is
+      // client-visible when explicitly marked shared_with_client, or (for
+      // legacy auto-entries without a visibility flag) when it is not an
+      // internal kind (note, task).
       Promise.all(
         matterIds.map((id) =>
           ctx.db
@@ -147,9 +149,15 @@ export const clientPortal = query({
             .collect(),
         ),
       ).then((rows) =>
-        rows
-          .flat()
-          .filter((e) => e.kind !== "note" && e.kind !== "task"),
+        rows.flat().filter((e) =>
+          e.aiSuggested && !e.reviewed
+            ? false
+            : e.visibility === "shared_with_client"
+              ? true
+              : e.visibility === "internal"
+                ? false
+                : e.kind !== "note" && e.kind !== "task",
+        ),
       ),
       // Message thread: client notes + chamber replies addressed to the
       // client. Internal strategy and staff discussion never appear.
@@ -734,6 +742,8 @@ export const clientMessage = mutation({
       kind: "message",
       detail: "Message received from the client.",
       createdAt: Date.now(),
+      authorId: user._id,
+      visibility: "shared_with_client",
     });
   },
 });
