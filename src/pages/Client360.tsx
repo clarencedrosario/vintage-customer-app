@@ -927,7 +927,7 @@ export default function Client360() {
                       </td>
                       <td className="font-medium">{formatINR(p.amount)}</td>
                       <td className="text-muted-foreground">
-                        {p.mode.toUpperCase()}
+                        {p.mode?.toUpperCase() ?? "—"}
                       </td>
                       <td className="text-muted-foreground">
                         {p.reference ?? "—"}

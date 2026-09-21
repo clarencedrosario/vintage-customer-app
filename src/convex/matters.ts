@@ -67,7 +67,7 @@ async function audit(
     orgId: ac.org._id,
     matterId,
     actorId: ac.user._id,
-    actorName: ac.user.name,
+    actorName: ac.user.name ?? ac.user.email ?? "Member",
     action,
     detail,
     createdAt: Date.now(),
