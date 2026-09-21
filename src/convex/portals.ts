@@ -314,8 +314,13 @@ export const lawyerDashboard = query({
       .query("tasks")
       .withIndex("by_status", (q) => q.eq("status", "pending"))
       .collect();
-    const myTasks = taskRows
-      .filter((t) => visibleIds.has(t.matterId) && t.assigneeId === ac.user._id)
+    const myTaskRows = taskRows.filter(
+      (t): t is Doc<"tasks"> & { matterId: Id<"matters"> } =>
+        t.matterId !== undefined &&
+        visibleIds.has(t.matterId) &&
+        t.assigneeId === ac.user._id,
+    );
+    const myTasks = myTaskRows
       .sort((a, b) => (a.dueAt ?? Infinity) - (b.dueAt ?? Infinity))
       .slice(0, 12)
       .map((t) => ({
@@ -327,8 +332,13 @@ export const lawyerDashboard = query({
       }));
 
     // Deadlines: pending tasks across visible matters + scheduled hearings.
-    const deadlines = taskRows
-      .filter((t) => visibleIds.has(t.matterId) && t.dueAt !== undefined)
+    const deadlineRows = taskRows.filter(
+      (t): t is Doc<"tasks"> & { matterId: Id<"matters"> } =>
+        t.matterId !== undefined &&
+        visibleIds.has(t.matterId) &&
+        t.dueAt !== undefined,
+    );
+    const deadlines = deadlineRows
       .sort((a, b) => (a.dueAt ?? 0) - (b.dueAt ?? 0))
       .slice(0, 12)
       .map((t) => ({
@@ -572,7 +582,10 @@ export const firmDashboard = query({
         suspended: memberships.filter((m) => m.status === "suspended").length,
         invited: memberships.filter((m) => m.status === "invited").length,
         pendingTasks: tasks.filter(
-          (t) => t.status === "pending" && visibleIds.has(t.matterId),
+          (t) =>
+            t.status === "pending" &&
+            t.matterId !== undefined &&
+            visibleIds.has(t.matterId),
         ).length,
         upcomingHearings: upcomingHearings.length,
       },
@@ -591,14 +604,15 @@ export const firmDashboard = query({
           (t) =>
             t.status === "pending" &&
             t.dueAt !== undefined &&
+            t.matterId !== undefined &&
             visibleIds.has(t.matterId),
         )
         .sort((a, b) => (a.dueAt ?? 0) - (b.dueAt ?? 0))
         .slice(0, 6)
         .map((t) => ({
           _id: t._id,
-          matterId: t.matterId,
-          matterReference: matterById.get(t.matterId)?.reference ?? "—",
+          matterId: t.matterId!,
+          matterReference: matterById.get(t.matterId!)?.reference ?? "—",
           title: t.title,
           dueAt: t.dueAt ?? null,
         })),
@@ -634,7 +648,13 @@ export const staffDashboard = query({
       .withIndex("by_assignee", (q) => q.eq("assigneeId", user._id))
       .collect();
 
-    const matterIds = Array.from(new Set(tasks.map((t) => t.matterId)));
+    const matterIds = Array.from(
+      new Set(
+        tasks
+          .map((t) => t.matterId)
+          .filter((id): id is Id<"matters"> => id !== undefined),
+      ),
+    );
     const matters = (
       await Promise.all(matterIds.map((id) => ctx.db.get(id)))
     ).filter(Boolean) as Doc<"matters">[];
@@ -692,8 +712,11 @@ export const staffDashboard = query({
       .sort((a, b) => (a.dueAt ?? Infinity) - (b.dueAt ?? Infinity))
       .map((t) => ({
         _id: t._id,
-        matterId: t.matterId,
-        matterReference: matterById.get(t.matterId)?.reference ?? "—",
+        matterId: t.matterId ?? null,
+        matterReference:
+          (t.matterId !== undefined
+            ? matterById.get(t.matterId)?.reference
+            : null) ?? "—",
         title: t.title,
         dueAt: t.dueAt ?? null,
         status: t.status,
@@ -968,7 +991,7 @@ export const staffAttachAcknowledgement = mutation({
       ],
     });
     await ctx.db.insert("matterEvents", {
-      matterId: task.matterId,
+      matterId: task.matterId!,
       kind: "task",
       detail: `Acknowledgement attached — ${name}.`,
       createdAt: Date.now(),

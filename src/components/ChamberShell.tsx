@@ -12,7 +12,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Check, ChevronsUpDown, Building2 } from "lucide-react";
+import { Check, ChevronsUpDown, Building2, ClipboardList } from "lucide-react";
 import {
   Sheet,
   SheetContent,
@@ -35,6 +35,7 @@ import {
 const NAV = [
   { to: "/dashboard", label: "Overview", icon: Landmark },
   { to: "/attention", label: "Morning docket", icon: BellRing },
+  { to: "/tasks", label: "Tasks", icon: ClipboardList },
   { to: "/clients", label: "Clients", icon: Users },
   { to: "/billing", label: "Billing", icon: Receipt },
   { to: "/team", label: "Team", icon: UsersRound },

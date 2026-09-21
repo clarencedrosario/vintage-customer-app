@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation, query, MutationCtx, QueryCtx } from "./_generated/server";
+import { mutation, query, MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   canViewDocument,
@@ -16,6 +16,8 @@ import {
   MATTER_STATUSES,
   matterStatusValidator,
   taskStatusValidator,
+  TASK_KINDS,
+  TASK_PRIORITIES,
   type OrgRole,
 } from "./schema";
 
@@ -548,7 +550,7 @@ export const updateStatus = mutation({
   handler: async (ctx, args) => {
     const ac = await requireAccess(ctx);
     requireCapability(ac, "matter.edit");
-    const matter = await requireMatter(ctx, ac, args.matterId);
+    await requireMatter(ctx, ac, args.matterId);
 
     if (args.status === MATTER_STATUSES.CLOSED) {
       requireCapability(ac, "matter.close");
@@ -1055,6 +1057,8 @@ export const addTask = mutation({
     title: v.string(),
     dueAt: v.optional(v.number()),
     assigneeId: v.optional(v.id("users")),
+    priority: v.optional(v.union(...TASK_PRIORITIES.map((p) => v.literal(p)))),
+    kind: v.optional(v.union(...TASK_KINDS.map((k) => v.literal(k)))),
   },
   handler: async (ctx, args) => {
     const ac = await requireAccess(ctx);
@@ -1070,13 +1074,81 @@ export const addTask = mutation({
 
     await ctx.db.insert("tasks", {
       matterId: args.matterId,
+      orgId: ac.org._id,
       title: args.title.trim(),
+      kind: args.kind ?? "general",
+      priority: args.priority ?? "normal",
       dueAt: args.dueAt,
       status: "pending",
       assigneeId,
+      createdById: ac.user._id,
       createdAt: Date.now(),
     });
     await logEvent(ctx, args.matterId, "task", `Task added — ${args.title.trim()}.`);
+  },
+});
+
+/** Add a comment to any task the caller can see (matter access or own/firm-wide). */
+export const addTaskComment = mutation({
+  args: { taskId: v.id("tasks"), body: v.string() },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    if (!args.body.trim()) throw new Error("Comment cannot be empty.");
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.orgId !== ac.org._id) throw new Error("Task not found.");
+    if (task.matterId !== undefined) {
+      await requireMatter(ctx, ac, task.matterId);
+    }
+    const mine = task.assigneeId === ac.user._id;
+    if (!mine && !can(ac, "task.manage")) {
+      throw new Error("You can comment only on your own tasks.");
+    }
+    await ctx.db.patch(args.taskId, {
+      comments: [
+        ...(task.comments ?? []),
+        { authorId: ac.user._id, body: args.body.trim(), at: Date.now() },
+      ],
+    });
+    if (task.matterId !== undefined) {
+      await logEvent(ctx, task.matterId, "task", `Comment on task — ${task.title}.`);
+    }
+  },
+});
+
+/** Reassign a task (management capability) — assignees must be active members. */
+export const reassignTask = mutation({
+  args: { taskId: v.id("tasks"), assigneeId: v.optional(v.id("users")) },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    requireCapability(ac, "task.manage");
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.orgId !== ac.org._id) throw new Error("Task not found.");
+    if (task.matterId !== undefined) {
+      await requireMatter(ctx, ac, task.matterId);
+    }
+    if (args.assigneeId !== undefined) {
+      const membership = await ctx.db
+        .query("memberships")
+        .withIndex("by_org_user", (q) =>
+          q.eq("orgId", ac.org._id).eq("userId", args.assigneeId!),
+        )
+        .first();
+      if (!membership || membership.status !== "active") {
+        throw new Error("Assignees must be active members of the organisation.");
+      }
+    }
+    await ctx.db.patch(args.taskId, { assigneeId: args.assigneeId });
+    if (task.matterId !== undefined) {
+      const assignee = args.assigneeId
+        ? await ctx.db.get(args.assigneeId)
+        : null;
+      await logEvent(
+        ctx,
+        task.matterId,
+        "task",
+        `Task reassigned${assignee ? ` to ${assignee.name ?? "member"}` : " — unassigned"} — ${task.title}.`,
+      );
+    }
   },
 });
 
@@ -1086,6 +1158,9 @@ export const setTaskStatus = mutation({
     const ac = await requireAccess(ctx);
     const task = await ctx.db.get(args.taskId);
     if (!task) throw new Error("Task not found.");
+    if (task.matterId === undefined) {
+      throw new Error("Firm-wide tasks are updated from the Tasks desk.");
+    }
     await requireMatter(ctx, ac, task.matterId);
 
     const isMine = task.assigneeId === ac.user._id;
@@ -1116,6 +1191,7 @@ export const upcomingTasks = query({
     const matterCache = new Map<Id<"matters">, Doc<"matters"> | null>();
     const out = [];
     for (const t of tasks) {
+      if (t.matterId === undefined) continue; // firm-wide tasks live on the Tasks desk
       let matter = matterCache.get(t.matterId);
       if (matter === undefined) {
         matter = await ctx.db.get(t.matterId);

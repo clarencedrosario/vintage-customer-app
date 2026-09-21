@@ -727,6 +727,14 @@ export default function MatterDetail() {
 
         {/* Tasks */}
         <TabsContent value="tasks" className="mt-6">
+          <div className="mb-4">
+            <Link
+              to="/tasks"
+              className="type-label text-[#4f6b8f] underline-offset-2 hover:underline"
+            >
+              Open the full Tasks desk →
+            </Link>
+          </div>
           <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
             <div className="space-y-3">
               {(events ?? []).filter((e) => e.kind === "task").length === 0 ? (

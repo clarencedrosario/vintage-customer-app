@@ -55,6 +55,26 @@ export const MATTER_STATUSES = {
 
 export const TASK_STATUSES = ["pending", "in_progress", "done"] as const;
 
+/** Firm-wide tasks are filing / service / delivery / collection errands. */
+export const TASK_KINDS = [
+  "general",
+  "filing",
+  "service",
+  "delivery",
+  "collection",
+] as const;
+
+export const TASK_PRIORITIES = ["normal", "high", "urgent"] as const;
+
+/** Limitation and compliance deadline categories (legally significant). */
+export const DEADLINE_CATEGORIES = [
+  "limitation",
+  "filing",
+  "compliance",
+  "court_order",
+  "custom",
+] as const;
+
 export type MatterStatus = (typeof MATTER_STATUSES)[keyof typeof MATTER_STATUSES];
 
 export const INVOICE_STATUSES = {
@@ -406,13 +426,38 @@ export default defineSchema({
   }).index("by_matter", ["matterId"]),
 
   tasks: defineTable({
-    matterId: v.id("matters"),
+    // Null matterId = firm-wide (office errand) task.
+    matterId: v.optional(v.id("matters")),
+    orgId: v.id("organizations"),
     title: v.string(),
+    kind: v.union(...TASK_KINDS.map((k) => v.literal(k))),
+    priority: v.union(...TASK_PRIORITIES.map((p) => v.literal(p))),
     dueAt: v.optional(v.number()),
-    status: v.union(
-      ...TASK_STATUSES.map((s) => v.literal(s)),
-    ),
+    status: v.union(...TASK_STATUSES.map((s) => v.literal(s))),
     assigneeId: v.optional(v.id("users")),
+    createdById: v.id("users"),
+    // Completion evidence — a note plus optional uploaded proof files.
+    completionNote: v.optional(v.string()),
+    completedAt: v.optional(v.number()),
+    completedById: v.optional(v.id("users")),
+    comments: v.optional(
+      v.array(
+        v.object({
+          authorId: v.id("users"),
+          body: v.string(),
+          at: v.number(),
+        }),
+      ),
+    ),
+    attachments: v.optional(
+      v.array(
+        v.object({
+          name: v.string(),
+          storageId: v.id("_storage"),
+          at: v.number(),
+        }),
+      ),
+    ),
     staffUpdates: v.optional(
       v.array(v.object({ body: v.string(), at: v.number() })),
     ),
@@ -427,10 +472,86 @@ export default defineSchema({
     ),
     createdAt: v.number(),
   })
+    .index("by_org", ["orgId"])
     .index("by_matter", ["matterId"])
     .index("by_status", ["status"])
     .index("by_due", ["dueAt"])
-    .index("by_assignee", ["assigneeId"]),
+    .index("by_assignee", ["assigneeId"])
+    .index("by_assignee_status", ["assigneeId", "status"]),
+
+  // Legally significant deadlines with reminder + audit history.
+  deadlines: defineTable({
+    orgId: v.id("organizations"),
+    matterId: v.optional(v.id("matters")),
+    title: v.string(),
+    category: v.union(...DEADLINE_CATEGORIES.map((c) => v.literal(c))),
+    // End of the local due date (Asia/Kolkata) — never overdue early.
+    dueAt: v.number(),
+    status: v.union(v.literal("open"), v.literal("completed")),
+    responsibleId: v.optional(v.id("users")),
+    createdById: v.id("users"),
+    reminderAt: v.optional(v.number()),
+    completionNote: v.optional(v.string()),
+    completedAt: v.optional(v.number()),
+    completedById: v.optional(v.id("users")),
+    history: v.optional(
+      v.array(
+        v.object({
+          at: v.number(),
+          byId: v.id("users"),
+          text: v.string(),
+        }),
+      ),
+    ),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_matter", ["matterId"])
+    .index("by_status", ["status"])
+    .index("by_due", ["dueAt"]),
+
+  // Playbook templates — editable, versioned, applied as copies.
+  playbooks: defineTable({
+    orgId: v.id("organizations"),
+    name: v.string(),
+    matterType: v.string(),
+    description: v.optional(v.string()),
+    currentVersion: v.number(),
+    createdById: v.id("users"),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"]),
+
+  playbookVersions: defineTable({
+    playbookId: v.id("playbooks"),
+    version: v.number(),
+    stages: v.array(
+      v.object({
+        name: v.string(),
+        tasks: v.array(
+          v.object({
+            title: v.string(),
+            kind: v.union(...TASK_KINDS.map((k) => v.literal(k))),
+            daysFromStart: v.optional(v.number()),
+          }),
+        ),
+        requiredDocuments: v.array(v.string()),
+      }),
+    ),
+    createdById: v.id("users"),
+    createdAt: v.number(),
+  }).index("by_playbook", ["playbookId"]),
+
+  // One record per application of a playbook to a matter.
+  playbookRuns: defineTable({
+    playbookId: v.id("playbooks"),
+    playbookVersion: v.number(),
+    matterId: v.id("matters"),
+    appliedById: v.id("users"),
+    appliedAt: v.number(),
+    createdTaskIds: v.array(v.id("tasks")),
+    createdDeadlineIds: v.array(v.id("deadlines")),
+  }).index("by_matter", ["matterId"]),
 
   timeEntries: defineTable({
     matterId: v.id("matters"),

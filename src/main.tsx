@@ -19,6 +19,7 @@ const MatterDetail = lazy(() => import("./pages/MatterDetail.tsx"));
 const Clients = lazy(() => import("./pages/Clients.tsx"));
 const Client360 = lazy(() => import("./pages/Client360.tsx"));
 const Billing = lazy(() => import("./pages/Billing.tsx"));
+const Tasks = lazy(() => import("./pages/Tasks.tsx"));
 const Team = lazy(() => import("./pages/Team.tsx"));
 const Settings = lazy(() => import("./pages/Settings.tsx"));
 const ClientPortal = lazy(() => import("./pages/ClientPortal.tsx"));
@@ -173,6 +174,14 @@ createRoot(document.getElementById("root")!).render(
                 element={
                   <RequireAuth>
                     <Client360 />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/tasks"
+                element={
+                  <RequireAuth>
+                    <Tasks />
                   </RequireAuth>
                 }
               />

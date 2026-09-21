@@ -303,7 +303,10 @@ export const overview = query({
         (h) => h.status === "scheduled" && h.at > now && visibleIds.has(h.matterId),
       ).length,
       pendingTasks: tasks.filter(
-        (t) => t.status === "pending" && visibleIds.has(t.matterId),
+        (t) =>
+          t.status === "pending" &&
+          t.matterId !== undefined &&
+          visibleIds.has(t.matterId),
       ).length,
     };
   },

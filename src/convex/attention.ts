@@ -31,8 +31,9 @@ type AttentionKind =
 export type AttentionItem = {
   kind: AttentionKind;
   itemId: string;
-  matterId: Id<"matters">;
-  matterReference: string;
+  /** Firm-wide items (recorded deadlines without a matter) have none. */
+  matterId?: Id<"matters">;
+  matterReference: string | null;
   title: string;
   reason: string;
   date: number;
@@ -136,13 +137,17 @@ export const feed = query({
       userRows.map((u) => [u._id, u.name ?? u.email ?? "Unassigned"]),
     );
 
-    const [hearings, tasks, documents, notes, orders, invoices] =
+    const [hearings, tasks, documents, notes, orders, deadlines, invoices] =
       await Promise.all([
         ctx.db.query("hearings").collect(),
         ctx.db.query("tasks").collect(),
         ctx.db.query("matterDocuments").collect(),
         ctx.db.query("matterNotes").collect(),
         ctx.db.query("orders").collect(),
+        ctx.db
+          .query("deadlines")
+          .withIndex("by_org", (q) => q.eq("orgId", ac.org._id))
+          .collect(),
         ctx.db
           .query("invoices")
           .withIndex("by_org", (q) => q.eq("orgId", ac.org._id))
@@ -217,6 +222,7 @@ export const feed = query({
     // -------------------------------------------------------------
     for (const t of tasks) {
       if (t.status !== "pending" || t.dueAt === undefined) continue;
+      if (t.matterId === undefined) continue; // firm-wide tasks live on the Tasks desk
       if (!visibleIds.has(t.matterId)) continue;
       if (t.dueAt <= now || t.dueAt > now + 3 * DAY_MS) continue;
       const m = matterById.get(t.matterId)!;
@@ -237,10 +243,51 @@ export const feed = query({
     }
 
     // -------------------------------------------------------------
+    // 3b. Recorded deadlines — limitation & compliance, never silent
+    // -------------------------------------------------------------
+    for (const d of deadlines) {
+      if (d.status !== "open") continue;
+      if (d.matterId !== undefined && !visibleIds.has(d.matterId)) continue;
+      if (d.dueAt < now - 30 * DAY_MS) continue; // completed-late guard rails handled in Tasks
+      const responsible = d.responsibleId
+        ? (nameByUser.get(d.responsibleId) ?? "Unassigned")
+        : "Unassigned";
+      const m = d.matterId !== undefined ? matterById.get(d.matterId) : null;
+      const categoryLabel =
+        d.category === "limitation"
+          ? "Limitation"
+          : d.category === "court_order"
+            ? "Court-order compliance"
+            : d.category === "filing"
+              ? "Filing"
+              : d.category === "compliance"
+                ? "Statutory compliance"
+                : "Deadline";
+      items.push({
+        kind: d.dueAt <= now ? "deadline" : "deadline",
+        itemId: `recorded-deadline:${d._id}`,
+        matterId: d.matterId,
+        matterReference: m?.reference ?? null,
+        title: d.title,
+        reason:
+          d.dueAt <= now
+            ? `${categoryLabel} deadline has passed.`
+            : d.reminderAt !== undefined && d.reminderAt <= now
+              ? `${categoryLabel} deadline — reminder day.`
+              : `${categoryLabel} deadline due within three days.`,
+        date: d.dueAt,
+        responsible,
+        action: actionFor("deadline"),
+        critical: true,
+      });
+    }
+
+    // -------------------------------------------------------------
     // 4. Overdue tasks — critical
     // -------------------------------------------------------------
     for (const t of tasks) {
       if (t.status !== "pending" || t.dueAt === undefined) continue;
+      if (t.matterId === undefined) continue; // firm-wide tasks live on the Tasks desk
       if (!visibleIds.has(t.matterId)) continue;
       if (t.dueAt > now) continue;
       const m = matterById.get(t.matterId)!;

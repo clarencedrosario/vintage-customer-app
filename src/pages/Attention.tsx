@@ -46,8 +46,8 @@ const KIND_META: Record<
 type FeedItem = {
   kind: string;
   itemId: string;
-  matterId: string;
-  matterReference: string;
+  matterId?: string;
+  matterReference: string | null;
   title: string;
   reason: string;
   date: number;
@@ -72,7 +72,7 @@ export default function Attention() {
 
   const people = useMemo(() => {
     const set = new Set<string>();
-    (feed?.items ?? []).forEach((i: FeedItem) => set.add(i.responsible));
+    (feed?.items ?? []).forEach((i) => set.add(i.responsible));
     return Array.from(set).sort();
   }, [feed]);
 
@@ -84,7 +84,7 @@ export default function Attention() {
     list.sort((a, b) => {
       if (sort === "date") return a.date - b.date;
       if (sort === "matter")
-        return a.matterReference.localeCompare(b.matterReference);
+        return (a.matterReference ?? "").localeCompare(b.matterReference ?? "");
       const crit = Number(b.critical ?? false) - Number(a.critical ?? false);
       if (crit !== 0) return crit;
       return a.date - b.date;
@@ -94,7 +94,7 @@ export default function Attention() {
 
   const counts = useMemo(() => {
     const c: Record<string, number> = {};
-    (feed?.items ?? []).forEach((i: FeedItem) => {
+    (feed?.items ?? []).forEach((i) => {
       c[i.kind] = (c[i.kind] ?? 0) + 1;
     });
     return c;
