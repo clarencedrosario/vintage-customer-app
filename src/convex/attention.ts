@@ -435,7 +435,7 @@ export const feed = query({
       for (const inv of invoices) {
         if (!visibleIds.has(inv.matterId)) continue;
         const m = matterById.get(inv.matterId)!;
-        const due = inv.total - inv.amountPaid;
+        const due = inv.totalMinor - inv.amountPaidMinor;
         if (inv.status === "draft") {
           items.push({
             kind: "draft_invoice",

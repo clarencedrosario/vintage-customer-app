@@ -701,6 +701,8 @@ export default defineSchema({
     .index("by_matter", ["matterId"])
     .index("by_uninvoiced", ["matterId", "invoiceId"]),
 
+  // Invoices. All money is stored in integer paise (minor units);
+  // totals are recalculated transactionally from lines on every change.
   invoices: defineTable({
     orgId: v.id("organizations"),
     number: v.string(),
@@ -712,14 +714,68 @@ export default defineSchema({
       v.literal("partially_paid"),
       v.literal("paid"),
       v.literal("cancelled"),
+      v.literal("credited"),
     ),
-    subtotal: v.number(),
-    taxPercent: v.number(),
-    taxAmount: v.number(),
-    total: v.number(),
-    amountPaid: v.number(),
+    // Billing arrangement this invoice was raised under.
+    arrangement: v.optional(
+      v.union(
+        v.literal("hourly"),
+        v.literal("fixed_fee"),
+        v.literal("retainer"),
+      ),
+    ),
+    // Itemised lines — editable until sent; recalcs derive totals.
+    lines: v.optional(
+      v.array(
+        v.object({
+          description: v.string(),
+          // Integer paise, before tax.
+          amountMinor: v.number(),
+          // "time" | "expense" | "fee" | "expense_reimbursement"
+          kind: v.string(),
+          // For time lines: the billed minutes and rate (paise/hour).
+          minutes: v.optional(v.number()),
+          ratePerHourMinor: v.optional(v.number()),
+          linkedTimeEntryId: v.optional(v.id("timeEntries")),
+          linkedExpenseId: v.optional(v.id("expenses")),
+        }),
+      ),
+    ),
+    subtotalMinor: v.number(),
+    discountPercentMinor: v.optional(v.number()), // basis points (e.g. 1050 = 10.50%)
+    discountAmountMinor: v.optional(v.number()),
+    // Tax model: "intra_state" -> CGST+SGST split; "inter_state" -> IGST;
+    // "none" -> no tax (configurable per invoice — legal services vary).
+    taxModel: v.union(
+      v.literal("none"),
+      v.literal("intra_state"),
+      v.literal("inter_state"),
+    ),
+    taxRateBps: v.optional(v.number()), // basis points over taxable value
+    cgstMinor: v.optional(v.number()),
+    sgstMinor: v.optional(v.number()),
+    igstMinor: v.optional(v.number()),
+    totalMinor: v.number(),
+    amountPaidMinor: v.number(),
+    amountCreditedMinor: v.optional(v.number()),
     notes: v.optional(v.string()),
     issuedOn: v.string(),
+    dueOn: v.optional(v.string()),
+    // Payment link (Razorpay) for the outstanding balance.
+    paymentLinkId: v.optional(v.string()),
+    paymentLinkUrl: v.optional(v.string()),
+    paymentOrderId: v.optional(v.string()),
+    // Financial audit trail (append-only summaries).
+    audit: v.optional(
+      v.array(
+        v.object({
+          at: v.number(),
+          byId: v.optional(v.id("users")),
+          byName: v.string(),
+          text: v.string(),
+        }),
+      ),
+    ),
     createdBy: v.id("users"),
     createdAt: v.number(),
   })
@@ -729,7 +785,10 @@ export default defineSchema({
 
   payments: defineTable({
     invoiceId: v.id("invoices"),
-    amount: v.number(),
+    orgId: v.id("organizations"),
+    // Integer paise.
+    amountMinor: v.number(),
+    // "manual_*" = recorded by the chamber; otherwise the provider.
     mode: v.optional(
       v.union(
         v.literal("upi"),
@@ -739,10 +798,67 @@ export default defineSchema({
         v.literal("other"),
       ),
     ),
+    source: v.optional(
+      v.union(
+        v.literal("manual"),
+        v.literal("razorpay"),
+      ),
+    ),
     reference: v.optional(v.string()),
     receivedOn: v.string(),
+    // Provider reconciliation fields.
+    providerPaymentId: v.optional(v.string()),
+    providerOrderId: v.optional(v.string()),
+    refundedMinor: v.optional(v.number()),
+    refundIds: v.optional(v.array(v.string())),
+    status: v.optional(
+      v.union(
+        v.literal("captured"),
+        v.literal("refunded"),
+        v.literal("partially_refunded"),
+      ),
+    ),
+    recordedById: v.optional(v.id("users")),
     createdAt: v.number(),
   }).index("by_invoice", ["invoiceId"]),
+
+  // Verified Razorpay webhook events — one row per event id, so replays
+  // are idempotent at the storage layer.
+  paymentEvents: defineTable({
+    orgId: v.id("organizations"),
+    eventId: v.string(),
+    eventType: v.string(),
+    payload: v.optional(v.string()),
+    handled: v.boolean(),
+    handledAt: v.optional(v.number()),
+    note: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_event", ["eventId"])
+    .index("by_org", ["orgId"]),
+
+  // Consultation payment sessions (pay-before-booking, no invoice).
+  consultations: defineTable({
+    orgId: v.id("organizations"),
+    clientName: v.string(),
+    clientEmail: v.optional(v.string()),
+    clientPhone: v.optional(v.string()),
+    matterSummary: v.optional(v.string()),
+    amountMinor: v.number(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("paid"),
+      v.literal("cancelled"),
+      v.literal("refunded"),
+    ),
+    paymentOrderId: v.optional(v.string()),
+    paymentLinkId: v.optional(v.string()),
+    paymentLinkUrl: v.optional(v.string()),
+    providerPaymentId: v.optional(v.string()),
+    createdById: v.id("users"),
+    createdAt: v.number(),
+    paidAt: v.optional(v.number()),
+  }).index("by_org", ["orgId"]),
 
   invitations: defineTable({
     orgId: v.id("organizations"),

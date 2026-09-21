@@ -509,7 +509,7 @@ export const client360 = query({
 
     const outstanding = invoices
       .filter((i) => i.status !== "paid" && i.status !== "cancelled" && i.status !== "draft")
-      .reduce((s, i) => s + (i.total - i.amountPaid), 0);
+      .reduce((s, i) => s + (i.totalMinor - i.amountPaidMinor), 0);
 
     return {
       client,

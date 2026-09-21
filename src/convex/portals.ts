@@ -442,9 +442,13 @@ export const lawyerDashboard = query({
         outstanding: openInvoices.slice(0, 6).map((i) => ({
           number: i.number,
           matterId: i.matterId,
-          due: i.total - i.amountPaid,
+          due: (i.totalMinor - i.amountPaidMinor) / 100,
         })),
-        totalDue: openInvoices.reduce((s, i) => s + (i.total - i.amountPaid), 0),
+        totalDue:
+          openInvoices.reduce(
+            (s, i) => s + (i.totalMinor - i.amountPaidMinor),
+            0,
+          ) / 100,
       };
     }
 
@@ -558,15 +562,18 @@ export const firmDashboard = query({
       const payments = await ctx.db.query("payments").collect();
       const invoiceIds = new Set(invoices.map((i) => i._id));
       financials = {
-        billed: invoices
-          .filter((i) => i.status !== "cancelled" && i.status !== "draft")
-          .reduce((s, i) => s + i.total, 0),
-        collected: payments
-          .filter((p) => invoiceIds.has(p.invoiceId))
-          .reduce((s, p) => s + p.amount, 0),
-        outstanding: invoices
-          .filter((i) => i.status !== "paid" && i.status !== "cancelled")
-          .reduce((s, i) => s + (i.total - i.amountPaid), 0),
+        billed:
+          invoices
+            .filter((i) => i.status !== "cancelled" && i.status !== "draft")
+            .reduce((s, i) => s + i.totalMinor, 0) / 100,
+        collected:
+          payments
+            .filter((p) => invoiceIds.has(p.invoiceId))
+            .reduce((s, p) => s + p.amountMinor, 0) / 100,
+        outstanding:
+          invoices
+            .filter((i) => i.status !== "paid" && i.status !== "cancelled")
+            .reduce((s, i) => s + (i.totalMinor - i.amountPaidMinor), 0) / 100,
         openInvoices: invoices.filter(
           (i) => i.status !== "paid" && i.status !== "cancelled" && i.status !== "draft",
         ).length,
