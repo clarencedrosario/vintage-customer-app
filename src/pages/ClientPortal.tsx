@@ -288,7 +288,10 @@ export default function ClientPortal() {
     cancelled: { label: "Cancelled", cls: "text-muted-foreground" },
   };
   const openInvoices = data.invoices.filter((i) => i.status !== "paid" && i.status !== "cancelled" && i.status !== "draft");
-  const totalDue = openInvoices.reduce((s, i) => s + (i.total - i.amountPaid), 0);
+  const totalDue = openInvoices.reduce(
+    (s, i) => s + (i.totalMinor - i.amountPaidMinor) / 100,
+    0,
+  );
   const matterById = new Map(
     data.matters.map((m) => [m._id, m]),
   );
@@ -433,11 +436,12 @@ export default function ClientPortal() {
                       </p>
                     </div>
                     <div className="text-right">
-                      <p className="font-serif font-semibold">{formatINR(inv.total)}</p>
+                      <p className="font-serif font-semibold">{formatINR(inv.totalMinor / 100)}</p>
                       <p className={`type-label ${st.cls}`}>{st.label}</p>
                       {inv.status === "partially_paid" && (
                         <p className="type-label ink-faded">
-                          Paid {formatINR(inv.amountPaid)}
+                          Paid {formatINR(inv.amountPaidMinor / 100)} of{" "}
+                          {formatINR(inv.totalMinor / 100)}
                         </p>
                       )}
                     </div>

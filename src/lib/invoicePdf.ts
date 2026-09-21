@@ -65,9 +65,8 @@ const RULE: [number, number, number] = [229, 231, 235];
 
 /** Strip control characters and cap length — safe for PDF text runs. */
 export function safe(s: string, max = 300): string {
-  return s
-    .replace(/[\u0000-\u001f\u007f]/g, " ")
-    .slice(0, max);
+  // eslint-disable-next-line no-control-regex -- stripping controls is the purpose
+  return s.replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, max);
 }
 
 export function inr(minor: number): string {
@@ -296,7 +295,9 @@ export function buildInvoicePdf(data: InvoicePdfData): jsPDF {
   ensure(9);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(11);
-  doc.setTextColor(...(data.balanceMinor <= 0 ? [21, 128, 61] : NAVY));
+  const balanceColor: [number, number, number] =
+    data.balanceMinor <= 0 ? [21, 128, 61] : NAVY;
+  doc.setTextColor(...balanceColor);
   doc.text(
     data.balanceMinor <= 0 ? "PAID IN FULL" : "Balance due",
     totalsX,

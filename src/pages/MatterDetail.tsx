@@ -132,8 +132,8 @@ export default function MatterDetail() {
   const addHearing = useMutation(api.matters.addHearing);
   const addOrder = useMutation(api.matters.addOrder);
   const addTask = useMutation(api.matters.addTask);
-  const addTime = useMutation(api.matters.addTime);
-  const addExpense = useMutation(api.matters.addExpense);
+  const addTime = useMutation(api.billing.addTime);
+  const addExpense = useMutation(api.billing.addExpense);
   const addNote = useMutation(api.matters.addNote);
   const createInvoice = useMutation(api.billing.createFromMatter);
   const generateUploadUrl = useMutation(api.matters.generateDocumentUploadUrl);
@@ -1058,7 +1058,7 @@ export default function MatterDetail() {
                         matterId: matterId!,
                         description: timeDesc,
                         minutes: parseInt(timeMinutes, 10),
-                        ratePerHour: parseFloat(timeRate),
+                        ratePerHourMinor: Math.round(parseFloat(timeRate) * 100),
                         date: timeDate,
                       });
                       toast.success("Time recorded.");
@@ -1157,7 +1157,7 @@ export default function MatterDetail() {
                       await addExpense({
                         matterId: matterId!,
                         description: expenseDesc,
-                        amount: parseFloat(expenseAmount),
+                        amountMinor: Math.round(parseFloat(expenseAmount) * 100),
                         date: expenseDate,
                       });
                       toast.success("Expense recorded.");
@@ -1190,7 +1190,7 @@ export default function MatterDetail() {
               onClick={async () => {
                 setBusy(true);
                 try {
-                  await createInvoice({ matterId: matterId! });
+                  await createInvoice({ matterId: matterId!, includeBillable: true });
                   toast.success("Invoice drafted. See Billing.");
                 } catch (err) {
                   toast.error(err instanceof Error ? err.message : "Failed.");

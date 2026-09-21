@@ -884,11 +884,11 @@ export default function Client360() {
                         <td className="text-xs text-muted-foreground">
                           {formatDateIN(i.issuedOn)}
                         </td>
-                        <td className="font-medium">{formatINR(i.total)}</td>
+                        <td className="font-medium">{formatINR(i.totalMinor / 100)}</td>
                         <td className="font-medium">
                           {i.status === "paid"
                             ? "—"
-                            : formatINR(i.total - i.amountPaid)}
+                            : formatINR((i.totalMinor - i.amountPaidMinor) / 100)}
                         </td>
                         <td>
                           <span className={`stamp ${st.cls}`}>{st.label}</span>
@@ -925,7 +925,7 @@ export default function Client360() {
                       <td className="type-label ink-faded">
                         {p.invoice?.number ?? "—"}
                       </td>
-                      <td className="font-medium">{formatINR(p.amount)}</td>
+                      <td className="font-medium">{formatINR(p.amountMinor / 100)}</td>
                       <td className="text-muted-foreground">
                         {p.mode?.toUpperCase() ?? "—"}
                       </td>
