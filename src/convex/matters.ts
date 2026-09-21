@@ -1327,15 +1327,6 @@ export const attachDocument = mutation({
 
     const name = args.name.trim().slice(0, MAX_NAME);
     if (!name) throw new Error("Document name is required.");
-    await ctx.db.insert("matterDocuments", {
-      matterId: args.matterId,
-      uploaderId: ac.user._id,
-      name,
-      kind: args.kind,
-      visibility: args.visibility,
-      storageId: args.storageId,
-      createdAt: Date.now(),
-    });
     const docId = await ctx.db.insert("matterDocuments", {
       matterId: args.matterId,
       uploaderId: ac.user._id,

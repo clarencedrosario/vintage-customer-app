@@ -959,4 +959,119 @@ export default defineSchema({
     storageId: v.optional(v.id("_storage")),
     downloads: v.number(),
   }).index("by_matter", ["matterId"]),
+
+  // -------------------------------------------------------------------
+  // Communications (section 19)
+  // -------------------------------------------------------------------
+
+  // Threads: matter-scoped (with the client) or internal (colleagues).
+  conversations: defineTable({
+    orgId: v.id("organizations"),
+    matterId: v.optional(v.id("matters")),
+    clientId: v.optional(v.id("clients")),
+    scope: v.union(v.literal("matter"), v.literal("internal")),
+    subject: v.string(),
+    // Explicit per-thread authorization: send approved client updates
+    // without linking a specific approved draft version each time.
+    autoSendUpdates: v.optional(v.boolean()),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    lastMessageAt: v.optional(v.number()),
+    archivedAt: v.optional(v.number()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_matter", ["matterId"]),
+
+  conversationParticipants: defineTable({
+    conversationId: v.id("conversations"),
+    orgId: v.id("organizations"),
+    userId: v.id("users"),
+    role: v.union(v.literal("member"), v.literal("client")),
+    // Unread message count is maintained per participant on send.
+    unreadCount: v.number(),
+    lastReadAt: v.optional(v.number()),
+    addedBy: v.optional(v.id("users")),
+    removedAt: v.optional(v.number()),
+    createdAt: v.number(),
+  })
+    .index("by_conversation", ["conversationId"])
+    .index("by_user", ["userId"])
+    .index("by_conv_user", ["conversationId", "userId"]),
+
+  messages: defineTable({
+    conversationId: v.id("conversations"),
+    orgId: v.id("organizations"),
+    senderId: v.optional(v.id("users")),
+    // "member" (a colleague) | "client" (portal identity) | "system" (audit)
+    senderKind: v.union(v.literal("member"), v.literal("client"), v.literal("system")),
+    body: v.string(),
+    // Attached matter documents (existing rows, access re-checked on read).
+    attachmentDocumentIds: v.optional(v.array(v.id("matterDocuments"))),
+    linkedInvoiceId: v.optional(v.id("invoices")),
+    kind: v.optional(
+      v.union(
+        v.literal("message"),
+        v.literal("client_update"),
+        v.literal("reminder"),
+        v.literal("note"),
+      ),
+    ),
+    createdAt: v.number(),
+  })
+    .index("by_conversation", ["conversationId"])
+    .index("by_org", ["orgId"]),
+
+  // Per-user notification channels. Email defaults on for portal users;
+  // WhatsApp requires explicit opt-in (checked before every send).
+  commPreferences: defineTable({
+    orgId: v.id("organizations"),
+    userId: v.id("users"),
+    emailEnabled: v.boolean(),
+    whatsappEnabled: v.boolean(),
+    whatsappNumber: v.optional(v.string()),
+    // Reminder categories the user accepts.
+    hearingReminders: v.boolean(),
+    invoiceReminders: v.boolean(),
+    clientUpdates: v.boolean(),
+    updatedAt: v.number(),
+  })
+    .index("by_org_user", ["orgId", "userId"]),
+
+  // Every outbound email/WhatsApp: address, template, provider ids,
+  // delivery/failure status from verified callbacks.
+  notificationLog: defineTable({
+    orgId: v.id("organizations"),
+    channel: v.union(v.literal("email"), v.literal("whatsapp")),
+    recipientUserId: v.optional(v.id("users")),
+    recipient: v.string(),
+    category: v.string(), // "verify" | "invite" | "client_update" | "hearing_reminder" | "invoice_reminder"
+    subject: v.optional(v.string()),
+    templateName: v.optional(v.string()),
+    // Provider bookkeeping.
+    providerMessageId: v.optional(v.string()),
+    status: v.union(
+      v.literal("queued"),
+      v.literal("sent"),
+      v.literal("delivered"),
+      v.literal("read"),
+      v.literal("failed"),
+    ),
+    failureReason: v.optional(v.string()),
+    conversationId: v.optional(v.id("conversations")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_provider_msg", ["providerMessageId"])
+    .index("by_org", ["orgId"]),
+
+  // WhatsApp delivery callbacks — one row per message id, replays idempotent.
+  whatsappEvents: defineTable({
+    orgId: v.optional(v.id("organizations")),
+    providerMessageId: v.string(),
+    eventType: v.string(), // "sent" | "delivered" | "read" | "failed"
+    payload: v.optional(v.string()),
+    handled: v.boolean(),
+    handledAt: v.optional(v.number()),
+    createdAt: v.number(),
+  }).index("by_msg_event", ["providerMessageId"]),
 });

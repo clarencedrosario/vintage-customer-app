@@ -775,6 +775,40 @@ export const clientMessage = mutation({
       authorId: user._id,
       visibility: "shared_with_client",
     });
+
+    // Mirror into the matter's client thread so the Comms desk and the
+    // portal show one shared history. Participants resolve below; when
+    // no thread exists yet this no-ops (the chamber's next client update
+    // or thread creation picks the message up from the portal surface).
+    const thread = await ctx.db
+      .query("conversations")
+      .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))
+      .collect()
+      .then((rows) =>
+        rows
+          .filter((c) => c.scope === "matter" && !c.archivedAt)
+          .sort((a, b) => b.createdAt - a.createdAt)[0],
+      );
+    if (thread) {
+      await ctx.db.insert("messages", {
+        conversationId: thread._id,
+        orgId: thread.orgId,
+        senderId: user._id,
+        senderKind: "client",
+        body,
+        kind: "message",
+        createdAt: Date.now(),
+      });
+      await ctx.db.patch(thread._id, { lastMessageAt: Date.now() });
+      const participants = await ctx.db
+        .query("conversationParticipants")
+        .withIndex("by_conversation", (q) => q.eq("conversationId", thread!._id))
+        .collect();
+      for (const p of participants) {
+        if (p.removedAt || p.userId === user._id) continue;
+        await ctx.db.patch(p._id, { unreadCount: p.unreadCount + 1 });
+      }
+    }
   },
 });
 

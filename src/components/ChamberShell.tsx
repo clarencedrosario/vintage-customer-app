@@ -37,6 +37,7 @@ const NAV = [
   { to: "/attention", label: "Morning docket", icon: BellRing },
   { to: "/tasks", label: "Tasks", icon: ClipboardList },
   { to: "/drafts", label: "Draft review", icon: FileCheck },
+  { to: "/comms", label: "Comms", icon: ScrollText },
   { to: "/clients", label: "Clients", icon: Users },
   { to: "/billing", label: "Billing", icon: Receipt },
   { to: "/team", label: "Team", icon: UsersRound },
