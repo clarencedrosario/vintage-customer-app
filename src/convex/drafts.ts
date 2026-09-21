@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { mutation, query, type QueryCtx } from "./_generated/server";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   can,
@@ -528,6 +529,19 @@ export const approve = mutation({
       reviewNote: args.note?.trim().slice(0, MAX_NOTE) || current.reviewNote,
     });
     await ctx.db.patch(d._id, { status: "approved", updatedAt: now });
+
+    // Tell the author their draft is approved (never the approver themself).
+    if (d.createdById !== ac.user._id) {
+      await ctx.runMutation(internal.notifications.createInternal, {
+        orgId: ac.org._id,
+        userId: d.createdById,
+        kind: "draft_approval",
+        title: `Draft approved — ${d.title}`,
+        body: args.note?.trim() || "Version approved and ready to share or file.",
+        linkTo: "/drafts",
+        dedupeKey: `draft_approved:${current._id}`,
+      });
+    }
   },
 });
 

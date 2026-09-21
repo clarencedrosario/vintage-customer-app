@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link, NavLink, useNavigate } from "react-router";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useAuth } from "@/hooks/use-auth";
@@ -21,6 +22,7 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import {
+  Bell,
   BellRing,
   Landmark,
   LogOut,
@@ -61,6 +63,127 @@ function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
         </NavLink>
       ))}
     </nav>
+  );
+}
+
+const KIND_LABEL: Record<string, string> = {
+  hearing_reminder: "Hearing",
+  deadline_reminder: "Deadline",
+  task_assigned: "Task",
+  doc_request: "Documents",
+  message: "Message",
+  draft_approval: "Draft",
+  invoice_followup: "Invoice",
+  automation: "Automation",
+};
+
+/** Top-bar notification centre: unread badge, list, per-item open + mark-read. */
+function NotificationBell() {
+  const unread = useQuery(api.notifications.unreadCount);
+  const items = useQuery(api.notifications.list, { limit: 25 });
+  const markRead = useMutation(api.notifications.markRead);
+  const markAllRead = useMutation(api.notifications.markAllRead);
+  const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
+
+  const count = unread ?? 0;
+
+  const openItem = async (id: string, linkTo?: string) => {
+    setOpen(false);
+    try {
+      await markRead({ notificationId: id as never });
+    } catch {
+      // Read state is best-effort; still navigate.
+    }
+    if (linkTo) navigate(linkTo);
+  };
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="relative inline-flex size-9 items-center justify-center rounded-md border border-border bg-card text-foreground transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-[#B68A45]"
+          aria-label={count > 0 ? `Notifications, ${count} unread` : "Notifications"}
+        >
+          <Bell className="size-4.5" aria-hidden="true" />
+          {count > 0 && (
+            <span className="absolute -right-1 -top-1 flex min-w-4.5 items-center justify-center rounded-full bg-[#B68A45] px-1 text-[10px] font-semibold leading-4 text-white">
+              {count > 99 ? "99+" : count}
+            </span>
+          )}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80 p-0">
+        <div className="flex items-center justify-between border-b border-border px-4 py-3">
+          <span className="font-serif text-sm font-semibold">Notifications</span>
+          {count > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => {
+                void markAllRead();
+              }}
+            >
+              Mark all read
+            </Button>
+          )}
+        </div>
+        <div className="max-h-96 overflow-y-auto">
+          {!items && (
+            <p className="px-4 py-6 text-center text-sm text-muted-foreground">Loading…</p>
+          )}
+          {items && items.length === 0 && (
+            <p className="px-4 py-6 text-center text-sm text-muted-foreground">
+              Nothing yet — reminders, tasks and messages will appear here.
+            </p>
+          )}
+          {items?.map((n) => {
+            const isUnread = !n.readAt;
+            return (
+              <button
+                key={n._id}
+                type="button"
+                onClick={() => void openItem(n._id, n.linkTo)}
+                className={`block w-full border-b border-border/70 px-4 py-3 text-left transition-colors last:border-b-0 hover:bg-accent/60 ${
+                  isUnread ? "bg-[#B68A45]/[0.06]" : ""
+                }`}
+              >
+                <span className="flex items-start gap-2">
+                  {isUnread && (
+                    <span
+                      className="mt-1.5 size-1.5 shrink-0 rounded-full bg-[#B68A45]"
+                      aria-hidden="true"
+                    />
+                  )}
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[11px] uppercase tracking-wide text-muted-foreground">
+                      {KIND_LABEL[n.kind] ?? "Notice"}
+                    </span>
+                    <span className="mt-0.5 block truncate text-sm font-medium">{n.title}</span>
+                    {n.body && (
+                      <span className="mt-0.5 block line-clamp-2 text-xs text-muted-foreground">
+                        {n.body}
+                      </span>
+                    )}
+                    <span className="mt-1 block text-[11px] text-muted-foreground">
+                      {new Date(n.createdAt).toLocaleString("en-IN", {
+                        timeZone: "Asia/Kolkata",
+                        day: "numeric",
+                        month: "short",
+                        hour: "numeric",
+                        minute: "2-digit",
+                      })}
+                    </span>
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -249,6 +372,7 @@ export function ChamberShell({
             </div>
 
             <div className="flex items-center gap-2">
+              <NotificationBell />
               {actions}
               <Button
                 variant="ghost"

@@ -77,6 +77,8 @@ type DeskTask = {
   attachments: { name: string; storageId: string; at: number }[];
   completionNote: string | null;
   completedAt: number | null;
+  automationRunId?: string | null;
+  automationReviewState?: string | null;
 };
 
 type DeadlineRow = {
@@ -331,6 +333,21 @@ function TaskRow({
               className={`type-label ${task.priority === "urgent" ? "text-red-700" : "text-[#8a6d3b]"}`}
             >
               {task.priority === "urgent" ? "Urgent" : "High priority"}
+            </span>
+          )}
+          {task.automationRunId && (
+            <span
+              className={`type-label mt-0.5 block ${
+                task.automationReviewState === "pending" || !task.automationReviewState
+                  ? "text-[#8a6d3b]"
+                  : "ink-faded"
+              }`}
+            >
+              {task.automationReviewState === "confirmed"
+                ? "Automated · confirmed"
+                : task.automationReviewState === "rejected"
+                  ? "Automated · rejected"
+                  : "Automated · needs review"}
             </span>
           )}
         </td>

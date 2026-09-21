@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import {
   getAccessContext,
@@ -518,6 +519,36 @@ export const clientSubmit = mutation({
       detail: `Client uploaded — ${r.title}. Awaiting review.`,
       createdAt: Date.now(),
     });
+
+    // Notify the chamber: the matter's lead lawyer and the last reviewer;
+    // fall back to active owners when neither is set.
+    const matter2 = await ctx.db.get(r.matterId);
+    if (matter2) {
+      const targets = new Set<string>();
+      if (r.reviewedById) targets.add(r.reviewedById);
+      if (matter2.leadLawyerId) targets.add(matter2.leadLawyerId);
+      if (targets.size === 0) {
+        const members = await ctx.db
+          .query("memberships")
+          .withIndex("by_org", (q) => q.eq("orgId", r.orgId))
+          .collect();
+        for (const m of members) {
+          if (m.status === "active" && m.orgRole === "owner") targets.add(m.userId);
+        }
+      }
+      for (const uid of targets) {
+        if (uid === user._id) continue;
+        await ctx.runMutation(internal.notifications.createInternal, {
+          orgId: r.orgId,
+          userId: uid as never,
+          kind: "doc_request",
+          title: `Document submitted — ${r.title}`,
+          body: `${client.name} uploaded a file. It is awaiting review.`,
+          linkTo: `/matters/${r.matterId}?tab=documents`,
+          dedupeKey: `doc_upload:${args.requestId}:${args.storageId}`,
+        });
+      }
+    }
   },
 });
 

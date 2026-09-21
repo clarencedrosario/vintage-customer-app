@@ -191,6 +191,15 @@ export const desk = query({
       if (u) nameByUser.set(id, u.name ?? u.email ?? "Member");
     }
 
+    // Automation provenance for the review chip.
+    const runStateById = new Map<string, string | undefined>();
+    for (const t of filtered) {
+      if (t.automationRunId && !runStateById.has(t.automationRunId)) {
+        const run = await ctx.db.get(t.automationRunId);
+        runStateById.set(t.automationRunId, run?.reviewState);
+      }
+    }
+
     return filtered.slice(0, 300).map((t) => ({
       _id: t._id,
       title: t.title,
@@ -214,6 +223,10 @@ export const desk = query({
       completionNote: t.completionNote ?? null,
       completedAt: t.completedAt ?? null,
       createdAt: t.createdAt,
+      automationRunId: t.automationRunId ?? null,
+      automationReviewState: t.automationRunId
+        ? (runStateById.get(t.automationRunId) ?? null)
+        : null,
     }));
   },
 });

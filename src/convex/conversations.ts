@@ -15,6 +15,7 @@
 
 import { v } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
+import { internal } from "./_generated/api";
 import type { QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { api } from "./_generated/api";
@@ -509,6 +510,16 @@ export const sendMessage = mutation({
     for (const p of participants) {
       if (p.removedAt || p.userId === ac.user._id) continue;
       await ctx.db.patch(p._id, { unreadCount: p.unreadCount + 1 });
+      // In-app notification (deduped per message + recipient).
+      await ctx.runMutation(internal.notifications.createInternal, {
+        orgId: ac.org._id,
+        userId: p.userId,
+        kind: "message",
+        title: `New message — ${conversation.subject}`,
+        body: body.slice(0, 160),
+        linkTo: "/comms",
+        dedupeKey: `msg:${args.conversationId}:${now}`,
+      });
     }
   },
 });

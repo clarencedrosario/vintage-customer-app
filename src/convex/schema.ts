@@ -560,6 +560,9 @@ export default defineSchema({
     status: v.union(...TASK_STATUSES.map((s) => v.literal(s))),
     assigneeId: v.optional(v.id("users")),
     createdById: v.id("users"),
+    // Provenance: set when the task was created by an automation rule;
+    // such tasks surface a review chip until confirmed or rejected.
+    automationRunId: v.optional(v.id("automationRuns")),
     // Completion evidence — a note plus optional uploaded proof files.
     completionNote: v.optional(v.string()),
     completedAt: v.optional(v.number()),
@@ -1074,4 +1077,100 @@ export default defineSchema({
     handledAt: v.optional(v.number()),
     createdAt: v.number(),
   }).index("by_msg_event", ["providerMessageId"]),
+
+  // -------------------------------------------------------------------
+  // Notifications & automation (section 20)
+  // -------------------------------------------------------------------
+
+  // In-app notification centre rows.
+  appNotifications: defineTable({
+    orgId: v.id("organizations"),
+    userId: v.id("users"),
+    kind: v.string(), // "hearing_reminder" | "deadline_reminder" | "task_assigned" | "doc_request" | "message" | "draft_approval" | "invoice_followup" | "automation"
+    title: v.string(),
+    body: v.optional(v.string()),
+    // Deep-link destination inside the console.
+    linkTo: v.optional(v.string()),
+    // Idempotency: kind + stable reference of the source row.
+    dedupeKey: v.optional(v.string()),
+    readAt: v.optional(v.number()),
+    createdAt: v.number(),
+  })
+    .index("by_user_created", ["userId"])
+    .index("by_user_dedupe", ["userId", "dedupeKey"]),
+
+  // Configurable automation rules: trigger -> conditions -> action.
+  automationRules: defineTable({
+    orgId: v.id("organizations"),
+    name: v.string(),
+    enabled: v.boolean(),
+    trigger: v.union(
+      v.literal("deadline_reminder"),
+      v.literal("hearing_tomorrow"),
+      v.literal("invoice_overdue"),
+    ),
+    // Optional condition: only matters with this practice area.
+    practiceArea: v.optional(v.string()),
+    // Optional condition: minimum days overdue for invoices.
+    minDaysOverdue: v.optional(v.number()),
+    action: v.union(
+      v.literal("notify_user"),
+      v.literal("create_task"),
+      v.literal("whatsapp_template"),
+    ),
+    // For notify_user / create_task: the responsible owner. For
+    // whatsapp_template: "client" (the matter's opted-in client identity).
+    ownerUserId: v.optional(v.id("users")),
+    // create_task action: title prefix & due-in days.
+    taskTitle: v.optional(v.string()),
+    taskDueInDays: v.optional(v.number()),
+    // whatsapp_template action.
+    templateName: v.optional(v.string()),
+    // Explicit authorization for external sends recorded per rule.
+    whatsappAuthorized: v.optional(v.boolean()),
+    createdById: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.optional(v.number()),
+  }).index("by_org", ["orgId"]),
+
+  // Per-user notification centre preferences (section 20).
+  userNotificationPrefs: defineTable({
+    userId: v.id("users"),
+    // In-app centre is always on; this row controls extras/mutes.
+    inApp: v.boolean(),
+    // Also email me non-urgent updates (messages, approvals).
+    emailUpdates: v.boolean(),
+    // Notification kinds the user has muted in the centre.
+    mutedKinds: v.array(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_user", ["userId"]),
+
+  // Execution history: one row per (rule, trigger occurrence). The
+  // unique occurrenceKey enforces duplicate prevention at the storage
+  // layer, and every automated task/notification points back here for
+  // human review.
+  automationRuns: defineTable({
+    ruleId: v.id("automationRules"),
+    orgId: v.id("organizations"),
+    // Stable key: "<trigger>:<rowId>:<occurrence>" — replays no-op.
+    occurrenceKey: v.string(),
+    status: v.union(
+      v.literal("succeeded"),
+      v.literal("failed"),
+      v.literal("skipped"),
+    ),
+    detail: v.optional(v.string()),
+    failureReason: v.optional(v.string()),
+    // Produced artefacts for review.
+    createdTaskId: v.optional(v.id("tasks")),
+    notifiedUserId: v.optional(v.id("users")),
+    // Task classification review state for create_task actions.
+    reviewState: v.optional(
+      v.union(v.literal("pending"), v.literal("confirmed"), v.literal("rejected")),
+    ),
+    ranAt: v.number(),
+  })
+    .index("by_occurrence", ["occurrenceKey"])
+    .index("by_rule", ["ruleId"]),
 });

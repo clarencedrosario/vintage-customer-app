@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { mutation, query, MutationCtx } from "./_generated/server";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   canViewDocument,
@@ -1072,7 +1073,7 @@ export const addTask = mutation({
         ? ac.user._id
         : (args.assigneeId ?? ac.user._id);
 
-    await ctx.db.insert("tasks", {
+    const taskId = await ctx.db.insert("tasks", {
       matterId: args.matterId,
       orgId: ac.org._id,
       title: args.title.trim(),
@@ -1085,6 +1086,18 @@ export const addTask = mutation({
       createdAt: Date.now(),
     });
     await logEvent(ctx, args.matterId, "task", `Task added — ${args.title.trim()}.`);
+    // In-app notification for the assignee (not the creator).
+    if (assigneeId !== ac.user._id) {
+      await ctx.runMutation(internal.notifications.createInternal, {
+        orgId: ac.org._id,
+        userId: assigneeId,
+        kind: "task_assigned",
+        title: `New task — ${args.title.trim().slice(0, 140)}`,
+        body: `Assigned by ${ac.user.name ?? "a colleague"}.`,
+        linkTo: "/tasks",
+        dedupeKey: `task_assigned:${taskId}`,
+      });
+    }
   },
 });
 

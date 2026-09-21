@@ -17,11 +17,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
 import { INDIAN_STATES } from "@/lib/format";
 import { useMutation, useQuery } from "convex/react";
 import { Check, Minus, Upload } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 
 const CURRENCIES = ["INR", "USD", "EUR", "GBP", "AED", "SGD"];
 const TIMEZONES = [
@@ -71,6 +75,8 @@ export default function Settings() {
       ) : (
         <div className="space-y-10">
           <OrgProfileCard key={profile._id} profile={profile} />
+          <AutomationCard />
+          <NotificationPrefsCard />
           <PermissionsMatrixCard />
           <SecurityCard />
         </div>
@@ -917,6 +923,658 @@ function SecurityCard() {
             Sign out all devices
           </Button>
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------
+// Automation rules — trigger / conditions / action, owner,
+// enabled state, run-now, execution history, task review
+// ---------------------------------------------------------------
+
+const TRIGGER_LABELS: Record<string, string> = {
+  deadline_reminder: "When a deadline reminder falls due (or the deadline day arrives)",
+  hearing_tomorrow: "When a hearing is within the next 24 hours",
+  invoice_overdue: "When an invoice passes its due date unpaid",
+};
+const ACTION_LABELS: Record<string, string> = {
+  notify_user: "Notify the responsible owner",
+  create_task: "Create a task for the owner (reviewable)",
+  whatsapp_template: "Send an approved WhatsApp template to the client",
+};
+const RUN_STATUS_VARIANT: Record<
+  string,
+  "default" | "secondary" | "destructive" | "outline"
+> = {
+  succeeded: "secondary",
+  failed: "destructive",
+  skipped: "outline",
+};
+
+type RuleForm = {
+  name: string;
+  trigger: "deadline_reminder" | "hearing_tomorrow" | "invoice_overdue";
+  action: "notify_user" | "create_task" | "whatsapp_template";
+  practiceArea: string;
+  minDaysOverdue: string;
+  ownerUserId: string;
+  taskTitle: string;
+  taskDueInDays: string;
+  templateName: string;
+  whatsappAuthorized: boolean;
+  enabled: boolean;
+};
+
+const EMPTY_RULE: RuleForm = {
+  name: "",
+  trigger: "deadline_reminder",
+  action: "notify_user",
+  practiceArea: "",
+  minDaysOverdue: "1",
+  ownerUserId: "",
+  taskTitle: "",
+  taskDueInDays: "1",
+  templateName: "",
+  whatsappAuthorized: false,
+  enabled: true,
+};
+
+function AutomationCard() {
+  const rules = useQuery(api.reminders.listRules);
+  const runs = useQuery(api.reminders.runHistory, { limit: 30 });
+  const team = useQuery(api.workspace.team);
+  const caps = useQuery(api.workspace.myCapabilities);
+  const members = (team ?? []).filter((m) => m.status === "active");
+  const canManage = caps?.capabilities.includes("team.manage") ?? false;
+
+  return (
+    <Card className="rule-frame bg-card">
+      <CardHeader>
+        <CardTitle className="font-serif text-2xl">Automation</CardTitle>
+        <CardDescription>
+          Rules run on the platform scheduler every few minutes — reminders
+          and automation do not depend on anyone opening the dashboard.
+          {canManage
+            ? ""
+            : " Only owners and administrators can change these rules."}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        <RulesEditor canManage={canManage} members={members} rules={rules} />
+        <RuleRunHistory runs={runs} />
+      </CardContent>
+    </Card>
+  );
+}
+
+function RulesEditor({
+  canManage,
+  members,
+  rules,
+}: {
+  canManage: boolean;
+  members: { userId: string; name: string | null; email: string | null }[];
+  rules:
+    | {
+        _id: string;
+        name: string;
+        enabled: boolean;
+        trigger: string;
+        action: string;
+        practiceArea?: string;
+        minDaysOverdue?: number;
+        ownerUserId?: string;
+        taskTitle?: string;
+        taskDueInDays?: number;
+        templateName?: string;
+      }[]
+    | undefined;
+}) {
+  const save = useMutation(api.reminders.saveRule);
+  const setEnabled = useMutation(api.reminders.setRuleEnabled);
+  const remove = useMutation(api.reminders.deleteRule);
+  const runNow = useMutation(api.reminders.runRuleNow);
+  const [editing, setEditing] = useState<RuleForm | null>(null);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const startEdit = (rule: NonNullable<typeof rules>[number] | null) => {
+    if (rule) {
+      setEditId(rule._id);
+      setEditing({
+        name: rule.name,
+        trigger: rule.trigger as RuleForm["trigger"],
+        action: rule.action as RuleForm["action"],
+        practiceArea: rule.practiceArea ?? "",
+        minDaysOverdue: String(rule.minDaysOverdue ?? 1),
+        ownerUserId: rule.ownerUserId ?? "",
+        taskTitle: rule.taskTitle ?? "",
+        taskDueInDays: String(rule.taskDueInDays ?? 1),
+        templateName: rule.templateName ?? "",
+        whatsappAuthorized: false, // never displayed; re-confirmed per save
+        enabled: rule.enabled,
+      });
+    } else {
+      setEditId(null);
+      setEditing({ ...EMPTY_RULE });
+    }
+  };
+
+  const submit = async () => {
+    if (!editing) return;
+    if (editing.name.trim().length < 3) {
+      toast.error("Give the rule a clear name.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await save({
+        ruleId: editId ? (editId as Id<"automationRules">) : undefined,
+        name: editing.name.trim(),
+        trigger: editing.trigger,
+        action: editing.action,
+        practiceArea: editing.practiceArea.trim() || undefined,
+        minDaysOverdue: editing.trigger === "invoice_overdue" ? Math.max(1, parseInt(editing.minDaysOverdue, 10) || 1) : undefined,
+        ownerUserId:
+          editing.action === "whatsapp_template" || editing.ownerUserId
+            ? (editing.ownerUserId as Id<"users"> | undefined)
+            : undefined,
+        taskTitle: editing.action === "create_task" && editing.taskTitle.trim() ? editing.taskTitle.trim() : undefined,
+        taskDueInDays:
+          editing.action === "create_task" ? Math.max(0, parseInt(editing.taskDueInDays, 10) || 1) : undefined,
+        templateName: editing.action === "whatsapp_template" && editing.templateName.trim() ? editing.templateName.trim() : undefined,
+        whatsappAuthorized: editing.action === "whatsapp_template" ? editing.whatsappAuthorized : undefined,
+        enabled: editing.enabled,
+      });
+      toast.success(editId ? "Rule updated." : "Rule created.");
+      setEditing(null);
+      setEditId(null);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not save the rule.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="space-y-3">
+        {rules === undefined && (
+          <p className="text-sm text-muted-foreground">Retrieving rules…</p>
+        )}
+        {rules?.length === 0 && (
+          <p className="text-sm text-muted-foreground">
+            No rules yet. Create one to automate reminders, task creation or
+            client WhatsApp notices.
+          </p>
+        )}
+        {rules?.map((rule) => (
+          <div
+            key={rule._id}
+            className="flex flex-col gap-3 rounded-md border border-border bg-background/50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+          >
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-medium">{rule.name}</span>
+                <Badge variant={rule.enabled ? "secondary" : "outline"}>
+                  {rule.enabled ? "Enabled" : "Disabled"}
+                </Badge>
+                <Badge variant="outline">{rule.action.replace("_", " ")}</Badge>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {TRIGGER_LABELS[rule.trigger] ?? rule.trigger}
+                {rule.practiceArea ? ` · ${rule.practiceArea} only` : ""}
+                {rule.action === "create_task" && rule.taskTitle
+                  ? ` · task: ${rule.taskTitle}`
+                  : ""}
+              </p>
+            </div>
+            {canManage && (
+              <div className="flex flex-wrap items-center gap-2">
+                <Switch
+                  checked={rule.enabled}
+                  onCheckedChange={(v) => {
+                    void setEnabled({ ruleId: rule._id as Id<"automationRules">, enabled: v }).catch(
+                      (err) => toast.error(err instanceof Error ? err.message : "Failed."),
+                    );
+                  }}
+                  aria-label={`${rule.enabled ? "Disable" : "Enable"} ${rule.name}`}
+                />
+                <Button variant="outline" size="sm" onClick={() => startEdit(rule)}>
+                  Edit
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={async () => {
+                    try {
+                      const res = await runNow({ ruleId: rule._id as Id<"automationRules"> });
+                      toast.success(
+                        res.executed > 0
+                          ? `Rule executed — ${res.executed} occurrence(s).`
+                          : "No matching occurrences right now.",
+                      );
+                    } catch (err) {
+                      toast.error(err instanceof Error ? err.message : "Run failed.");
+                    }
+                  }}
+                >
+                  Run now
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-destructive"
+                  onClick={async () => {
+                    try {
+                      await remove({ ruleId: rule._id as Id<"automationRules"> });
+                      toast.success("Rule deleted.");
+                    } catch (err) {
+                      toast.error(err instanceof Error ? err.message : "Failed.");
+                    }
+                  }}
+                >
+                  Delete
+                </Button>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {canManage && !editing && (
+        <Button variant="outline" size="sm" onClick={() => startEdit(null)}>
+          New rule
+        </Button>
+      )}
+
+      {editing && (
+        <div className="space-y-4 rounded-md border border-[#B68A45]/40 bg-[#B68A45]/[0.04] p-4">
+          <p className="font-serif text-sm font-semibold">{editId ? "Edit rule" : "New rule"}</p>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="rule-name">Rule name</Label>
+              <Input
+                id="rule-name"
+                value={editing.name}
+                onChange={(e) => setEditing({ ...editing, name: e.target.value })}
+                placeholder="e.g. File Vakalatnama before hearing"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="rule-owner">Responsible owner</Label>
+              <Select
+                value={editing.ownerUserId}
+                onValueChange={(v) => setEditing({ ...editing, ownerUserId: v })}
+              >
+                <SelectTrigger id="rule-owner">
+                  <SelectValue placeholder="Choose a member" />
+                </SelectTrigger>
+                <SelectContent>
+                  {members.map((m) => (
+                    <SelectItem key={m.userId} value={m.userId}>
+                      {m.name ?? m.email ?? m.userId}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="rule-trigger">Trigger</Label>
+              <Select
+                value={editing.trigger}
+                onValueChange={(v) =>
+                  setEditing({ ...editing, trigger: v as RuleForm["trigger"] })
+                }
+              >
+                <SelectTrigger id="rule-trigger">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(TRIGGER_LABELS).map(([k, label]) => (
+                    <SelectItem key={k} value={k}>
+                      {label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="rule-action">Action</Label>
+              <Select
+                value={editing.action}
+                onValueChange={(v) =>
+                  setEditing({ ...editing, action: v as RuleForm["action"] })
+                }
+              >
+                <SelectTrigger id="rule-action">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(ACTION_LABELS).map(([k, label]) => (
+                    <SelectItem key={k} value={k}>
+                      {label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="rule-area">Condition — practice area (optional)</Label>
+              <Input
+                id="rule-area"
+                value={editing.practiceArea}
+                onChange={(e) => setEditing({ ...editing, practiceArea: e.target.value })}
+                placeholder="e.g. Civil — leave blank for all matters"
+              />
+            </div>
+            {editing.trigger === "invoice_overdue" && (
+              <div className="space-y-2">
+                <Label htmlFor="rule-days">Condition — days overdue (minimum)</Label>
+                <Input
+                  id="rule-days"
+                  type="number"
+                  min={1}
+                  value={editing.minDaysOverdue}
+                  onChange={(e) => setEditing({ ...editing, minDaysOverdue: e.target.value })}
+                />
+              </div>
+            )}
+            {editing.action === "create_task" && (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="rule-task">Task title</Label>
+                  <Input
+                    id="rule-task"
+                    value={editing.taskTitle}
+                    onChange={(e) => setEditing({ ...editing, taskTitle: e.target.value })}
+                    placeholder="e.g. Prepare and file Vakalatnama"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="rule-due">Task due in (days)</Label>
+                  <Input
+                    id="rule-due"
+                    type="number"
+                    min={0}
+                    value={editing.taskDueInDays}
+                    onChange={(e) => setEditing({ ...editing, taskDueInDays: e.target.value })}
+                  />
+                </div>
+              </>
+            )}
+            {editing.action === "whatsapp_template" && (
+              <div className="space-y-2">
+                <Label htmlFor="rule-template">Approved WhatsApp template</Label>
+                <Input
+                  id="rule-template"
+                  value={editing.templateName}
+                  onChange={(e) => setEditing({ ...editing, templateName: e.target.value })}
+                  placeholder="hearing_reminder, invoice_reminder or case_update"
+                />
+              </div>
+            )}
+          </div>
+          {editing.action === "whatsapp_template" && (
+            <label className="flex items-start gap-2 text-sm">
+              <Checkbox
+                checked={editing.whatsappAuthorized}
+                onCheckedChange={(v) =>
+                  setEditing({ ...editing, whatsappAuthorized: v === true })
+                }
+              />
+              <span>
+                I authorise sending the approved template to opted-in clients
+                when this rule fires. External messages always honour the
+                recipient's WhatsApp preferences.
+              </span>
+            </label>
+          )}
+          <label className="flex items-center gap-2 text-sm">
+            <Switch
+              checked={editing.enabled}
+              onCheckedChange={(v) => setEditing({ ...editing, enabled: v })}
+              aria-label="Rule enabled"
+            />
+            Enabled
+          </label>
+          <div className="flex gap-2">
+            <Button size="sm" disabled={busy} onClick={() => void submit()}>
+              {busy ? "Saving…" : editId ? "Save changes" : "Create rule"}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setEditing(null);
+                setEditId(null);
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RuleRunHistory({
+  runs,
+}: {
+  runs:
+    | {
+        _id: string;
+        ruleName: string;
+        status: string;
+        detail?: string;
+        failureReason?: string;
+        createdTaskId?: string;
+        reviewState?: "pending" | "confirmed" | "rejected";
+        ranAt: number;
+      }[]
+    | undefined;
+}) {
+  const review = useMutation(api.reminders.reviewRun);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const decide = async (runId: string, decision: "confirmed" | "rejected") => {
+    setBusyId(runId);
+    try {
+      await review({
+        runId: runId as Id<"automationRuns">,
+        decision,
+      });
+      toast.success(decision === "confirmed" ? "Task confirmed." : "Task rejected.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed.");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <p className="type-label ink-faded">Execution history</p>
+      {runs === undefined && (
+        <p className="text-sm text-muted-foreground">Retrieving history…</p>
+      )}
+      {runs?.length === 0 && (
+        <p className="text-sm text-muted-foreground">
+          No executions yet. Runs appear here with their outcome — automated
+          tasks wait here for review before counting as confirmed.
+        </p>
+      )}
+      {runs?.map((run) => (
+        <div
+          key={run._id}
+          className="flex flex-col gap-2 rounded-md border border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+        >
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-medium">{run.ruleName}</span>
+              <Badge variant={RUN_STATUS_VARIANT[run.status] ?? "outline"}>
+                {run.status}
+              </Badge>
+              {run.createdTaskId && (
+                <Badge
+                  variant={
+                    run.reviewState === "confirmed"
+                      ? "secondary"
+                      : run.reviewState === "rejected"
+                        ? "outline"
+                        : "default"
+                  }
+                >
+                  {run.reviewState === "confirmed"
+                    ? "Task confirmed"
+                    : run.reviewState === "rejected"
+                      ? "Task rejected"
+                      : "Task needs review"}
+                </Badge>
+              )}
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {new Date(run.ranAt).toLocaleString("en-IN", {
+                timeZone: "Asia/Kolkata",
+                day: "numeric",
+                month: "short",
+                hour: "numeric",
+                minute: "2-digit",
+              })}
+              {run.failureReason ? ` — ${run.failureReason}` : run.detail ? ` — ${run.detail}` : ""}
+            </p>
+          </div>
+          {run.createdTaskId && run.reviewState === "pending" && (
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                disabled={busyId === run._id}
+                onClick={() => void decide(run._id, "confirmed")}
+              >
+                Confirm
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busyId === run._id}
+                onClick={() => void decide(run._id, "rejected")}
+              >
+                Reject
+              </Button>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------
+// Notification preferences — what reaches this user
+// ---------------------------------------------------------------
+
+const MUTABLE_KINDS = [
+  "hearing_reminder",
+  "deadline_reminder",
+  "task_assigned",
+  "doc_request",
+  "message",
+  "draft_approval",
+  "invoice_followup",
+  "automation",
+] as const;
+
+const MUTABLE_LABELS: Record<string, string> = {
+  hearing_reminder: "Hearing reminders",
+  deadline_reminder: "Deadline reminders",
+  task_assigned: "Task assignments",
+  doc_request: "Document requests",
+  message: "New messages",
+  draft_approval: "Draft approvals",
+  invoice_followup: "Invoice follow-ups",
+  automation: "Automation notices",
+};
+
+function NotificationPrefsCard() {
+  const prefs = useQuery(api.reminders.getMyPreferences);
+  const save = useMutation(api.reminders.saveMyPreferences);
+  const [emailUpdates, setEmailUpdates] = useState<boolean | null>(null);
+  const [muted, setMuted] = useState<Set<string> | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const email = emailUpdates ?? prefs?.emailUpdates ?? false;
+  const mutedSet = muted ?? new Set(prefs?.mutedKinds ?? []);
+
+  return (
+    <Card className="rule-frame bg-card">
+      <CardHeader>
+        <CardTitle className="font-serif text-2xl">Notification preferences</CardTitle>
+        <CardDescription>
+          The in-app centre is always on. Choose whether non-urgent notices
+          also reach you by email, and mute categories you do not need.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <label className="flex items-center justify-between gap-4 rounded-md border border-border px-4 py-3">
+          <span>
+            <span className="block text-sm font-medium">Email me non-urgent updates</span>
+            <span className="block text-xs text-muted-foreground">
+              Messages, approvals and document requests in addition to the in-app centre. Critical hearing and deadline reminders are never muted.
+            </span>
+          </span>
+          <Switch
+            checked={email}
+            onCheckedChange={setEmailUpdates}
+            aria-label="Email non-urgent updates"
+          />
+        </label>
+        <div className="space-y-2">
+          <p className="type-label ink-faded">Mute in the notification centre</p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {MUTABLE_KINDS.map((k) => (
+              <label
+                key={k}
+                className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm"
+              >
+                <Checkbox
+                  checked={!mutedSet.has(k)}
+                  onCheckedChange={(v) => {
+                    const next = new Set(mutedSet);
+                    if (v === true) {
+                      next.delete(k);
+                    } else {
+                      next.add(k);
+                    }
+                    setMuted(next);
+                  }}
+                />
+                {MUTABLE_LABELS[k] ?? k}
+              </label>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Ticked categories appear in your centre; unticked ones are muted.
+          </p>
+        </div>
+        <Button
+          size="sm"
+          disabled={busy || prefs === undefined}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              await save({ emailUpdates: email, mutedKinds: [...mutedSet] });
+              toast.success("Preferences saved.");
+            } catch (err) {
+              toast.error(err instanceof Error ? err.message : "Could not save.");
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {busy ? "Saving…" : "Save preferences"}
+        </Button>
       </CardContent>
     </Card>
   );
