@@ -416,6 +416,76 @@ export default defineSchema({
     createdAt: v.number(),
   }).index("by_matter", ["matterId"]),
 
+  // Draft review & approval desk — one row per drafted document, one
+  // immutable row per version. Approval attaches to a specific version;
+  // new text always means a new version requiring fresh review.
+  drafts: defineTable({
+    orgId: v.id("organizations"),
+    matterId: v.optional(v.id("matters")),
+    title: v.string(),
+    kind: v.union(
+      v.literal("client_update"),
+      v.literal("legal_notice"),
+      v.literal("petition_draft"),
+      v.literal("internal_memo"),
+      v.literal("other"),
+    ),
+    currentVersion: v.number(),
+    // Roll-up status of the current version.
+    status: v.union(
+      v.literal("drafted"),
+      v.literal("in_review"),
+      v.literal("change_requested"),
+      v.literal("approved"),
+      v.literal("rejected"),
+      v.literal("shared"),
+      v.literal("filed"),
+    ),
+    createdById: v.id("users"),
+    updatedAt: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_matter", ["matterId"])
+    .index("by_status", ["status"]),
+
+  draftVersions: defineTable({
+    draftId: v.id("drafts"),
+    version: v.number(),
+    body: v.string(),
+    // drafted -> in_review -> approved / rejected; shared/filed after approval.
+    status: v.union(
+      v.literal("drafted"),
+      v.literal("in_review"),
+      v.literal("change_requested"),
+      v.literal("approved"),
+      v.literal("rejected"),
+      v.literal("shared"),
+      v.literal("filed"),
+    ),
+    authorId: v.id("users"),
+    reviewerId: v.optional(v.id("users")),
+    reviewedAt: v.optional(v.number()),
+    reviewNote: v.optional(v.string()),
+    approvedAt: v.optional(v.number()),
+    approvedById: v.optional(v.id("users")),
+    // Version lineage: the version this revision replaces.
+    revisesVersion: v.optional(v.number()),
+    createdAt: v.number(),
+  }).index("by_draft", ["draftId"]),
+
+  // Comments/annotations and change requests against a specific version.
+  draftComments: defineTable({
+    draftId: v.id("drafts"),
+    version: v.number(),
+    authorId: v.id("users"),
+    body: v.string(),
+    // A change request blocks approval until a new version addresses it.
+    isChangeRequest: v.optional(v.boolean()),
+    resolvedAt: v.optional(v.number()),
+    createdAt: v.number(),
+  }).index("by_draft", ["draftId"]),
+
   // Client document-request checklists — one row per requested item.
   // Client uploads land as `pending` submissions and stay separate from
   // firm-approved material until a reviewer accepts them.
