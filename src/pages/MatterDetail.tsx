@@ -20,6 +20,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { api } from "@/convex/_generated/api";
+import { HearingPackDialog } from "@/components/HearingPackDialog";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { MatterStatus } from "@/convex/schema";
 import type { Doc } from "@/convex/_generated/dataModel";
@@ -53,7 +54,7 @@ import {
   StickyNote,
   Upload,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { toast } from "sonner";
 
@@ -88,6 +89,7 @@ function DocumentLink({ documentId }: { documentId: Id<"matterDocuments"> }) {
 }
 
 export default function MatterDetail() {
+  const [packOpen, setPackOpen] = useState(false);
   const { matterId: rawId } = useParams<{ matterId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const matterId = rawId as Id<"matters"> | undefined;
@@ -97,7 +99,6 @@ export default function MatterDetail() {
   const documents = useQuery(api.matters.listDocuments, matterId ? { matterId } : "skip");
   const orders = useQuery(api.matters.allOrders);
   const markOrderReviewed = useMutation(api.matters.markOrderReviewed);
-  const updateMatter = useMutation(api.matters.update);
   const closeMatterFn = useMutation(api.matters.closeMatter);
   const reopenMatterFn = useMutation(api.matters.reopenMatter);
   const setArchivedFn = useMutation(api.matters.setArchived);
@@ -144,7 +145,8 @@ export default function MatterDetail() {
   const [partySide, setPartySide] = useState("ours");
   const [partyRole, setPartyRole] = useState("");
   const [partyCounsel, setPartyCounsel] = useState("");
-  const [teamDraft, setTeamDraft] = useState<Id<"users">[]>([]);
+  const [teamDraft, setTeamDraft] = useState<Id<"users">[] | null>(null);
+  const teamSel = teamDraft ?? matter?.teamIds ?? [];
   const acIsOwnerPartnerAdmin =
     caps?.orgRole === "owner" ||
     caps?.orgRole === "partner" ||
@@ -173,7 +175,6 @@ export default function MatterDetail() {
   const [requestNote, setRequestNote] = useState<string | null>(null); // which doc gets checklist note
   const [requestText, setRequestText] = useState("");
   const [editOpen, setEditOpen] = useState(false);
-  const [partyOpen, setPartyOpen] = useState(false);
   const [issueTitle, setIssueTitle] = useState("");
   const [issueDetail, setIssueDetail] = useState("");
   const [busy, setBusy] = useState(false);
@@ -190,10 +191,6 @@ export default function MatterDetail() {
   const setTab = (value: string) => {
     setSearchParams(value === "hearings" ? {} : { tab: value }, { replace: true });
   };
-
-  useEffect(() => {
-    setTeamDraft(matter?.teamIds ?? []);
-  }, [matter?.teamIds]);
 
   if (matter === undefined) {
     return (
@@ -504,6 +501,18 @@ export default function MatterDetail() {
 
         {/* Hearings */}
         <TabsContent value="hearings" className="mt-6">
+          <div className="mb-4 flex justify-end">
+            <Button variant="outline" size="sm" onClick={() => setPackOpen(true)}>
+              <FileText className="mr-2 h-4 w-4" /> Build hearing pack
+            </Button>
+          </div>
+          {matterId && (
+            <HearingPackDialog
+              matterId={matterId}
+              open={packOpen}
+              onOpenChange={setPackOpen}
+            />
+          )}
           <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
             <div className="space-y-3">
               {(events ?? []).filter((e) => e.kind === "hearing").length === 0 ? (
@@ -1369,9 +1378,7 @@ export default function MatterDetail() {
                 <div className="flex items-center justify-between">
                   <h3 className="font-serif text-lg font-semibold">Parties on record</h3>
                   {caps?.capabilities.includes("matter.edit") && (
-                    <Button size="sm" variant="outline" onClick={() => setPartyOpen(true)}>
-                      <Plus className="mr-1.5 size-4" /> Add party
-                    </Button>
+                    <span className="type-label ink-faded">Use the form beside to add</span>
                   )}
                 </div>
                 {(parties ?? []).length === 0 ? (
@@ -1448,7 +1455,7 @@ export default function MatterDetail() {
                         )
                         .map((m) => {
                           const uid = m.userId;
-                          const checked = teamDraft.includes(uid);
+                          const checked = teamSel.includes(uid);
                           return (
                             <label
                               key={uid}
@@ -1459,10 +1466,10 @@ export default function MatterDetail() {
                                 className="accent-[#B68A45]"
                                 checked={checked}
                                 onChange={() =>
-                                  setTeamDraft((prev) =>
+                                  setTeamDraft(
                                     checked
-                                      ? prev.filter((x) => x !== uid)
-                                      : [...prev, uid],
+                                      ? teamSel.filter((x) => x !== uid)
+                                      : [...teamSel, uid],
                                   )
                                 }
                               />
@@ -1477,7 +1484,7 @@ export default function MatterDetail() {
                           onClick={async () => {
                             setBusy(true);
                             try {
-                              await setTeamFn({ matterId: matterId!, teamIds: teamDraft });
+                              await setTeamFn({ matterId: matterId!, teamIds: teamSel });
                               toast.success("Matter team saved.");
                             } catch (err) {
                               toast.error(err instanceof Error ? err.message : "Failed.");
