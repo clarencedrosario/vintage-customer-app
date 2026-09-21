@@ -4,6 +4,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -33,6 +34,7 @@ import {
 import { useMutation, useQuery } from "convex/react";
 import {
   ArrowLeft,
+  BellRing,
   CalendarClock,
   CheckCircle2,
   CircleDashed,
@@ -42,6 +44,7 @@ import {
   History,
   Landmark,
   ListChecks,
+  Loader2,
   MessageSquare,
   Paperclip,
   Scale,
@@ -958,6 +961,9 @@ export default function MatterDetail() {
               ))
             )}
           </div>
+
+          {/* Client document-request checklist */}
+          <DocumentRequestPanel matterId={matterId!} />
         </TabsContent>
 
         {/* Time */}
@@ -2094,6 +2100,424 @@ function EditMatterDialog({
           </Button>
           <Button onClick={submit} disabled={busy || !title.trim()}>
             Save details
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Client document-request checklist (chamber side).
+// ---------------------------------------------------------------------
+
+const REQUEST_STATUS_META: Record<
+  string,
+  { label: string; cls: string; rank: number }
+> = {
+  requested: { label: "Requested", cls: "text-[#8a6a33]", rank: 0 },
+  uploaded: { label: "Uploaded — to review", cls: "text-[#4f6b8f]", rank: 0 },
+  under_review: { label: "Under review", cls: "text-[#4f6b8f]", rank: 0 },
+  rejected: { label: "Rejected — resend needed", cls: "text-red-700", rank: 1 },
+  accepted: { label: "Accepted", cls: "text-emerald-700", rank: 2 },
+};
+
+const REQUEST_NOW = Date.now();
+
+type RequestRow = {
+  _id: string;
+  title: string;
+  instructions: string | null;
+  dueAt: number | null;
+  status: string;
+  currentStorageId: string | null;
+  submissionCount: number;
+  reviewNote: string | null;
+  reviewedByName: string | null;
+  acceptedDocumentId: string | null;
+  lastReminderAt: number | null;
+  requestedByName: string | null;
+  comments: { body: string; at: number; fromClient: boolean; authorName: string }[];
+};
+
+function DocumentRequestPanel({ matterId }: { matterId: Id<"matters"> }) {
+  const requests = useQuery(
+    api.documentRequests.listForMatter,
+    { matterId },
+  ) as RequestRow[] | undefined;
+  const caps = useQuery(api.workspace.myCapabilities);
+  const canReview = caps?.capabilities.includes("task.manage") ?? false;
+
+  return (
+    <div className="mt-8">
+      <DocumentRequestSection
+        matterId={matterId}
+        requests={requests ?? []}
+        loading={requests === undefined}
+        canReview={canReview}
+      />
+    </div>
+  );
+}
+
+function DocumentRequestSection({
+  matterId,
+  requests,
+  loading,
+  canReview,
+}: {
+  matterId: Id<"matters">;
+  requests: RequestRow[];
+  loading: boolean;
+  canReview: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <section aria-label="Client document-request checklist">
+      <div className="flex items-center justify-between">
+        <h3 className="flex items-center gap-2 font-serif text-lg font-semibold">
+          <ClipboardCheck className="size-4 text-[#B68A45]" aria-hidden="true" />
+          Requested from the client
+        </h3>
+        {canReview && (
+          <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
+            <Plus className="mr-1.5 size-4" /> Request a document
+          </Button>
+        )}
+      </div>
+      <p className="type-label mt-1 ink-faded">
+        Client uploads stay here, separate from firm evidence, until a reviewer
+        accepts them. Accepted versions are never silently replaced.
+      </p>
+
+      <div className="mt-3 space-y-2">
+        {loading ? (
+          <p className="text-sm text-muted-foreground">Loading checklist…</p>
+        ) : requests.length === 0 ? (
+          <Card className="border-dashed">
+            <CardContent className="py-6 text-center text-sm ink-faded">
+              Nothing requested from the client on this matter yet.
+            </CardContent>
+          </Card>
+        ) : (
+          requests.map((r) => (
+            <DocumentRequestRow key={r._id} request={r} canReview={canReview} />
+          ))
+        )}
+      </div>
+
+      <NewRequestDialog matterId={matterId} open={open} onOpenChange={setOpen} />
+    </section>
+  );
+}
+
+function DocumentRequestRow({
+  request: r,
+  canReview,
+}: {
+  request: RequestRow;
+  canReview: boolean;
+}) {
+  const startReview = useMutation(api.documentRequests.startReview);
+  const accept = useMutation(api.documentRequests.accept);
+  const reject = useMutation(api.documentRequests.reject);
+  const reopen = useMutation(api.documentRequests.reopen);
+  const remind = useMutation(api.documentRequests.markReminderSent);
+  const addComment = useMutation(api.documentRequests.addComment);
+
+  const [reviewing, setReviewing] = useState(false);
+  const [note, setNote] = useState("");
+  const [commentText, setCommentText] = useState("");
+  const [showComments, setShowComments] = useState(false);
+
+  const meta = REQUEST_STATUS_META[r.status] ?? {
+    label: r.status,
+    cls: "",
+    rank: 3,
+  };
+  const overdue =
+    (r.status === "requested" || r.status === "rejected") &&
+    r.dueAt !== null &&
+    r.dueAt < REQUEST_NOW;
+  const awaiting = r.status === "uploaded" || r.status === "under_review";
+
+  const run = (fn: () => Promise<unknown>, ok: string) =>
+    fn()
+      .then(() => toast.success(ok))
+      .catch((e) => toast.error(e instanceof Error ? e.message : "Failed."));
+
+  return (
+    <div className="rule-frame rounded-lg p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-medium">{r.title}</p>
+          <p className="type-label mt-0.5 ink-faded">
+            {r.dueAt !== null && <>Due {formatDateIN(r.dueAt)} · </>}
+            {r.submissionCount} submission{r.submissionCount === 1 ? "" : "s"}
+            {r.requestedByName && ` · requested by ${r.requestedByName}`}
+          </p>
+        </div>
+        <div className="text-right">
+          <p className={`type-label ${meta.cls}`}>{meta.label}</p>
+          {overdue && <p className="type-label text-red-700">Overdue</p>}
+          {r.reviewedByName && awaiting === false && r.status !== "requested" && (
+            <p className="type-label ink-faded">
+              by {r.reviewedByName}
+            </p>
+          )}
+        </div>
+      </div>
+
+      {r.instructions && (
+        <p className="mt-2 rounded border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+          {r.instructions}
+        </p>
+      )}
+      {r.status === "rejected" && r.reviewNote && (
+        <p className="mt-2 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+          Rejection explained to the client: {r.reviewNote}
+        </p>
+      )}
+
+      {/* Review actions */}
+      {canReview && r.status === "uploaded" && (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {reviewing ? (
+            <>
+              <Textarea
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                rows={2}
+                placeholder="Note to the client (required to reject)…"
+                className="min-w-56 flex-1 text-xs"
+                aria-label="Review note"
+              />
+              <Button
+                size="sm"
+                onClick={() =>
+                  run(
+                    () => accept({ requestId: r._id as Id<"documentRequests">, note: note || undefined }),
+                    "Accepted and filed on the matter.",
+                  )
+                }
+              >
+                Accept
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={!note.trim()}
+                onClick={() =>
+                  run(
+                    () => reject({ requestId: r._id as Id<"documentRequests">, reason: note }),
+                    "Rejected — explanation sent to the client.",
+                  )
+                }
+              >
+                Reject
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setReviewing(false)}>
+                Cancel
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button size="sm" variant="outline" onClick={() => setReviewing(true)}>
+                Review submission…
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() =>
+                  run(
+                    () => startReview({ requestId: r._id as Id<"documentRequests"> }),
+                    "Moved under review.",
+                  )
+                }
+              >
+                Mark under review
+              </Button>
+            </>
+          )}
+        </div>
+      )}
+      {canReview && r.status === "under_review" && (
+        <p className="mt-2 type-label text-[#4f6b8f]">
+          Use “Review submission…” once you have read the file — open it from
+          the Documents list above.
+        </p>
+      )}
+      {canReview && (r.status === "rejected" || r.status === "accepted") && (
+        <Button
+          size="sm"
+          variant="ghost"
+          className="mt-2"
+          onClick={() =>
+            run(
+              () => reopen({ requestId: r._id as Id<"documentRequests"> }),
+              "Request re-opened for a new submission.",
+            )
+          }
+        >
+          Re-open request
+        </Button>
+      )}
+      {canReview && (r.status === "requested" || r.status === "rejected") && (
+        <Button
+          size="sm"
+          variant="ghost"
+          className="mt-2"
+          disabled={
+            r.lastReminderAt !== null &&
+            REQUEST_NOW - r.lastReminderAt < 24 * 60 * 60 * 1000
+          }
+          onClick={() =>
+            run(
+              () => remind({ requestId: r._id as Id<"documentRequests"> }),
+              "Reminder recorded (24h cooldown).",
+            )
+          }
+        >
+          <BellRing className="mr-1.5 size-3.5" /> Record reminder sent
+        </Button>
+      )}
+
+      {/* Comments */}
+      <div className="mt-3 border-t pt-2">
+        <button
+          type="button"
+          className="type-label text-[#4f6b8f] underline-offset-2 hover:underline"
+          onClick={() => setShowComments((s) => !s)}
+        >
+          {showComments ? "Hide" : "Comments"} ({r.comments.length})
+        </button>
+        {showComments && (
+          <div className="mt-2 space-y-2">
+            {r.comments.map((c, i) => (
+              <div key={i} className="rounded border bg-background px-3 py-2">
+                <p className="text-xs">{c.body}</p>
+                <p className="type-label mt-1 ink-faded">
+                  {c.fromClient ? "Client" : c.authorName} · {formatDateTimeIN(c.at)}
+                </p>
+              </div>
+            ))}
+            {canReview && (
+              <div className="flex gap-2">
+                <Input
+                  value={commentText}
+                  onChange={(e) => setCommentText(e.target.value)}
+                  placeholder="Message the client about this request…"
+                  className="h-8 text-xs"
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!commentText.trim()}
+                  onClick={() =>
+                    run(
+                      () =>
+                        addComment({
+                          requestId: r._id as Id<"documentRequests">,
+                          body: commentText,
+                        }),
+                      "Comment sent.",
+                    ).then(() => setCommentText(""))
+                  }
+                >
+                  Send
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function NewRequestDialog({
+  matterId,
+  open,
+  onOpenChange,
+}: {
+  matterId: Id<"matters">;
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+}) {
+  const request = useMutation(api.documentRequests.request);
+  const [title, setTitle] = useState("");
+  const [instructions, setInstructions] = useState("");
+  const [dueDate, setDueDate] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    if (!title.trim()) {
+      toast.error("Name the document you need.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await request({
+        matterId,
+        title,
+        instructions: instructions || undefined,
+        dueDate: dueDate || undefined,
+      });
+      toast.success("Request added to the client's checklist.");
+      onOpenChange(false);
+      setTitle("");
+      setInstructions("");
+      setDueDate("");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="font-serif">Request a document</DialogTitle>
+          <DialogDescription>
+            The client sees this on their portal with your instructions and due
+            date, and uploads securely against it.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="dr-title">Document</Label>
+            <Input
+              id="dr-title"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="e.g. Certified copy of sale deed"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="dr-instructions">Instructions</Label>
+            <Textarea
+              id="dr-instructions"
+              value={instructions}
+              onChange={(e) => setInstructions(e.target.value)}
+              rows={3}
+              placeholder="What exactly should the client send?"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="dr-due">Due date</Label>
+            <Input
+              id="dr-due"
+              type="date"
+              value={dueDate}
+              onChange={(e) => setDueDate(e.target.value)}
+            />
+          </div>
+          <Button className="w-full" onClick={submit} disabled={busy}>
+            {busy && <Loader2 className="mr-2 size-4 animate-spin" />}
+            Add to checklist
           </Button>
         </div>
       </DialogContent>

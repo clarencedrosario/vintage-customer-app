@@ -234,7 +234,7 @@ function SubmitDocumentDialog({
 
 export default function ClientPortal() {
   const data = useQuery(api.portals.clientPortal);
-  const acknowledge = useMutation(api.portals.clientAcknowledgeRequest);
+  const requests = useQuery(api.documentRequests.clientChecklist);
   const [now] = useState(() => Date.now());
 
   if (data === undefined) {
@@ -279,10 +279,7 @@ export default function ClientPortal() {
     closed: { label: "Closed", cls: "text-emerald-700" },
   };
 
-  const checklist = data.documents.filter((d) => d.requestedFromClient);
-  const pendingChecklist = checklist.filter(
-    (d) => !(d.seenByClient ?? []).length,
-  );
+  const checklist = requests ?? [];
   const invoiceStatuses: Record<string, { label: string; cls: string }> = {
     draft: { label: "Draft", cls: "text-muted-foreground" },
     sent: { label: "Awaiting payment", cls: "text-[#8a6a33]" },
@@ -455,7 +452,7 @@ export default function ClientPortal() {
       {/* Document-request checklists */}
       <section aria-label="Document requests" className="mt-10">
         <p className="type-label ink-faded flex items-center gap-2">
-          <ClipboardCheck className="size-3.5" /> Requested documents
+          <ClipboardCheck className="size-3.5" /> Documents requested from you
         </p>
         <div className="mt-3 space-y-2">
           {checklist.length === 0 ? (
@@ -463,53 +460,7 @@ export default function ClientPortal() {
               Nothing requested from you at present.
             </p>
           ) : (
-            <>
-              {pendingChecklist.length > 0 && (
-                <p className="text-xs text-[#8a6a33]">
-                  {pendingChecklist.length} document
-                  {pendingChecklist.length > 1 ? "s" : ""} awaiting your
-                  acknowledgement.
-                </p>
-              )}
-              {checklist.map((d) => {
-                const acknowledged = (d.seenByClient ?? []).length > 0;
-                return (
-                  <div
-                    key={d._id}
-                    className="rule-frame flex items-center justify-between gap-4 rounded-lg p-4"
-                  >
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium">{d.name}</p>
-                      {d.requestedNote && (
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          {d.requestedNote}
-                        </p>
-                      )}
-                    </div>
-                    {acknowledged ? (
-                      <span className="type-label text-emerald-700">
-                        Acknowledged
-                      </span>
-                    ) : (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={async () => {
-                          try {
-                            await acknowledge({ documentId: d._id });
-                            toast.success("Marked as seen.");
-                          } catch {
-                            toast.error("Could not acknowledge.");
-                          }
-                        }}
-                      >
-                        Acknowledge
-                      </Button>
-                    )}
-                  </div>
-                );
-              })}
-            </>
+            <ClientRequestList requests={checklist} />
           )}
         </div>
       </section>
@@ -615,5 +566,198 @@ export default function ClientPortal() {
         </ol>
       </section>
     </ChamberShell>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Client document-request checklist — upload, track, respond.
+// ---------------------------------------------------------------------
+
+// Captured at module load — overdue markers refresh on next load.
+const REQUEST_NOW = Date.now();
+
+type ClientRequest = {
+  _id: string;
+  matterReference: string;
+  matterTitle: string;
+  title: string;
+  instructions: string | null;
+  dueAt: number | null;
+  status: string;
+  hasFile: boolean;
+  reviewNote: string | null;
+  comments: { body: string; at: number; fromClient: boolean }[];
+};
+
+function ClientRequestList({ requests }: { requests: ClientRequest[] }) {
+  return (
+    <>
+      {requests.map((r) => (
+        <ClientRequestRow key={r._id} request={r} />
+      ))}
+    </>
+  );
+}
+
+function ClientRequestRow({ request: r }: { request: ClientRequest }) {
+  const uploadUrl = useMutation(api.documentRequests.clientUploadUrl);
+  const submit = useMutation(api.documentRequests.clientSubmit);
+  const comment = useMutation(api.documentRequests.clientComment);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [commentText, setCommentText] = useState("");
+  const [showComments, setShowComments] = useState(false);
+
+  const overdue =
+    (r.status === "requested" || r.status === "rejected") &&
+    r.dueAt !== null &&
+    r.dueAt < REQUEST_NOW;
+
+  const STATUS_META: Record<string, { label: string; cls: string }> = {
+    requested: { label: "Requested — action needed", cls: "text-[#8a6a33]" },
+    uploaded: { label: "Uploaded — awaiting review", cls: "text-[#4f6b8f]" },
+    under_review: { label: "Under review", cls: "text-[#4f6b8f]" },
+    accepted: { label: "Accepted", cls: "text-emerald-700" },
+    rejected: { label: "Re-send requested", cls: "text-red-700" },
+  };
+  const meta = STATUS_META[r.status] ?? { label: r.status, cls: "" };
+
+  const upload = async (file: File) => {
+    setBusy(true);
+    try {
+      const url = await uploadUrl({ requestId: r._id as Id<"documentRequests"> });
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": file.type || "application/octet-stream" },
+        body: file,
+      });
+      const { storageId } = (await res.json()) as { storageId: Id<"_storage"> };
+      await submit({
+        requestId: r._id as Id<"documentRequests">,
+        name: file.name,
+        storageId,
+      });
+      toast.success("Uploaded — your lawyer will review it.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Upload failed.");
+    } finally {
+      setBusy(false);
+      if (fileInput.current) fileInput.current.value = "";
+    }
+  };
+
+  return (
+    <div className="rule-frame rounded-lg p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-medium">{r.title}</p>
+          <p className="type-label mt-0.5 ink-faded">
+            {r.matterReference} · {r.matterTitle}
+            {r.dueAt !== null && ` · due ${formatDateIN(r.dueAt)}`}
+          </p>
+        </div>
+        <div className="text-right">
+          <p className={`type-label ${meta.cls}`}>{meta.label}</p>
+          {overdue && (
+            <p className="type-label text-red-700">Past the due date</p>
+          )}
+        </div>
+      </div>
+
+      {r.instructions && (
+        <p className="mt-2 rounded border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+          {r.instructions}
+        </p>
+      )}
+
+      {r.status === "rejected" && r.reviewNote && (
+        <p className="mt-2 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+          {r.reviewNote}
+        </p>
+      )}
+      {r.status === "accepted" && (
+        <p className="mt-2 text-xs text-emerald-700">
+          Your document was accepted by the chamber.
+        </p>
+      )}
+
+      {(r.status === "requested" || r.status === "rejected") && (
+        <div className="mt-3">
+          <input
+            ref={fileInput}
+            type="file"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void upload(f);
+            }}
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => fileInput.current?.click()}
+          >
+            <Upload className="mr-1.5 size-3.5" />
+            {busy ? "Uploading…" : r.status === "rejected" ? "Upload again" : "Upload securely"}
+          </Button>
+        </div>
+      )}
+
+      {(r.comments.length > 0 || r.status !== "accepted") && (
+        <div className="mt-3 border-t pt-2">
+          <button
+            type="button"
+            className="type-label text-[#4f6b8f] underline-offset-2 hover:underline"
+            onClick={() => setShowComments((s) => !s)}
+          >
+            {showComments ? "Hide" : "Comments"} ({r.comments.length})
+          </button>
+          {showComments && (
+            <div className="mt-2 space-y-2">
+              {r.comments.map((c, i) => (
+                <div key={i} className="rounded border bg-background px-3 py-2">
+                  <p className="text-xs">{c.body}</p>
+                  <p className="type-label mt-1 ink-faded">
+                    {c.fromClient ? "You" : "Chamber"} · {formatDateTimeIN(c.at)}
+                  </p>
+                </div>
+              ))}
+              {r.status !== "accepted" && (
+                <div className="flex gap-2">
+                  <Textarea
+                    value={commentText}
+                    onChange={(e) => setCommentText(e.target.value)}
+                    rows={2}
+                    placeholder="Ask about this request…"
+                    className="text-xs"
+                    aria-label="Comment on this request"
+                  />
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={!commentText.trim() || busy}
+                    onClick={() =>
+                      comment({
+                        requestId: r._id as Id<"documentRequests">,
+                        body: commentText,
+                      })
+                        .then(() => setCommentText(""))
+                        .catch((err) =>
+                          toast.error(
+                            err instanceof Error ? err.message : "Failed.",
+                          ),
+                        )
+                    }
+                  >
+                    Send
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

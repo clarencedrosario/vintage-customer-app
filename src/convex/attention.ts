@@ -137,7 +137,7 @@ export const feed = query({
       userRows.map((u) => [u._id, u.name ?? u.email ?? "Unassigned"]),
     );
 
-    const [hearings, tasks, documents, notes, orders, deadlines, invoices] =
+    const [hearings, tasks, documents, notes, orders, deadlines, docRequests, invoices] =
       await Promise.all([
         ctx.db.query("hearings").collect(),
         ctx.db.query("tasks").collect(),
@@ -147,6 +147,10 @@ export const feed = query({
         ctx.db
           .query("deadlines")
           .withIndex("by_org", (q) => q.eq("orgId", ac.org._id))
+          .collect(),
+        ctx.db
+          .query("documentRequests")
+          .withIndex("by_matter")
           .collect(),
         ctx.db
           .query("invoices")
@@ -280,6 +284,53 @@ export const feed = query({
         action: actionFor("deadline"),
         critical: true,
       });
+    }
+
+    // -------------------------------------------------------------
+    // 3c. Client document requests — overdue or awaiting review
+    // -------------------------------------------------------------
+    for (const r of docRequests) {
+      if (r.orgId !== ac.org._id) continue;
+      if (!visibleIds.has(r.matterId)) continue;
+      const m = matterById.get(r.matterId);
+      if (!m) continue;
+      if (r.status === "uploaded" || r.status === "under_review") {
+        // A submission waiting on the chamber — gentle nudge, not critical.
+        if (now - (r.currentUploadedAt ?? r.createdAt) < 2 * DAY_MS) continue;
+        items.push({
+          kind: "missing_document",
+          itemId: `docreq-review:${r._id}`,
+          matterId: r.matterId,
+          matterReference: m.reference,
+          title: r.title,
+          reason: "The client uploaded this — it has not been reviewed yet.",
+          date: r.currentUploadedAt ?? r.createdAt,
+          responsible: "You",
+          action: actionFor("missing_document"),
+        });
+      } else if (
+        (r.status === "requested" || r.status === "rejected") &&
+        r.dueAt !== undefined &&
+        r.dueAt <= now
+      ) {
+        items.push({
+          kind: "missing_document",
+          itemId: `docreq-overdue:${r._id}`,
+          matterId: r.matterId,
+          matterReference: m.reference,
+          title: r.title,
+          reason:
+            r.status === "rejected"
+              ? "Rejected and re-requested — the client has not resubmitted."
+              : "Requested from the client and past its due date.",
+          date: r.dueAt,
+          responsible: r.requestedById
+            ? (nameByUser.get(r.requestedById) ?? "You")
+            : "You",
+          action: actionFor("missing_document"),
+          critical: r.dueAt < now - 7 * DAY_MS,
+        });
+      }
     }
 
     // -------------------------------------------------------------

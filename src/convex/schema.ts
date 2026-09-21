@@ -416,6 +416,60 @@ export default defineSchema({
     createdAt: v.number(),
   }).index("by_matter", ["matterId"]),
 
+  // Client document-request checklists — one row per requested item.
+  // Client uploads land as `pending` submissions and stay separate from
+  // firm-approved material until a reviewer accepts them.
+  documentRequests: defineTable({
+    orgId: v.id("organizations"),
+    matterId: v.id("matters"),
+    requestedById: v.id("users"),
+    title: v.string(),
+    instructions: v.optional(v.string()),
+    // End of the local due date (Asia/Kolkata).
+    dueAt: v.optional(v.number()),
+    status: v.union(
+      v.literal("requested"),
+      v.literal("uploaded"),
+      v.literal("under_review"),
+      v.literal("accepted"),
+      v.literal("rejected"),
+    ),
+    // Latest client submission (pending review). Storage ids of prior
+    // submissions are kept in `submissions` — accepted versions are
+    // never silently overwritten.
+    currentStorageId: v.optional(v.id("_storage")),
+    currentUploadedAt: v.optional(v.number()),
+    submissions: v.optional(
+      v.array(
+        v.object({
+          storageId: v.id("_storage"),
+          name: v.string(),
+          uploadedAt: v.number(),
+        }),
+      ),
+    ),
+    reviewNote: v.optional(v.string()),
+    reviewedAt: v.optional(v.number()),
+    reviewedById: v.optional(v.id("users")),
+    // The accepted document copied into the firm's record.
+    acceptedDocumentId: v.optional(v.id("matterDocuments")),
+    comments: v.optional(
+      v.array(
+        v.object({
+          // Null author = the client wrote it.
+          authorId: v.optional(v.id("users")),
+          fromClient: v.boolean(),
+          body: v.string(),
+          at: v.number(),
+        }),
+      ),
+    ),
+    lastReminderAt: v.optional(v.number()),
+    createdAt: v.number(),
+  })
+    .index("by_matter", ["matterId"])
+    .index("by_status", ["status"]),
+
   matterNotes: defineTable({
     matterId: v.id("matters"),
     authorId: v.optional(v.id("users")),
