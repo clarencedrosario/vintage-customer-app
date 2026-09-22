@@ -22,6 +22,7 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import {
+  Activity,
   Bell,
   BellRing,
   Landmark,
@@ -40,6 +41,8 @@ const NAV = [
   { to: "/tasks", label: "Tasks", icon: ClipboardList },
   { to: "/drafts", label: "Draft review", icon: FileCheck },
   { to: "/comms", label: "Comms", icon: ScrollText },
+  { to: "/health", label: "Matter health", icon: Activity },
+  { to: "/reports", label: "Reports", icon: ScrollText },
   { to: "/clients", label: "Clients", icon: Users },
   { to: "/billing", label: "Billing", icon: Receipt },
   { to: "/team", label: "Team", icon: UsersRound },
