@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/select";
 import { api } from "@/convex/_generated/api";
 import { HearingPackDialog } from "@/components/HearingPackDialog";
+import { AiStudio } from "@/components/AiStudio";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { MatterStatus } from "@/convex/schema";
 import type { Doc } from "@/convex/_generated/dataModel";
@@ -31,10 +32,10 @@ import {
   formatINR,
   todayIN,
 } from "@/lib/format";
-import { useMutation, useQuery } from "convex/react";
-import {
+import { useMutation, useQuery } from "convex/react";import {
   ArrowLeft,
   BellRing,
+  Bot,
   CalendarClock,
   CheckCircle2,
   CircleDashed,
@@ -499,6 +500,9 @@ export default function MatterDetail() {
           </TabsTrigger>
           <TabsTrigger value="audit" className="gap-2">
             <History className="size-4" /> Audit
+          </TabsTrigger>
+          <TabsTrigger value="ai" className="gap-2">
+            <Bot className="size-4" /> AI Studio
           </TabsTrigger>
         </TabsList>
 
@@ -1844,6 +1848,11 @@ export default function MatterDetail() {
               </table>
             </div>
           )}
+        </TabsContent>
+
+        {/* AI & OCR (section 26) */}
+        <TabsContent value="ai" className="mt-6">
+          {matterId && <AiStudio matterId={matterId} />}
         </TabsContent>
       </Tabs>
     </ChamberShell>

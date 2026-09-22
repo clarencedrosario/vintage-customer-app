@@ -42,4 +42,13 @@ crons.daily(
   {},
 );
 
+// Daily AI housekeeping: pending jobs whose runner never resolved are
+// marked expired so users see honest failure states, not a stuck spinner.
+crons.daily(
+  "ai-expire-stale-jobs",
+  { hourUTC: 21, minuteUTC: 0 },
+  internal.ai.expireStaleJobs,
+  {},
+);
+
 export default crons;

@@ -350,12 +350,14 @@ export default defineSchema({
     title: v.string(),
     detail: v.optional(v.string()),
     status: v.union(v.literal("open"), v.literal("argued"), v.literal("resolved")),
+    // AI-suggested evidence rows are labeled and removable by a human.
     evidence: v.optional(
       v.array(
         v.object({
           label: v.string(),
           documentId: v.optional(v.id("matterDocuments")),
           supports: v.boolean(),
+          aiSuggested: v.optional(v.boolean()),
         }),
       ),
     ),
@@ -1681,5 +1683,15 @@ export default defineSchema({
   })
     .index("by_matter", ["matterId"])
     .index("by_org_month", ["orgId", "monthKey"])
+    .index("by_status", ["status"])
     .index("by_user", ["requestedById"]),
+
+  // Idempotent runner claims: one row per attempt key, so a retried
+  // scheduler or two racing schedulers can never run the model twice
+  // for one job (duplicate prevention).
+  aiJobClaims: defineTable({
+    occurrenceKey: v.string(),
+    jobId: v.id("aiJobs"),
+    claimedAt: v.number(),
+  }).index("by_occurrence", ["occurrenceKey"]),
 });

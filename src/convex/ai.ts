@@ -1,5 +1,11 @@
 import { v } from "convex/values";
-import { internalMutation, mutation, query } from "./_generated/server";
+import { internal } from "./_generated/api";
+import {
+  internalMutation,
+  internalQuery,
+  mutation,
+  query,
+} from "./_generated/server";
 import { can, requireAccess, requireMatter } from "./access";
 
 // =====================================================================
@@ -17,7 +23,13 @@ import { can, requireAccess, requireMatter } from "./access";
 //    confirms them (reviewed flag).
 //  - The runner (aiRunner.ts, Node) holds the API key; no key ever
 //    reaches the browser.
+//  - Suggestions never auto-create deadlines/tasks or send messages;
+//    every consequential action requires explicit lawyer approval.
 // =====================================================================
+
+// Pending-job timeout: a job still pending after this long is marked
+// expired by the daily sweeper (runner crash, deployment restart…).
+export const PENDING_TIMEOUT_MS = 30 * 60 * 1000;
 
 const MAX_SOURCE_CHARS = 200_000;
 const MAX_PAGES = 200;
@@ -243,6 +255,13 @@ export const prepareJob = mutation({
       requestedById: ac.user._id,
       createdAt: Date.now(),
     });
+    // Deployment-supported execution: the request is saved and the Node
+    // runner is scheduled server-side. Failure handling is end-to-end —
+    // a claim/timeout marks the job failed/expired for the user to retry.
+    await ctx.scheduler.runAfter(0, internal.aiRunner.runJob, {
+      jobId: id,
+      occurrenceKey: `ai:${id}`,
+    });
     return id;
   },
 });
@@ -271,6 +290,150 @@ export const attachResult = internalMutation({
       durationMs: args.durationMs,
       completedAt: Date.now(),
     });
+  },
+});
+
+/**
+ * Atomically claim a pending job (internal). An occurrence key makes the
+ * claim idempotent: if two schedulers race for the same job, only one
+ * insert wins, so the model is never called twice.
+ */
+export const claimPendingJob = internalMutation({
+  args: {
+    jobId: v.id("aiJobs"),
+    occurrenceKey: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId);
+    if (!job || job.status !== "pending") return null;
+    const existing = await ctx.db
+      .query("aiJobClaims")
+      .withIndex("by_occurrence", (q) => q.eq("occurrenceKey", args.occurrenceKey))
+      .first();
+    if (existing) return null; // already claimed (or retried) — never run twice
+    await ctx.db.insert("aiJobClaims", {
+      occurrenceKey: args.occurrenceKey,
+      jobId: args.jobId,
+      claimedAt: Date.now(),
+    });
+    return {
+      kind: job.kind,
+      matterId: job.matterId,
+      orgId: job.orgId,
+      inputNote: job.inputNote ?? null,
+      transcript: job.transcript ?? null,
+      sourceIds: job.sourceIds ?? [],
+    };
+  },
+});
+
+/** Full job payload for the Node runner (internal, after a claim won). */
+export const jobForRunner = internalQuery({
+  args: { jobId: v.id("aiJobs") },
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId);
+    if (!job || job.status !== "pending") return null;
+    const sources: Array<{
+      name: string;
+      role: string;
+      text: string;
+      pages?: Array<{ page: number; text: string }>;
+    }> = [];
+    for (const sid of job.sourceIds ?? []) {
+      const s = await ctx.db.get(sid);
+      if (s) {
+        sources.push({ name: s.name, role: s.role, text: s.text, pages: s.pages });
+      }
+    }
+    return {
+      kind: job.kind,
+      matterId: job.matterId,
+      orgId: job.orgId,
+      inputNote: job.inputNote ?? null,
+      transcript: job.transcript ?? null,
+      storageId: job.storageId ?? null,
+      sources,
+    };
+  },
+});
+
+/** Persist the Whisper transcript on a voice job (internal). */
+export const saveTranscript = internalMutation({
+  args: { jobId: v.id("aiJobs"), transcript: v.string() },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.jobId, { transcript: args.transcript.slice(0, 40_000) });
+  },
+});
+
+/** Tokens already used this month by an org (internal, for the runner). */
+export const usageForRunner = internalQuery({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    const key = monthKeyIST();
+    const rows = await ctx.db
+      .query("aiJobs")
+      .withIndex("by_org_month", (q) =>
+        q.eq("orgId", args.orgId).eq("monthKey", key),
+      )
+      .collect();
+    return rows.reduce(
+      (s, r) => s + (r.promptTokens ?? 0) + (r.completionTokens ?? 0),
+      0,
+    );
+  },
+});
+
+/** Internal org lookup for the runner (matters of the same org). */
+export const orgForRunner = internalQuery({
+  args: { jobId: v.id("aiJobs") },
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId);
+    if (!job) return null;
+    const org = await ctx.db.get(job.orgId);
+    if (!org) return null;
+    return { name: org.name, currency: org.currency };
+  },
+});
+
+/**
+ * Append AI-suggested chronology events (internal). Every event is
+ * stored with aiSuggested: true — it renders as a suggestion and stays
+ * out of packs/exports until a lawyer confirms it.
+ */
+export const appendChronology = internalMutation({
+  args: {
+    jobId: v.id("aiJobs"),
+    events: v.array(
+      v.object({
+        detail: v.string(),
+        occurredAt: v.number(),
+        datePrecision: v.union(
+          v.literal("exact"),
+          v.literal("day"),
+          v.literal("approx"),
+        ),
+        sourceRef: v.optional(v.string()),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId);
+    if (!job || job.status !== "pending") return 0;
+    for (const e of args.events.slice(0, 40)) {
+      await ctx.db.insert("matterEvents", {
+        matterId: job.matterId,
+        kind: "ai_suggestion",
+        detail: e.detail.slice(0, 400),
+        createdAt: Date.now(),
+        occurredAt: e.occurredAt,
+        datePrecision: e.datePrecision,
+        sourceRef: e.sourceRef?.slice(0, 200),
+        visibility: "internal",
+        aiSuggested: true,
+        reviewed: false,
+      });
+    }
+    return args.events.length;
   },
 });
 
@@ -351,6 +514,137 @@ export const listJobs = query({
         createdAt: r.createdAt,
         completedAt: r.completedAt ?? null,
       }));
+  },
+});
+
+/** Daily sweeper: expire stale pending jobs whose claim never resolved. */
+export const expireStaleJobs = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const cutoff = Date.now() - PENDING_TIMEOUT_MS;
+    const stale = await ctx.db
+      .query("aiJobs")
+      .withIndex("by_status", (q) => q.eq("status", "pending"))
+      .collect();
+    let expired = 0;
+    for (const job of stale) {
+      if (job.createdAt < cutoff) {
+        await ctx.db.patch(job._id, {
+          status: "expired",
+          error: "The request timed out before the assistant could respond.",
+          completedAt: Date.now(),
+        });
+        expired++;
+      }
+    }
+    return expired;
+  },
+});
+
+/**
+ * Apply AI-suggested evidence rows to a human-framed issue, flagged as
+ * AI-suggested. The lawyer reviews and can remove them; nothing lands
+ * silently in the evidence map.
+ */
+export const applyToIssue = mutation({
+  args: {
+    issueId: v.id("matterIssues"),
+    items: v.array(
+      v.object({
+        label: v.string(),
+        supports: v.boolean(),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    if (!can(ac, "note.write")) {
+      throw new Error("You need note-writing permission to edit the evidence map.");
+    }
+    const issue = await ctx.db.get(args.issueId);
+    if (!issue) throw new Error("Issue not found.");
+    await requireMatter(ctx, ac, issue.matterId);
+    const evidence = issue.evidence ?? [];
+    if (evidence.length + args.items.length > 20) {
+      throw new Error("Up to 20 exhibits per issue.");
+    }
+    await ctx.db.patch(args.issueId, {
+      evidence: [
+        ...evidence,
+        ...args.items.slice(0, 20 - evidence.length).map((i) => ({
+          label: `[AI] ${i.label.trim().slice(0, 190)}`,
+          documentId: undefined,
+          supports: i.supports,
+          aiSuggested: true,
+        })),
+      ],
+      updatedAt: Date.now(),
+    });
+  },
+});
+
+/** Remove an AI-suggested evidence row (human correction). */
+export const removeEvidenceRow = mutation({
+  args: { issueId: v.id("matterIssues"), index: v.number() },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    if (!can(ac, "note.write")) {
+      throw new Error("You need note-writing permission to edit the evidence map.");
+    }
+    const issue = await ctx.db.get(args.issueId);
+    if (!issue) throw new Error("Issue not found.");
+    await requireMatter(ctx, ac, issue.matterId);
+    const evidence = [...(issue.evidence ?? [])];
+    if (args.index < 0 || args.index >= evidence.length) return;
+    if (!evidence[args.index]?.aiSuggested) {
+      throw new Error("Only AI-suggested rows can be removed here.");
+    }
+    evidence.splice(args.index, 1);
+    await ctx.db.patch(args.issueId, { evidence, updatedAt: Date.now() });
+  },
+});
+
+/** Delete an AI-suggested (unreviewed) chronology event the lawyer rejects. */
+export const rejectEvent = mutation({
+  args: { eventId: v.id("matterEvents") },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    if (!can(ac, "note.write")) {
+      throw new Error("You need note-writing permission to correct the chronology.");
+    }
+    const ev = await ctx.db.get(args.eventId);
+    if (!ev) throw new Error("Event not found.");
+    await requireMatter(ctx, ac, ev.matterId);
+    if (!ev.aiSuggested || ev.reviewed) {
+      throw new Error("Only unconfirmed AI suggestions can be discarded.");
+    }
+    await ctx.db.delete(args.eventId);
+  },
+});
+
+/**
+ * Voice-to-workflow: a short-lived upload URL for a post-court voice
+ * note. The recording is preserved in storage and transcribed by the
+ * runner; nothing consequential (tasks, updates) is saved or sent
+ * without explicit lawyer approval (handled in the result view).
+ */
+export const generateVoiceUploadUrl = mutation({
+  args: { matterId: v.id("matters") },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    if (!can(ac, "note.write")) {
+      throw new Error("You need note-writing permission to record voice notes.");
+    }
+    await requireMatter(ctx, ac, args.matterId);
+    return await ctx.storage.generateUploadUrl();
+  },
+});
+
+/** Live runner configuration for the UI (never exposes the key). */
+export const runnerStatus = query({
+  args: {},
+  handler: async () => {
+    return { configured: !!process.env.OPENAI_API_KEY, model: "gpt-4o-mini" };
   },
 });
 
