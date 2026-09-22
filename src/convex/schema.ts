@@ -1694,4 +1694,57 @@ export default defineSchema({
     jobId: v.id("aiJobs"),
     claimedAt: v.number(),
   }).index("by_occurrence", ["occurrenceKey"]),
+
+  // ---------------- Offline court mode (section 27) ----------------
+  // One row per prepared offline bundle (per user + device). The row
+  // records WHAT was downloaded, when it was last verified against the
+  // server, and any note updates queued while offline. Revocation is
+  // recorded here but honestly takes effect only on the next sync —
+  // a disconnected device keeps its copy until it reconnects and the
+  // user removes it.
+  offlineBundles: defineTable({
+    orgId: v.id("organizations"),
+    matterId: v.id("matters"),
+    userId: v.id("users"),
+    deviceId: v.string(),
+    deviceLabel: v.string(),
+    // Limited selection — never the whole firm database.
+    selection: v.object({
+      hearingId: v.optional(v.id("hearings")),
+      sectionIds: v.array(v.string()),
+      includeNotes: v.boolean(),
+      documentIds: v.array(v.id("matterDocuments")),
+    }),
+    // Hash of the exact payload served at prepare/sync time. The device
+    // reports its fingerprint on reconnect; a mismatch means the server
+    // copy moved on while the device was offline (conflict detection).
+    fingerprint: v.string(),
+    preparedAt: v.number(),
+    syncedAt: v.number(),
+    revokedAt: v.optional(v.number()),
+    revokedById: v.optional(v.id("users")),
+    removedAt: v.optional(v.number()),
+    // Permitted note updates typed on the device while offline. Status
+    // "conflict" means the matter changed since the device last synced
+    // and a human must choose to apply the note after review.
+    queuedNotes: v.optional(
+      v.array(
+        v.object({
+          id: v.string(),
+          body: v.string(),
+          queuedAt: v.number(),
+          baseSyncedAt: v.number(),
+          status: v.union(
+            v.literal("pending"),
+            v.literal("applied"),
+            v.literal("conflict"),
+          ),
+          conflictReason: v.optional(v.string()),
+        }),
+      ),
+    ),
+  })
+    .index("by_user", ["userId"])
+    .index("by_matter", ["matterId"])
+    .index("by_org", ["orgId"]),
 });
