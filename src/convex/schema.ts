@@ -1604,4 +1604,82 @@ export default defineSchema({
     matterId: v.optional(v.id("matters")),
     createdAt: v.number(),
   }).index("by_org", ["orgId"]),
+
+  // ---------------- AI & OCR (section 26) ----------------
+  // One row per explicitly authorized document selection for AI use.
+  // Text is extracted client-side from ordinary PDFs/text (with page
+  // numbers kept); scanned pages can be OCRed via a vision model.
+  aiSources: defineTable({
+    orgId: v.id("organizations"),
+    matterId: v.id("matters"),
+    documentId: v.optional(v.id("matterDocuments")),
+    name: v.string(),
+    // Our Client / Opposing Party / Court / Evidence — drives the
+    // evidence map and the provider prompt framing.
+    role: v.union(
+      v.literal("our_client"),
+      v.literal("opposing_party"),
+      v.literal("court"),
+      v.literal("evidence"),
+      v.literal("other"),
+    ),
+    // Version-aware context: the document version this text came from.
+    documentUpdatedAt: v.optional(v.number()),
+    text: v.string(),
+    charCount: v.number(),
+    pageCount: v.optional(v.number()),
+    extraction: v.union(
+      v.literal("text_layer"),
+      v.literal("ocr"),
+      v.literal("manual"),
+    ),
+    // One row per extracted page with its real page number — powers
+    // "page 12" source references in AI outputs.
+    pages: v.optional(
+      v.array(
+        v.object({
+          page: v.number(),
+          text: v.string(),
+        }),
+      ),
+    ),
+    addedById: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_matter", ["matterId"])
+    .index("by_org", ["orgId"]),
+
+  // Saved AI requests: kind, inputs, status, result, cost, timing.
+  aiJobs: defineTable({
+    orgId: v.id("organizations"),
+    matterId: v.id("matters"),
+    kind: v.string(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("done"),
+      v.literal("failed"),
+      v.literal("expired"),
+    ),
+    sourceIds: v.optional(v.array(v.id("aiSources"))),
+    inputNote: v.optional(v.string()),
+    result: v.optional(v.string()),
+    structured: v.optional(v.any()),
+    error: v.optional(v.string()),
+    model: v.optional(v.string()),
+    promptTokens: v.optional(v.number()),
+    completionTokens: v.optional(v.number()),
+    costMinor: v.optional(v.number()),
+    durationMs: v.optional(v.number()),
+    // Used tokens for the monthly usage-cap meter.
+    monthKey: v.optional(v.string()), // YYYY-MM (IST)
+    // For voice jobs: the preserved recording + transcript.
+    transcript: v.optional(v.string()),
+    storageId: v.optional(v.id("_storage")),
+    requestedById: v.id("users"),
+    createdAt: v.number(),
+    completedAt: v.optional(v.number()),
+  })
+    .index("by_matter", ["matterId"])
+    .index("by_org_month", ["orgId", "monthKey"])
+    .index("by_user", ["requestedById"]),
 });
