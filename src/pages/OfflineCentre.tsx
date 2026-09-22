@@ -389,7 +389,8 @@ function BundleCard({
       for (const q of mine) {
         await clearQueuedNote(q.id).catch(() => undefined);
       }
-      refreshQueue();
+      // onChanged() in the finally block refreshes both the device list
+      // and the queued-note view, so no separate refresh is needed here.
       if (res.conflicts.length > 0) {
         toast.warning("Synced with conflicts", {
           description: res.conflicts.join(" "),
