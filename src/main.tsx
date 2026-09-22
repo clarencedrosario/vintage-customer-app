@@ -24,6 +24,7 @@ const Knowledge = lazy(() => import("./pages/Knowledge.tsx"));
 const Tasks = lazy(() => import("./pages/Tasks.tsx"));
 const Drafts = lazy(() => import("./pages/Drafts.tsx"));
 const Comms = lazy(() => import("./pages/Comms.tsx"));
+const OfflineCentre = lazy(() => import("./pages/OfflineCentre.tsx"));
 const Health = lazy(() => import("./pages/Health.tsx"));
 const Reports = lazy(() => import("./pages/Reports.tsx"));
 const Team = lazy(() => import("./pages/Team.tsx"));
@@ -204,6 +205,14 @@ createRoot(document.getElementById("root")!).render(
                 element={
                   <RequireAuth>
                     <Comms />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/offline"
+                element={
+                  <RequireAuth>
+                    <OfflineCentre />
                   </RequireAuth>
                 }
               />

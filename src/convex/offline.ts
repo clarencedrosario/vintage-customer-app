@@ -268,9 +268,14 @@ async function buildPayload(
     });
   }
 
-  return {
+  // Volatile fields (generatedAt) must NOT enter the fingerprint: the
+  // payload hash is recomputed on every sync and compared against the
+  // device copy, so anything that changes between builds would falsely
+  // report a conflict on every reconnect.
+  const now = Date.now();
+  const payload: OfflinePayload = {
     version: 1,
-    generatedAt: Date.now(),
+    generatedAt: now,
     org: { name: ac.org.name },
     matter: {
       _id: matter._id,
@@ -326,6 +331,13 @@ async function buildPayload(
     })),
     limits: { maxEvents: MAX_EVENTS },
   };
+  return payload;
+}
+
+/** Fingerprint over the STABLE content of a payload (generatedAt excluded). */
+export function fingerprintOf(payload: OfflinePayload): string {
+  const { generatedAt: _generatedAt, ...stable } = payload;
+  return sha256Hex(JSON.stringify(stable));
 }
 
 // ---------------------------------------------------------------------
@@ -363,7 +375,7 @@ export const prepare = mutation({
       documentIds: args.documentIds,
     });
 
-    const fingerprint = sha256Hex(JSON.stringify(payload));
+    const fingerprint = fingerprintOf(payload);
 
     // One live bundle per (user, matter, device): re-preparing replaces.
     const existing = await ctx.db
@@ -465,7 +477,7 @@ export const sync = mutation({
         includeNotes: bundle.selection.includeNotes,
         documentIds: bundle.selection.documentIds,
       });
-      const freshFingerprint = sha256Hex(JSON.stringify(fresh));
+      const freshFingerprint = fingerprintOf(fresh);
       if (freshFingerprint !== bundle.fingerprint) {
         conflicts.push(
           "The matter file has new activity since this pack was prepared.",
