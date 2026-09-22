@@ -223,6 +223,43 @@ export const createConsultationPaymentLink = internalAction({
   },
 });
 
+/** Payment link for a promotion purchase (section 23). */
+export const createPromotionPaymentLink = internalAction({
+  args: {
+    promotionId: v.id("promotions"),
+    orgId: v.id("organizations"),
+    packageName: v.string(),
+    amountMinor: v.number(),
+    payerEmail: v.optional(v.string()),
+    payerName: v.string(),
+    orgName: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const referenceId = `promo-${args.promotionId.slice(-8)}-${Date.now()}`;
+    const body = await rz("/payment_links", "POST", {
+      amount: args.amountMinor,
+      currency: "INR",
+      accept_partial: false,
+      reference_id: referenceId,
+      description: `${args.packageName} — ${args.orgName}`,
+      customer: {
+        name: args.payerName,
+        email: args.payerEmail,
+      },
+      notify: { sms: false, email: false },
+      notes: { kind: "promotion", promotionId: args.promotionId },
+    });
+    const id = String(body.id);
+    const shortUrl = typeof body.short_url === "string" ? body.short_url : "";
+    await ctx.runMutation(internal.promotions.attachPaymentLinkInternal, {
+      promotionId: args.promotionId,
+      paymentLinkId: id,
+      paymentLinkUrl: shortUrl,
+    });
+    return { id, shortUrl, referenceId };
+  },
+});
+
 // -----------------------------------------------------------------
 // Refunds
 // -----------------------------------------------------------------

@@ -155,6 +155,18 @@ export default defineSchema({
     invoicePrefix: v.string(),
     // Editable permission matrix: orgRole -> capability keys.
     permissions: v.optional(v.any()),
+    // Paid placements & promotions (section 23). Everything is disabled
+    // until an owner records a compliance review and enables the feature.
+    promotionsEnabled: v.optional(v.boolean()),
+    promotionsComplianceNote: v.optional(v.string()),
+    promotionsComplianceAt: v.optional(v.number()),
+    promotionsComplianceBy: v.optional(v.id("users")),
+    // Dismissible promotional pop-up on the public directory, frequency-
+    // capped per visitor (localStorage), shown only when enabled.
+    promoPopupEnabled: v.optional(v.boolean()),
+    promoPopupHeadline: v.optional(v.string()),
+    promoPopupBody: v.optional(v.string()),
+    promoPopupCta: v.optional(v.string()),
     createdBy: v.id("users"),
     createdAt: v.number(),
   }).index("by_slug", ["slug"]),
@@ -1257,4 +1269,74 @@ export default defineSchema({
   })
     .index("by_occurrence", ["occurrenceKey"])
     .index("by_rule", ["ruleId"]),
+
+  // ===============================================================
+  // Paid listings & promotions (section 23).
+  //
+  // Hard compliance gate: no promotion can be sold, displayed or paid
+  // for until an owner records a professional-advertising review for
+  // the operating jurisdiction and enables the feature. Paid placements
+  // always render with an explicit sponsored label and are stored,
+  // queried and rendered separately from organic results and from
+  // verification badges.
+  // ===============================================================
+
+  // Purchasable promotion products, defined per organization by the
+  // owner (e.g. "Sponsored listing, 30 days, ₹2,000").
+  promotionPackages: defineTable({
+    orgId: v.id("organizations"),
+    name: v.string(),
+    placement: v.union(v.literal("sponsored_listing"), v.literal("banner"), v.literal("popup")),
+    priceMinor: v.number(),
+    durationDays: v.number(),
+    description: v.optional(v.string()),
+    active: v.boolean(),
+    createdById: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.optional(v.number()),
+  }).index("by_org", ["orgId"]),
+
+  // One row per purchase/submission. Lifecycle: submitted (payment
+  // pending) -> paid -> scheduled (auto window) -> expired (computed by
+  // endsAt) | rejected | cancelled. Owner approval gates activation.
+  promotions: defineTable({
+    orgId: v.id("organizations"),
+    packageId: v.id("promotionPackages"),
+    submittedByUserId: v.id("users"),
+    // Snapshot at submission time.
+    profileId: v.optional(v.id("publicProfiles")),
+    advocateName: v.string(),
+    message: v.optional(v.string()),
+    targetUrl: v.optional(v.string()),
+    // Owner decision.
+    approvalStatus: v.union(
+      v.literal("pending"),
+      v.literal("approved"),
+      v.literal("rejected"),
+    ),
+    approvedById: v.optional(v.id("users")),
+    approvedAt: v.optional(v.number()),
+    rejectionReason: v.optional(v.string()),
+    // Payment.
+    amountMinor: v.number(),
+    paymentStatus: v.union(
+      v.literal("unpaid"),
+      v.literal("paid"),
+      v.literal("refunded"),
+    ),
+    paymentLinkId: v.optional(v.string()),
+    paymentLinkUrl: v.optional(v.string()),
+    providerPaymentId: v.optional(v.string()),
+    paidAt: v.optional(v.number()),
+    // Run window (set when both approved AND paid).
+    startsAt: v.optional(v.number()),
+    endsAt: v.optional(v.number()),
+    // Metrics (basic counters, incremented on the public path).
+    impressions: v.optional(v.number()),
+    clicks: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.optional(v.number()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_submitted_by", ["submittedByUserId"]),
 });

@@ -168,6 +168,13 @@ export const profile = query({
       taxLabel: ac.org.taxLabel,
       taxPercent: ac.org.taxPercent,
       invoicePrefix: ac.org.invoicePrefix,
+      promotionsEnabled: ac.org.promotionsEnabled ?? false,
+      promotionsComplianceNote: ac.org.promotionsComplianceNote ?? null,
+      promotionsComplianceAt: ac.org.promotionsComplianceAt ?? null,
+      promoPopupEnabled: ac.org.promoPopupEnabled ?? false,
+      promoPopupHeadline: ac.org.promoPopupHeadline ?? null,
+      promoPopupBody: ac.org.promoPopupBody ?? null,
+      promoPopupCta: ac.org.promoPopupCta ?? null,
       myRole: ac.membership.orgRole,
       canEditProfile: ac.permissions.has("org.edit_profile"),
     };

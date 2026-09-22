@@ -949,6 +949,7 @@ export const reconcileWebhookInternal = internalMutation({
     // Locate the target: invoice via reference_id (number) or paymentLinkId.
     let invoice: Doc<"invoices"> | null = null;
     let consultation: Doc<"consultations"> | null = null;
+    let promotion: Doc<"promotions"> | null = null;
     if (args.referenceId) {
       const candidates = await ctx.db
         .query("invoices")
@@ -973,8 +974,15 @@ export const reconcileWebhookInternal = internalMutation({
         consultation = consults[0] ?? null;
       }
     }
+    if (!invoice && !consultation && args.paymentLinkId) {
+      const promos = await ctx.db
+        .query("promotions")
+        .filter((q) => q.eq(q.field("paymentLinkId"), args.paymentLinkId))
+        .take(2);
+      promotion = promos[0] ?? null;
+    }
 
-    const orgId = invoice?.orgId ?? consultation?.orgId;
+    const orgId = invoice?.orgId ?? consultation?.orgId ?? promotion?.orgId;
     if (!orgId) {
       if (existing) {
         await ctx.db.patch(existing._id, {
@@ -1050,6 +1058,14 @@ export const reconcileWebhookInternal = internalMutation({
         `Online payment — ${fmtINR(applied)} against ${invoice.number}.`,
       );
       return { applied: true, appliedMinor: applied };
+    }
+
+    if (promotion) {
+      await ctx.runMutation(internal.promotions.activateOnPaymentInternal, {
+        promotionId: promotion._id,
+        providerPaymentId: args.providerPaymentId,
+      });
+      return { applied: true };
     }
 
     if (

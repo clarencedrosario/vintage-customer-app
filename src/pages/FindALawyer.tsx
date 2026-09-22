@@ -35,8 +35,9 @@ import {
   Search,
   ShieldCheck,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { Megaphone, X } from "lucide-react";
 
 /**
  * Public directory of published advocate profiles, for visitors who are
@@ -91,6 +92,36 @@ export default function FindALawyer() {
   const [lookupOpen, setLookupOpen] = useState(false);
 
   const profiles = useQuery(api.directory.publicList) as DirectoryEntry[] | undefined;
+  const placements = useQuery(api.promotions.publicPlacements) as
+    | {
+        enabled: boolean;
+        sponsored: {
+          promotionId: string;
+          advocateName: string;
+          message: string | null;
+          targetUrl: string | null;
+          profileId: string | null;
+        }[];
+        banner: { promotionId: string; message: string | null; targetUrl: string | null; advocateName: string } | null;
+        popup: { enabled: boolean; headline: string | null; body: string | null; cta: string | null } | null;
+      }
+    | undefined;
+
+  const [popupDismissed, setPopupDismissed] = useState<string | null>(null);
+  const popupShown = (() => {
+    try {
+      const raw = window.localStorage.getItem("advokate_promo_popup");
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as { day: string };
+      return parsed.day === new Date().toISOString().slice(0, 10) ? parsed.day : null;
+    } catch {
+      return null;
+    }
+  })();
+  const showPopup =
+    placements?.popup?.enabled === true &&
+    popupShown === null &&
+    popupDismissed !== "today";
 
   const entries = profiles ?? [];
   const cities = useMemo(
@@ -144,6 +175,25 @@ export default function FindALawyer() {
     (area !== "all" ? 1 : 0) +
     (court !== "all" ? 1 : 0) +
     (language !== "all" ? 1 : 0);
+
+  const sponsoredIds = (placements?.sponsored ?? []).map((s) => s.promotionId);
+  const sponsoredJoined = sponsoredIds.join(",");
+  const bannerId = placements?.banner?.promotionId ?? null;
+  const bannerKey = bannerId ?? "none";
+
+  // Count one impression per render batch of live placements (cheap
+  // dedupe by id set on the server is not needed — each page load counts
+  // once per placement shown).
+  const recordBatch = useMutation(api.promotions.recordImpressions);
+  useEffect(() => {
+    const ids = sponsoredJoined ? sponsoredJoined.split(",") : [];
+    if (bannerId) ids.push(bannerId);
+    if (ids.length === 0) return;
+    recordBatch({ promotionIds: ids as never })
+      .then(() => undefined)
+      .catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- count once per placement batch
+  }, [sponsoredJoined, bannerKey]);
 
   return (
     <div className="min-h-screen bg-sidebar">
@@ -285,6 +335,11 @@ export default function FindALawyer() {
             )}
           </div>
 
+          {/* Sponsored banner — clearly labeled, separate from organic */}
+          {placements?.banner && (
+            <PromoBanner placement={placements.banner} />
+          )}
+
           {/* Results */}
           <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             {profiles === undefined
@@ -376,6 +431,32 @@ export default function FindALawyer() {
             </Card>
           )}
 
+          {/* Sponsored listings — visually separate, clearly labeled */}
+          {(placements?.sponsored ?? []).length > 0 && (
+            <section className="mt-10" aria-label="Sponsored listings">
+              <div className="flex items-center gap-2">
+                <Megaphone className="size-3.5 text-[#8a6d3b]" aria-hidden="true" />
+                <h2 className="type-label ink-faded">
+                  Sponsored listings — paid promotions, not part of the organic results
+                </h2>
+              </div>
+              <div className="mt-3 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                {placements!.sponsored.map((s) => (
+                  <SponsoredCard key={s.promotionId} placement={s} onOpenProfile={() => {
+                    if (!s.profileId) return;
+                    const match = entries.find((e) => e.profileId === s.profileId);
+                    if (match) setSelected(match);
+                  }} />
+                ))}
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground/70">
+                Sponsored placements are purchased advertisements. They do not affect
+                a chamber's placement in the results above and are unrelated to any
+                verification status.
+              </p>
+            </section>
+          )}
+
           <div className="mt-12 flex flex-col items-center gap-2 text-center">
             <Link
               to="/login"
@@ -396,7 +477,134 @@ export default function FindALawyer() {
         <ProfileDialog entry={selected} onClose={() => setSelected(null)} />
       )}
       <BookingLookupDialog open={lookupOpen} onClose={() => setLookupOpen(false)} />
+      {showPopup && placements?.popup && (
+        <PromoPopup
+          headline={placements.popup.headline ?? "Promoted"}
+          body={placements.popup.body}
+          cta={placements.popup.cta ?? "Learn more"}
+          onDismiss={() => {
+            setPopupDismissed("today");
+            try {
+              window.localStorage.setItem(
+                "advokate_promo_popup",
+                JSON.stringify({ day: new Date().toISOString().slice(0, 10) }),
+              );
+            } catch {
+              // storage unavailable — dismiss for this visit only
+            }
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+// -----------------------------------------------------------------
+// Sponsored placements (section 23) — labeled, metrics-counted
+// -----------------------------------------------------------------
+
+function PromoBanner({
+  placement,
+}: {
+  placement: { promotionId: string; message: string | null; targetUrl: string | null; advocateName: string };
+}) {
+  const click = useMutation(api.promotions.recordClick);
+  const onClick = () => {
+    click({ promotionId: placement.promotionId as never }).catch(() => undefined);
+    if (placement.targetUrl) {
+      window.open(placement.targetUrl, "_blank", "noreferrer");
+    }
+  };
+  return (
+    <div className="mt-8 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#B68A45]/40 bg-[#B68A45]/5 px-4 py-3">
+      <div className="flex items-center gap-2.5">
+        <Megaphone className="size-4 shrink-0 text-[#8a6d3b]" aria-hidden="true" />
+        <div>
+          <p className="text-sm font-medium">{placement.message ?? `Chamber of ${placement.advocateName}`}</p>
+          <p className="type-label ink-faded">Sponsored — paid placement</p>
+        </div>
+      </div>
+      <Button size="sm" variant="outline" onClick={onClick}>
+        {placement.targetUrl ? "Learn more" : "View profile"}
+      </Button>
+    </div>
+  );
+}
+
+function SponsoredCard({
+  placement,
+  onOpenProfile,
+}: {
+  placement: {
+    promotionId: string;
+    advocateName: string;
+    message: string | null;
+    targetUrl: string | null;
+    profileId: string | null;
+  };
+  onOpenProfile: () => void;
+}) {
+  const click = useMutation(api.promotions.recordClick);
+  const go = () => {
+    click({ promotionId: placement.promotionId as never }).catch(() => undefined);
+    if (placement.targetUrl) {
+      window.open(placement.targetUrl, "_blank", "noreferrer");
+    } else {
+      onOpenProfile();
+    }
+  };
+  return (
+    <Card className="rule-frame border-[#B68A45]/40" onClick={go}>
+      <CardContent className="space-y-1.5 py-4">
+        <div className="flex items-center justify-between gap-2">
+          <p className="font-serif text-base font-semibold">{placement.advocateName}</p>
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-[#B68A45]/40 bg-[#B68A45]/10 px-2 py-0.5 text-[11px] font-medium text-[#8a6d3b]">
+            <Megaphone className="size-3" aria-hidden="true" />
+            Sponsored
+          </span>
+        </div>
+        {placement.message && (
+          <p className="text-xs text-muted-foreground">{placement.message}</p>
+        )}
+        <p className="type-label ink-faded pt-1">Paid placement · not an organic result</p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function PromoPopup({
+  headline,
+  body,
+  cta,
+  onDismiss,
+}: {
+  headline: string;
+  body: string | null;
+  cta: string;
+  onDismiss: () => void;
+}) {
+  return (
+    <Dialog open onOpenChange={(v) => !v && onDismiss()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 font-serif">
+            <Megaphone className="size-4 text-[#8a6d3b]" aria-hidden="true" />
+            {headline}
+          </DialogTitle>
+          <DialogDescription>Sponsored content — dismiss anytime.</DialogDescription>
+        </DialogHeader>
+        {body && <p className="text-sm text-muted-foreground">{body}</p>}
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={onDismiss}>
+            <X className="size-3.5" aria-hidden="true" />
+            Dismiss
+          </Button>
+          <Button size="sm" onClick={onDismiss}>
+            {cta}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

@@ -1,4 +1,5 @@
 import { ChamberShell } from "@/components/ChamberShell";
+import { PromoteMyProfileCard, PromotionsOwnerCard } from "@/components/PromotionsCards";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -85,6 +86,8 @@ export default function Settings() {
           <OrgProfileCard key={profile._id} profile={profile} />
           <PublicProfileCard />
           <VerificationDeskCard />
+          <PromotionsOwnerCard />
+          <PromoteMyProfileCard />
           <AutomationCard />
           <NotificationPrefsCard />
           <PermissionsMatrixCard />
