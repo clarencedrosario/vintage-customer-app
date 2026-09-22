@@ -848,20 +848,104 @@ export default defineSchema({
     clientPhone: v.optional(v.string()),
     matterSummary: v.optional(v.string()),
     amountMinor: v.number(),
+    // Booking lifecycle: "requested" (public) / "pending" (legacy chamber
+    // link) → "accepted" (slot confirmed, awaiting payment when the fee is
+    // non-zero) → "scheduled" (payment captured or free consultation).
+    // "reschedule_proposed" waits for the requester to confirm; "completed",
+    // "declined", "cancelled", "refunded" are terminal.
     status: v.union(
+      v.literal("requested"),
       v.literal("pending"),
+      v.literal("accepted"),
+      v.literal("scheduled"),
+      v.literal("reschedule_proposed"),
       v.literal("paid"),
+      v.literal("completed"),
+      v.literal("declined"),
       v.literal("cancelled"),
       v.literal("refunded"),
+    ),
+    // "chamber" = created from the billing desk (legacy); "public" = booked
+    // through the public directory.
+    source: v.optional(v.union(v.literal("chamber"), v.literal("public"))),
+    // Public bookings carry a reference code so the requester can look up,
+    // confirm a reschedule or cancel without an account.
+    reference: v.optional(v.string()),
+    // The advocate the booking is for (public directory bookings).
+    advocateUserId: v.optional(v.id("users")),
+    profileId: v.optional(v.id("publicProfiles")),
+    // Confirmed consultation time; proposedSlotAt is the counter-offer
+    // while status is reschedule_proposed.
+    slotAt: v.optional(v.number()),
+    proposedSlotAt: v.optional(v.number()),
+    // Signed-in requester (future use — public requesters are anonymous).
+    requesterUserId: v.optional(v.id("users")),
+    // Set when the chamber authorizes conversion to a connected client.
+    connectedClientId: v.optional(v.id("clients")),
+    cancelReason: v.optional(v.string()),
+    // Status-change trail shown to both sides.
+    history: v.optional(
+      v.array(v.object({ at: v.number(), text: v.string() })),
     ),
     paymentOrderId: v.optional(v.string()),
     paymentLinkId: v.optional(v.string()),
     paymentLinkUrl: v.optional(v.string()),
     providerPaymentId: v.optional(v.string()),
-    createdById: v.id("users"),
+    // Null for public bookings (no chamber member creates them).
+    createdById: v.optional(v.id("users")),
     createdAt: v.number(),
+    updatedAt: v.optional(v.number()),
     paidAt: v.optional(v.number()),
-  }).index("by_org", ["orgId"]),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_reference", ["reference"]),
+
+  // Public directory profiles (section 22). Publication is an explicit
+  // toggle by the member; "verified" is only ever set by an actual
+  // verification decision by an owner/administrator.
+  publicProfiles: defineTable({
+    orgId: v.id("organizations"),
+    userId: v.id("users"),
+    // Explicit publication — nothing appears publicly without this.
+    published: v.boolean(),
+    headline: v.optional(v.string()),
+    qualifications: v.optional(v.string()),
+    enrollmentNumber: v.optional(v.string()),
+    enrollmentState: v.optional(v.string()),
+    experienceYears: v.optional(v.number()),
+    practiceAreas: v.array(v.string()),
+    courts: v.array(v.string()),
+    languages: v.array(v.string()),
+    city: v.optional(v.string()),
+    // Contact details the member chooses to expose publicly.
+    publicEmail: v.optional(v.string()),
+    publicPhone: v.optional(v.string()),
+    // Consultation fee in paise (0 = free / decided case-by-case).
+    feeMinor: v.number(),
+    // Offered availability slots (label + exact start time).
+    slots: v.optional(
+      v.array(v.object({ label: v.string(), startsAt: v.number() })),
+    ),
+    availabilityNote: v.optional(v.string()),
+    about: v.optional(v.string()),
+    // Verification: only a decision by an owner/administrator moves this
+    // out of "unverified"; the badge shows ONLY for "verified".
+    verificationStatus: v.union(
+      v.literal("unverified"),
+      v.literal("pending"),
+      v.literal("verified"),
+      v.literal("rejected"),
+    ),
+    verifiedAt: v.optional(v.number()),
+    verifiedById: v.optional(v.id("users")),
+    decidedAt: v.optional(v.number()),
+    decisionNote: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_user", ["userId"])
+    .index("by_published", ["published"]),
 
   invitations: defineTable({
     orgId: v.id("organizations"),

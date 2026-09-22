@@ -1,4 +1,5 @@
 import { ChamberShell } from "@/components/ChamberShell";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -30,13 +31,16 @@ import {
 import { useMutation, useQuery } from "convex/react";
 import {
   BadgeCheck,
+  CalendarClock,
   Copy,
   CreditCard,
   Download,
   ExternalLink,
+  Inbox,
   Plus,
   Receipt,
   Send,
+  UserPlus,
 } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
@@ -220,6 +224,7 @@ export default function Billing() {
         matters={(matters ?? []).filter((m) => m.reference)}
       />
       <ConsultationDialog open={consultOpen} onOpenChange={setConsultOpen} />
+      <ConsultRequestsCard />
       <InvoiceDetailDialog
         invoiceId={detailId}
         onOpenChange={() => setDetailId(null)}
@@ -1199,6 +1204,478 @@ function ConsultationDialog({
               ))}
             </div>
           )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Public consultation requests & bookings (section 22)
+// ---------------------------------------------------------------------
+
+type ConsultRequest = {
+  _id: Id<"consultations">;
+  reference: string | null;
+  source: string;
+  clientName: string;
+  clientEmail: string | null;
+  clientPhone: string | null;
+  matterSummary: string | null;
+  amountMinor: number;
+  status: string;
+  slotAt: number | null;
+  proposedSlotAt: number | null;
+  advocateName: string | null;
+  advocateUserId: string | null;
+  connectedClientId: string | null;
+  cancelReason: string | null;
+  paymentLinkUrl: string | null;
+  history: { at: number; text: string }[];
+  createdAt: number;
+};
+
+const REQ_STATUS: Record<string, { label: string; tone: string }> = {
+  requested: { label: "New request", tone: "border-[#B68A45]/40 bg-[#B68A45]/10 text-[#8a6d3b]" },
+  pending: { label: "Payment link", tone: "border-[#E5E7EB] bg-white text-[#64748B]" },
+  accepted: { label: "Accepted · fee pending", tone: "border-[#B68A45]/40 bg-[#B68A45]/10 text-[#8a6d3b]" },
+  scheduled: { label: "Scheduled", tone: "border-emerald-200 bg-emerald-50 text-emerald-800" },
+  reschedule_proposed: { label: "Reschedule proposed", tone: "border-[#B68A45]/40 bg-[#B68A45]/10 text-[#8a6d3b]" },
+  paid: { label: "Paid · to schedule", tone: "border-emerald-200 bg-emerald-50 text-emerald-800" },
+  completed: { label: "Completed", tone: "border-[#E5E7EB] bg-white text-[#64748B]" },
+  declined: { label: "Declined", tone: "border-red-200 bg-red-50 text-red-800" },
+  cancelled: { label: "Cancelled", tone: "border-red-100 bg-red-50 text-red-700" },
+  refunded: { label: "Refunded", tone: "border-red-100 bg-red-50 text-red-700" },
+};
+
+function ConsultRequestsCard() {
+  const requests = useQuery(api.consultRequests.list) as ConsultRequest[] | undefined;
+  const [convertId, setConvertId] = useState<string | null>(null);
+  const [rescheduleId, setRescheduleId] = useState<string | null>(null);
+
+  const rows = requests ?? [];
+  const open = rows.filter((r) =>
+    ["requested", "accepted", "reschedule_proposed", "paid"].includes(r.status),
+  );
+
+  if (requests === undefined) return null;
+
+  return (
+    <div className="rule-frame mt-6 rounded-lg">
+      <div className="flex items-center justify-between px-4 pt-4">
+        <h2 className="flex items-center gap-2 font-serif text-base font-semibold">
+          <Inbox className="size-4 text-[#B68A45]" aria-hidden="true" />
+          Consultation requests & bookings
+          {open.length > 0 && (
+            <span className="type-label text-[#8a6d3b]">{open.length} open</span>
+          )}
+        </h2>
+        <Link
+          to="/find-a-lawyer"
+          target="_blank"
+          className="type-label text-[#4f6b8f] underline-offset-2 hover:underline"
+        >
+          View public directory
+        </Link>
+      </div>
+      <div className="p-4">
+        {rows.length === 0 ? (
+          <p className="py-6 text-center text-sm ink-faded">
+            No consultation requests yet. Publish a directory profile (Settings) so
+            visitors can book a consultation.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {rows.map((r) => {
+              const stamp = REQ_STATUS[r.status] ?? { label: r.status, tone: "" };
+              return (
+                <div
+                  key={r._id}
+                  className="rounded-md border border-[#E5E7EB] px-3 py-2.5"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-sm font-medium">{r.clientName}</p>
+                        {r.source === "public" && r.reference && (
+                          <span className="font-mono text-[11px] text-muted-foreground">
+                            {r.reference}
+                          </span>
+                        )}
+                        <Badge variant="outline" className={`text-[11px] ${stamp.tone}`}>
+                          {stamp.label}
+                        </Badge>
+                        {r.connectedClientId && (
+                          <Badge variant="outline" className="text-[11px]">
+                            Converted to client
+                          </Badge>
+                        )}
+                      </div>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        {[r.clientEmail, r.clientPhone, r.advocateName ? `for ${r.advocateName}` : ""]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </p>
+                      {r.matterSummary && (
+                        <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                          {r.matterSummary}
+                        </p>
+                      )}
+                      {(r.slotAt || r.proposedSlotAt) && (
+                        <p className="mt-1 flex items-center gap-1.5 text-xs">
+                          <CalendarClock className="size-3.5 text-[#B68A45]" aria-hidden="true" />
+                          {r.slotAt ? "" : "Proposed: "}
+                          {formatDateIN((r.slotAt ?? r.proposedSlotAt)!)}
+                          {r.slotAt ? "" : " — awaiting the requester's confirmation"}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {r.status === "requested" && (
+                        <AcceptButton consultationId={r._id} defaultSlot={r.slotAt} />
+                      )}
+                      {["requested", "accepted", "scheduled", "reschedule_proposed"].includes(r.status) && (
+                        <>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs"
+                            onClick={() => setRescheduleId(r._id)}
+                          >
+                            Reschedule
+                          </Button>
+                          <DeclineButton consultationId={r._id} mode="decline" />
+                        </>
+                      )}
+                      {["scheduled", "paid", "accepted"].includes(r.status) && (
+                        <CompleteButton consultationId={r._id} />
+                      )}
+                      {!r.connectedClientId && r.clientEmail && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 text-xs"
+                          onClick={() => setConvertId(r._id)}
+                        >
+                          <UserPlus className="size-3.5" aria-hidden="true" />
+                          Convert to client
+                        </Button>
+                      )}
+                      {r.paymentLinkUrl && r.status === "accepted" && (
+                        <a
+                          href={r.paymentLinkUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="type-label inline-flex items-center gap-1 text-[#4f6b8f] underline-offset-2 hover:underline"
+                        >
+                          <ExternalLink className="size-3" /> Fee link
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                  {r.status === "declined" && r.cancelReason && (
+                    <p className="mt-1 text-xs text-red-700">Reason: {r.cancelReason}</p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {convertId && (
+        <ConvertDialog
+          request={rows.find((r) => r._id === convertId)!}
+          onClose={() => setConvertId(null)}
+        />
+      )}
+      {rescheduleId && (
+        <RescheduleDialog
+          request={rows.find((r) => r._id === rescheduleId)!}
+          onClose={() => setRescheduleId(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function AcceptButton({
+  consultationId,
+  defaultSlot,
+}: {
+  consultationId: Id<"consultations">;
+  defaultSlot: number | null;
+}) {
+  const accept = useMutation(api.consultRequests.accept);
+  const [busy, setBusy] = useState(false);
+  return (
+    <Button
+      size="sm"
+      className="h-7 text-xs"
+      disabled={busy}
+      onClick={async () => {
+        setBusy(true);
+        try {
+          await accept({ consultationId, slotAt: defaultSlot ?? undefined });
+          toast.success("Request accepted — the requester will be notified.");
+        } catch (e) {
+          toast.error(e instanceof Error ? e.message : "Could not accept.");
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <BadgeCheck className="size-3.5" aria-hidden="true" />
+      Accept
+    </Button>
+  );
+}
+
+function DeclineButton({
+  consultationId,
+  mode,
+}: {
+  consultationId: Id<"consultations">;
+  mode: "decline" | "cancel";
+}) {
+  const decline = useMutation(api.consultRequests.decline);
+  const cancel = useMutation(api.consultRequests.cancelByChamber);
+  const [reason, setReason] = useState("");
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const run = async () => {
+    setBusy(true);
+    try {
+      if (mode === "decline") {
+        await decline({ consultationId, reason });
+      } else {
+        await cancel({ consultationId, reason });
+      }
+      toast.success(mode === "decline" ? "Request declined." : "Booking cancelled.");
+      setOpen(false);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <Button
+        size="sm"
+        variant="ghost"
+        className="h-7 text-xs"
+        onClick={() => setOpen(true)}
+      >
+        {mode === "decline" ? "Decline" : "Cancel"}
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="font-serif">
+              {mode === "decline" ? "Decline request" : "Cancel booking"}
+            </DialogTitle>
+            <DialogDescription>
+              The requester sees this reason in their status notification and on
+              the booking tracker. A written reason is required.
+            </DialogDescription>
+          </DialogHeader>
+          <Textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            rows={3}
+            placeholder="e.g. The chamber does not take up matters in this area; may I suggest a colleague?"
+          />
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" size="sm" onClick={() => setOpen(false)}>
+              Back
+            </Button>
+            <Button size="sm" variant="destructive" disabled={busy || !reason.trim()} onClick={run}>
+              {mode === "decline" ? "Decline" : "Cancel booking"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+function CompleteButton({ consultationId }: { consultationId: Id<"consultations"> }) {
+  const complete = useMutation(api.consultRequests.markCompleted);
+  const [busy, setBusy] = useState(false);
+  return (
+    <Button
+      size="sm"
+      variant="outline"
+      className="h-7 text-xs"
+      disabled={busy}
+      onClick={async () => {
+        setBusy(true);
+        try {
+          await complete({ consultationId });
+          toast.success("Marked completed.");
+        } catch (e) {
+          toast.error(e instanceof Error ? e.message : "Failed.");
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      Mark completed
+    </Button>
+  );
+}
+
+function RescheduleDialog({
+  request,
+  onClose,
+}: {
+  request: ConsultRequest;
+  onClose: () => void;
+}) {
+  const propose = useMutation(api.consultRequests.proposeReschedule);
+  const [day, setDay] = useState("");
+  const [time, setTime] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="font-serif">Propose a new time</DialogTitle>
+          <DialogDescription>
+            {request.clientName} confirms (or declines) from their booking tracker
+            using the reference code {request.reference ?? ""}.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="rs-day">Date</Label>
+            <Input id="rs-day" type="date" value={day} onChange={(e) => setDay(e.target.value)} />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="rs-time">Time</Label>
+            <Input id="rs-time" type="time" value={time} onChange={(e) => setTime(e.target.value)} />
+          </div>
+        </div>
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" size="sm" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            disabled={busy || !day || !time}
+            onClick={async () => {
+              const slotAt = new Date(`${day}T${time}`).getTime();
+              if (Number.isNaN(slotAt) || slotAt < Date.now()) {
+                toast.error("Pick a future date and time.");
+                return;
+              }
+              setBusy(true);
+              try {
+                await propose({ consultationId: request._id, slotAt });
+                toast.success("New time proposed.");
+                onClose();
+              } catch (e) {
+                toast.error(e instanceof Error ? e.message : "Failed.");
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            Propose
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ConvertDialog({
+  request,
+  onClose,
+}: {
+  request: ConsultRequest;
+  onClose: () => void;
+}) {
+  const convert = useMutation(api.consultRequests.convertToClient);
+  const [kind, setKind] = useState("individual");
+  const [city, setCity] = useState("");
+  const [phone, setPhone] = useState(request.clientPhone ?? "");
+  const [busy, setBusy] = useState(false);
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="font-serif">Convert to a connected client</DialogTitle>
+          <DialogDescription>
+            Creates (or matches) a client record for {request.clientName}. This is
+            an authorization step by the chamber — the consultation booking itself
+            never granted any access. Portal access still requires identity
+            verification and explicit matter grants.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label>Client type</Label>
+            <Select value={kind} onValueChange={setKind}>
+              <SelectTrigger size="sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="individual">Individual</SelectItem>
+                <SelectItem value="company">Company</SelectItem>
+                <SelectItem value="trust">Trust</SelectItem>
+                <SelectItem value="government">Government</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="cv-city">City (optional)</Label>
+              <Input id="cv-city" value={city} onChange={(e) => setCity(e.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="cv-phone">Phone (optional)</Label>
+              <Input id="cv-phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Requester email: {request.clientEmail ?? "— not given —"}
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" size="sm" onClick={onClose}>
+              Back
+            </Button>
+            <Button
+              size="sm"
+              disabled={busy || !request.clientEmail}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  const res = await convert({
+                    consultationId: request._id,
+                    kind: kind as "individual" | "company" | "trust" | "government",
+                    city: city || undefined,
+                    phone: phone || undefined,
+                  });
+                  toast.success(
+                    res.already ? "Already linked to a client record." : "Client record created/linked.",
+                  );
+                  onClose();
+                } catch (e) {
+                  toast.error(e instanceof Error ? e.message : "Failed.");
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              Convert
+            </Button>
+          </div>
         </div>
       </DialogContent>
     </Dialog>

@@ -1052,12 +1052,34 @@ export const reconcileWebhookInternal = internalMutation({
       return { applied: true, appliedMinor: applied };
     }
 
-    if (consultation && consultation.status === "pending") {
+    if (
+      consultation &&
+      (consultation.status === "pending" || consultation.status === "accepted")
+    ) {
+      const wasAccepted = consultation.status === "accepted";
       await ctx.db.patch(consultation._id, {
-        status: "paid",
+        status: wasAccepted ? "scheduled" : "paid",
         paidAt: Date.now(),
         providerPaymentId: args.providerPaymentId,
+        ...(wasAccepted
+          ? {
+              history: [
+                ...(consultation.history ?? []),
+                { at: Date.now(), text: "Fee payment received — consultation confirmed." },
+              ],
+            }
+          : {}),
       });
+      if (wasAccepted) {
+        await ctx.scheduler.runAfter(
+          0,
+          internal.consultRequests.notifyRequesterInternal,
+          {
+            consultationId: consultation._id,
+            text: "Payment received — your consultation is confirmed. See you at the appointed time.",
+          },
+        );
+      }
       return { applied: true };
     }
     return { applied: false, reason: "not-pending" };

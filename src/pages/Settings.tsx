@@ -7,8 +7,16 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -75,6 +83,8 @@ export default function Settings() {
       ) : (
         <div className="space-y-10">
           <OrgProfileCard key={profile._id} profile={profile} />
+          <PublicProfileCard />
+          <VerificationDeskCard />
           <AutomationCard />
           <NotificationPrefsCard />
           <PermissionsMatrixCard />
@@ -1575,6 +1585,391 @@ function NotificationPrefsCard() {
         >
           {busy ? "Saving…" : "Save preferences"}
         </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------
+// Public directory profile editor (section 22)
+// ---------------------------------------------------------------
+
+function PublicProfileCard() {
+  const profile = useQuery(api.directory.myProfile);
+  const [open, setOpen] = useState(false);
+
+  if (profile === undefined || profile === null) return null;
+  if ("canPublish" in profile && profile.canPublish === false) return null;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="font-serif">Public directory profile</CardTitle>
+        <CardDescription>
+          Publish your practice to the public “Find a Lawyer” directory.
+          Nothing appears publicly until you switch publication on.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <Switch checked={profile.published} onCheckedChange={() => setOpen(true)} />
+          <span className="text-sm text-muted-foreground">
+            {profile.published ? "Published publicly" : "Not published"}
+          </span>
+          {profile.verificationStatus === "verified" && (
+            <Badge className="border-emerald-200 bg-emerald-50 text-emerald-800" variant="outline">
+              Verified by your chamber
+            </Badge>
+          )}
+          {profile.verificationStatus === "rejected" && (
+            <Badge variant="outline" className="border-red-200 bg-red-50 text-red-800">
+              Verification not granted
+            </Badge>
+          )}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          “Verified” is only shown after your chamber's owner or administrator
+          records an actual verification decision. Publishing shows: name,
+          qualifications, enrollment details, experience, practice areas, court
+          specialization, city, languages, chosen contact details, consultation
+          fee and offered availability.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
+            {profile.exists ? "Edit profile" : "Create profile"}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            asChild
+          >
+            <a href="/find-a-lawyer" target="_blank" rel="noreferrer">
+              View public directory
+            </a>
+          </Button>
+        </div>
+      </CardContent>
+      {open && (
+        <ProfileEditor
+          initial={profile}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </Card>
+  );
+}
+
+type MyProfileData = {
+  exists: boolean;
+  published?: boolean | null;
+  headline?: string | null;
+  qualifications?: string | null;
+  enrollmentNumber?: string | null;
+  enrollmentState?: string | null;
+  experienceYears?: number | null;
+  practiceAreas?: string[] | null;
+  courts?: string[] | null;
+  languages?: string[] | null;
+  city?: string | null;
+  publicEmail?: string | null;
+  publicPhone?: string | null;
+  feeMinor?: number | null;
+  slots?: { label: string; startsAt: number }[] | null;
+  availabilityNote?: string | null;
+  about?: string | null;
+  verificationStatus?: string | null;
+  decisionNote?: string | null;
+};
+
+function ProfileEditor({
+  initial,
+  onClose,
+}: {
+  initial: MyProfileData;
+  onClose: () => void;
+}) {
+  const save = useMutation(api.directory.saveProfile);
+  const nowRef = useState(() => Date.now())[0];
+  const [published, setPublished] = useState(initial.published ?? false);
+  const [headline, setHeadline] = useState(initial.headline ?? "");
+  const [qualifications, setQualifications] = useState(initial.qualifications ?? "");
+  const [enrollmentNumber, setEnrollmentNumber] = useState(initial.enrollmentNumber ?? "");
+  const [enrollmentState, setEnrollmentState] = useState(initial.enrollmentState ?? "");
+  const [experienceYears, setExperienceYears] = useState(
+    initial.experienceYears == null ? "" : String(initial.experienceYears),
+  );
+  const [practiceAreas, setPracticeAreas] = useState((initial.practiceAreas ?? []).join(", "));
+  const [courts, setCourts] = useState((initial.courts ?? []).join(", "));
+  const [languages, setLanguages] = useState((initial.languages ?? []).join(", "));
+  const [city, setCity] = useState(initial.city ?? "");
+  const [publicEmail, setPublicEmail] = useState(initial.publicEmail ?? "");
+  const [publicPhone, setPublicPhone] = useState(initial.publicPhone ?? "");
+  const [fee, setFee] = useState(
+    (initial.feeMinor ?? 0) > 0 ? String((initial.feeMinor ?? 0) / 100) : "",
+  );
+  const [slots, setSlots] = useState(
+    [...(initial.slots ?? [])]
+      .filter((s) => s.startsAt > nowRef)
+      .sort((a, b) => a.startsAt - b.startsAt),
+  );
+  const [slotDay, setSlotDay] = useState("");
+  const [slotTime, setSlotTime] = useState("");
+  const [slotLabel, setSlotLabel] = useState("");
+  const [availabilityNote, setAvailabilityNote] = useState(initial.availabilityNote ?? "");
+  const [about, setAbout] = useState(initial.about ?? "");
+  const [busy, setBusy] = useState(false);
+
+  const addSlot = () => {
+    if (!slotDay || !slotTime) return;
+    const startsAt = new Date(`${slotDay}T${slotTime}`).getTime();
+    if (Number.isNaN(startsAt)) return;
+    setSlots(
+      [...slots, { label: slotLabel.trim() || "Consultation", startsAt }].sort(
+        (a, b) => a.startsAt - b.startsAt,
+      ),
+    );
+    setSlotDay("");
+    setSlotTime("");
+    setSlotLabel("");
+  };
+
+  const submit = async () => {
+    setBusy(true);
+    try {
+      await save({
+        published,
+        headline: headline || undefined,
+        qualifications: qualifications || undefined,
+        enrollmentNumber: enrollmentNumber || undefined,
+        enrollmentState: enrollmentState || undefined,
+        experienceYears: experienceYears === "" ? undefined : Number(experienceYears),
+        practiceAreas: practiceAreas.split(",").map((s) => s.trim()).filter(Boolean),
+        courts: courts.split(",").map((s) => s.trim()).filter(Boolean),
+        languages: languages.split(",").map((s) => s.trim()).filter(Boolean),
+        city: city || undefined,
+        publicEmail: publicEmail || undefined,
+        publicPhone: publicPhone || undefined,
+        feeMinor: fee === "" ? 0 : Math.round(Number(fee) * 100),
+        slots,
+        availabilityNote: availabilityNote || undefined,
+        about: about || undefined,
+      });
+      toast.success(
+        published ? "Profile saved and published." : "Profile saved (not published).",
+      );
+      onClose();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not save the profile.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const split = (v: string, set: (s: string) => void) => (
+    <Input value={v} onChange={(e) => set(e.target.value)} />
+  );
+  void split;
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="font-serif">Public profile</DialogTitle>
+          <DialogDescription>
+            Only these details appear publicly, and only when publication is on.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="flex items-center gap-3">
+            <Switch checked={published} onCheckedChange={setPublished} />
+            <span className="text-sm">Published publicly</span>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Headline">
+              <Input value={headline} onChange={(e) => setHeadline(e.target.value)} placeholder="e.g. Criminal & constitutional litigation" />
+            </Field>
+            <Field label="City">
+              <Input value={city} onChange={(e) => setCity(e.target.value)} placeholder="e.g. New Delhi" />
+            </Field>
+            <Field label="Qualifications" full>
+              <Textarea value={qualifications} onChange={(e) => setQualifications(e.target.value)} rows={2} placeholder="B.A. LL.B. (Hons.); LL.M. …" />
+            </Field>
+            <Field label="Enrollment number">
+              <Input value={enrollmentNumber} onChange={(e) => setEnrollmentNumber(e.target.value)} />
+            </Field>
+            <Field label="Enrollment state">
+              <Input value={enrollmentState} onChange={(e) => setEnrollmentState(e.target.value)} placeholder="e.g. Bar Council of Delhi" />
+            </Field>
+            <Field label="Years of experience">
+              <Input type="number" min={0} max={70} value={experienceYears} onChange={(e) => setExperienceYears(e.target.value)} />
+            </Field>
+            <Field label="Consultation fee (₹, blank = free/on request)">
+              <Input type="number" min={0} value={fee} onChange={(e) => setFee(e.target.value)} />
+            </Field>
+            <Field label="Practice areas (comma-separated)" full>
+              {split(practiceAreas, setPracticeAreas)}
+            </Field>
+            <Field label="Courts (comma-separated)" full>
+              {split(courts, setCourts)}
+            </Field>
+            <Field label="Languages (comma-separated)" full>
+              {split(languages, setLanguages)}
+            </Field>
+            <Field label="Public contact email">
+              <Input value={publicEmail} onChange={(e) => setPublicEmail(e.target.value)} />
+            </Field>
+            <Field label="Public contact phone">
+              <Input value={publicPhone} onChange={(e) => setPublicPhone(e.target.value)} />
+            </Field>
+            <Field label="About" full>
+              <Textarea value={about} onChange={(e) => setAbout(e.target.value)} rows={3} />
+            </Field>
+            <Field label="Availability note" full>
+              <Input value={availabilityNote} onChange={(e) => setAvailabilityNote(e.target.value)} placeholder="e.g. Consultations Mon–Fri, 5–7 pm" />
+            </Field>
+          </div>
+
+          <div className="rounded-md border border-[#E5E7EB] p-3">
+            <p className="type-label ink-faded">Offered consultation slots</p>
+            {slots.length > 0 && (
+              <ul className="mt-2 space-y-1">
+                {slots.map((s, i) => (
+                  <li key={s.startsAt} className="flex items-center justify-between text-xs">
+                    <span>
+                      {s.label} · {new Date(s.startsAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}
+                    </span>
+                    <button
+                      type="button"
+                      className="text-[#B68A45] hover:underline"
+                      onClick={() => setSlots(slots.filter((_, j) => j !== i))}
+                    >
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <Input type="date" value={slotDay} onChange={(e) => setSlotDay(e.target.value)} aria-label="Slot date" />
+              <Input type="time" value={slotTime} onChange={(e) => setSlotTime(e.target.value)} aria-label="Slot time" />
+              <Input value={slotLabel} onChange={(e) => setSlotLabel(e.target.value)} placeholder="Label (optional)" aria-label="Slot label" />
+              <Button size="sm" variant="outline" onClick={addSlot} disabled={!slotDay || !slotTime}>
+                Add slot
+              </Button>
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={onClose}>Cancel</Button>
+            <Button onClick={submit} disabled={busy}>{busy ? "Saving…" : "Save profile"}</Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function Field({ label, children, full }: { label: string; children: React.ReactNode; full?: boolean }) {
+  return (
+    <div className={`space-y-1.5 ${full ? "sm:col-span-2" : ""}`}>
+      <Label className="text-xs text-muted-foreground">{label}</Label>
+      {children}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------
+// Verification desk — owner/administrator decisions (section 22)
+// ---------------------------------------------------------------
+
+function VerificationDeskCard() {
+  const caps = useQuery(api.workspace.myCapabilities);
+  const queue = useQuery(api.directory.verificationQueue);
+  const decide = useMutation(api.directory.decideVerification);
+  const isOwnerAdmin =
+    caps?.orgRole === "owner" || caps?.orgRole === "administrator";
+
+  if (caps === undefined) return null;
+  if (!isOwnerAdmin) return null;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="font-serif">Directory verification</CardTitle>
+        <CardDescription>
+          Review member profiles before granting the public “Verified” badge.
+          The badge appears only after a decision is recorded here.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {queue === undefined ? null : queue.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No member profiles yet.</p>
+        ) : (
+          <div className="space-y-2">
+            {queue.map((p) => (
+              <div
+                key={p.profileId}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[#E5E7EB] px-3 py-2"
+              >
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">{p.name}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {p.enrollmentNumber || "No enrollment number given"}
+                    {p.practiceAreas.length > 0 ? ` · ${p.practiceAreas.join(", ")}` : ""}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge
+                    variant="outline"
+                    className={
+                      p.verificationStatus === "verified"
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                        : p.verificationStatus === "rejected"
+                          ? "border-red-200 bg-red-50 text-red-800"
+                          : ""
+                    }
+                  >
+                    {p.verificationStatus === "unverified" ? "Not verified" : p.verificationStatus}
+                  </Badge>
+                  {p.verificationStatus !== "verified" && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs"
+                      onClick={async () => {
+                        try {
+                          await decide({ profileId: p.profileId as never, decision: "verified" });
+                          toast.success(`${p.name} marked verified.`);
+                        } catch (err) {
+                          toast.error(err instanceof Error ? err.message : "Could not verify.");
+                        }
+                      }}
+                    >
+                      Verify
+                    </Button>
+                  )}
+                  {p.verificationStatus === "verified" && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 text-xs"
+                      onClick={async () => {
+                        try {
+                          await decide({ profileId: p.profileId as never, decision: "unverified" });
+                          toast.success("Verification withdrawn.");
+                        } catch (err) {
+                          toast.error(err instanceof Error ? err.message : "Could not update.");
+                        }
+                      }}
+                    >
+                      Withdraw
+                    </Button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </CardContent>
     </Card>
   );
