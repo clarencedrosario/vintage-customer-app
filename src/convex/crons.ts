@@ -30,4 +30,16 @@ crons.interval(
   {},
 );
 
+// Daily SaaS subscription lifecycle: trial expiry, missed renewals,
+// grace-period end → read-only (section 24).
+crons.daily(
+  "saas-subscription-expiry",
+  {
+    hourUTC: 20, // 01:30 Asia/Kolkata — after the local day has ended.
+    minuteUTC: 30,
+  },
+  internal.subscriptions.runExpiryScan,
+  {},
+);
+
 export default crons;

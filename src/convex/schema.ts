@@ -126,6 +126,9 @@ export default defineSchema({
     designation: v.optional(v.string()),
     phone: v.optional(v.string()),
     barCouncilId: v.optional(v.string()),
+    // Platform operator flag (section 24) — never self-serve; granted
+    // only via platform.bootstrapAdmin from PLATFORM_OWNER_EMAIL.
+    isPlatformAdmin: v.optional(v.boolean()),
   }).index("email", ["email"]),
 
   // Convex Auth manages authSessions/authAccounts/authVerificationCodes
@@ -167,6 +170,43 @@ export default defineSchema({
     promoPopupHeadline: v.optional(v.string()),
     promoPopupBody: v.optional(v.string()),
     promoPopupCta: v.optional(v.string()),
+    // Commercial SaaS subscription (section 24). Plan-independent state
+    // lives here so access gating reads one row: trial window, paid
+    // window, grace period after expiry, read-only once past grace.
+    subscription: v.optional(
+      v.object({
+        planId: v.optional(v.id("saasPlans")),
+        status: v.union(
+          v.literal("trialing"),
+          v.literal("active"),
+          v.literal("past_due"),
+          v.literal("grace"),
+          v.literal("read_only"),
+          v.literal("cancelled"),
+          v.literal("closed"),
+        ),
+        trialEndsAt: v.optional(v.number()),
+        currentPeriodEnd: v.optional(v.number()),
+        // Commitment end when cancelling at period end.
+        cancelAt: v.optional(v.number()),
+        cancelledAt: v.optional(v.number()),
+        endedAt: v.optional(v.number()),
+        graceUntil: v.optional(v.number()),
+      }),
+    ),
+    // Exceptional platform-owner access to THIS org's legal records.
+    // Null/granted:null = no access. Explicitly authorized, expiring,
+    // fully audited — never a default owner privilege.
+    exceptionalAccess: v.optional(
+      v.object({
+        granted: v.boolean(),
+        grantedBy: v.id("users"),
+        grantedAt: v.number(),
+        reason: v.string(),
+        expiresAt: v.number(),
+        revokedAt: v.optional(v.number()),
+      }),
+    ),
     createdBy: v.id("users"),
     createdAt: v.number(),
   }).index("by_slug", ["slug"]),
@@ -183,6 +223,9 @@ export default defineSchema({
     invitedBy: v.optional(v.id("users")),
     invitedEmail: v.optional(v.string()),
     invitedAt: v.optional(v.number()),
+    // Owner/admin invites may be marked exempt from the subscription's
+    // seat count (never for billable legal roles).
+    seatExempt: v.optional(v.boolean()),
     joinedAt: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.optional(v.number()),
@@ -970,6 +1013,9 @@ export default defineSchema({
     tokenHash: v.string(),
     invitedBy: v.id("users"),
     expiresAt: v.number(),
+    // Firm-administrator invites may be exempt from seat counting (see
+    // section 24); billable legal roles are never marked exempt.
+    seatExempt: v.optional(v.boolean()),
     createdAt: v.number(),
     usedAt: v.optional(v.number()),
     revokedAt: v.optional(v.number()),
@@ -1299,6 +1345,132 @@ export default defineSchema({
   // One row per purchase/submission. Lifecycle: submitted (payment
   // pending) -> paid -> scheduled (auto window) -> expired (computed by
   // endsAt) | rejected | cancelled. Owner approval gates activation.
+  // ---------------- SaaS commercial subscriptions (section 24) ----------------
+
+  // Plans are platform-level (not org-scoped): the operator defines
+  // what is sold. kind separates individual-lawyer seats from firms.
+  saasPlans: defineTable({
+    code: v.string(),
+    name: v.string(),
+    kind: v.union(v.literal("individual"), v.literal("firm")),
+    priceMinor: v.number(),
+    interval: v.union(v.literal("monthly"), v.literal("yearly")),
+    seatLimit: v.optional(v.number()),
+    storageLimitMb: v.optional(v.number()),
+    features: v.optional(v.array(v.string())),
+    trialDays: v.optional(v.number()),
+    active: v.boolean(),
+    sortOrder: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.optional(v.number()),
+  }).index("by_code", ["code"]),
+
+  // One row per organization. Payment runs through the same verified
+  // Razorpay webhook path as client invoices (kind: "saas"), but the
+  // money never touches invoices/payments — subscriptions keeps its
+  // own invoice rows so lawyer client billing stays separate.
+  subscriptions: defineTable({
+    orgId: v.id("organizations"),
+    planId: v.id("saasPlans"),
+    status: v.union(
+      v.literal("trialing"),
+      v.literal("active"),
+      v.literal("past_due"),
+      v.literal("grace"),
+      v.literal("read_only"),
+      v.literal("cancelled"),
+      v.literal("closed"),
+    ),
+    interval: v.union(v.literal("monthly"), v.literal("yearly")),
+    seatLimit: v.optional(v.number()),
+    storageLimitMb: v.optional(v.number()),
+    trialEndsAt: v.optional(v.number()),
+    currentPeriodEnd: v.number(),
+    cancelAt: v.optional(v.number()),
+    cancelledAt: v.optional(v.number()),
+    endedAt: v.optional(v.number()),
+    // Read-only window after grace ends; export stays possible here.
+    graceUntil: v.optional(v.number()),
+    // Payment link (idempotent per attempt) + provider ids.
+    paymentLinkId: v.optional(v.string()),
+    paymentLinkUrl: v.optional(v.string()),
+    paymentLinkIdConsumed: v.optional(v.boolean()),
+    providerPaymentId: v.optional(v.string()),
+    paidAt: v.optional(v.number()),
+    lastInvoiceNumber: v.optional(v.string()),
+    history: v.optional(
+      v.array(
+        v.object({
+          at: v.number(),
+          text: v.string(),
+        }),
+      ),
+    ),
+    createdAt: v.number(),
+    updatedAt: v.optional(v.number()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_link", ["paymentLinkId"]),
+
+  // Platform-level subscription invoices (never org-scoped, never in
+  // the lawyers' client-invoice numbering space).
+  subscriptionInvoices: defineTable({
+    number: v.string(),
+    subscriptionId: v.id("subscriptions"),
+    orgId: v.id("organizations"),
+    orgName: v.string(),
+    planCode: v.string(),
+    planName: v.string(),
+    interval: v.union(v.literal("monthly"), v.literal("yearly")),
+    amountMinor: v.number(),
+    status: v.union(
+      v.literal("due"),
+      v.literal("paid"),
+      v.literal("void"),
+    ),
+    periodStart: v.number(),
+    periodEnd: v.number(),
+    dueOn: v.string(),
+    providerPaymentId: v.optional(v.string()),
+    paidAt: v.optional(v.number()),
+    createdAt: v.number(),
+  })
+    .index("by_subscription", ["subscriptionId"])
+    .index("by_number", ["number"]),
+
+  // Verified SaaS payment events — separate idempotency ledger from
+  // the client-invoice paymentEvents table.
+  saasPaymentEvents: defineTable({
+    eventId: v.string(),
+    eventType: v.string(),
+    payload: v.optional(v.string()),
+    note: v.optional(v.string()),
+    handledAt: v.optional(v.number()),
+    createdAt: v.number(),
+  }).index("by_event", ["eventId"]),
+
+  // Time-limited one-time export tokens (closure/portability).
+  saasExports: defineTable({
+    orgId: v.id("organizations"),
+    tokenHash: v.string(),
+    createdBy: v.id("users"),
+    expiresAt: v.number(),
+    usedAt: v.optional(v.number()),
+    createdAt: v.number(),
+  }).index("by_org", ["orgId"]),
+
+  // Audited platform-owner administrative actions (staff/owner
+  // management, plan changes, exceptional access). One row per action.
+  platformAdminAudit: defineTable({
+    actorId: v.id("users"),
+    actorName: v.string(),
+    action: v.string(),
+    targetType: v.string(),
+    targetId: v.string(),
+    detail: v.optional(v.string()),
+    createdAt: v.number(),
+  }).index("by_time", ["createdAt"]),
+
   promotions: defineTable({
     orgId: v.id("organizations"),
     packageId: v.id("promotionPackages"),

@@ -171,6 +171,19 @@ export const inspect = query({
 });
 
 /** Accept an invitation while signed in with the invited email. */
+/** Seat limit for an org's live subscription, or null when unlimited/none. */
+async function getSubSeatLimit(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+): Promise<number | null> {
+  const rows = await ctx.db
+    .query("subscriptions")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
+  const sub = rows[0];
+  return sub?.seatLimit ?? null;
+}
+
 export const accept = mutation({
   args: { token: v.string() },
   handler: async (ctx, args) => {
@@ -194,6 +207,32 @@ export const accept = mutation({
 
     const now = Date.now();
     if (invite.kind === "staff" && invite.orgId) {
+      // Subscription seat limit (section 24): active memberships beyond
+      // the plan's seat limit cannot join. Owners/administrators acting
+      // as firm administrators may be invited seat-exempt (never for
+      // billable legal roles — the invite UI must set that explicitly).
+      const org = await ctx.db.get(invite.orgId);
+      if (org) {
+        const seatLimit = org.subscription?.status === "active" || org.subscription?.status === "trialing"
+          ? (await getSubSeatLimit(ctx, invite.orgId))
+          : null;
+        if (seatLimit !== null) {
+          const members = await ctx.db
+            .query("memberships")
+            .withIndex("by_org", (q) => q.eq("orgId", invite.orgId))
+            .collect();
+          const billable = members.filter(
+            (m) => m.status === "active" && m.seatExempt !== true,
+          ).length;
+          const incomingIsExempt = invite.seatExempt === true;
+          if (!incomingIsExempt && billable >= seatLimit) {
+            throw new Error(
+              `Your chamber's plan includes ${seatLimit} seat${seatLimit === 1 ? "" : "s"} and they are all in use. Upgrade the plan or free a seat to invite more members.`,
+            );
+          }
+        }
+      }
+
       // Idempotent: reactivate an existing (suspended) membership instead
       // of duplicating rows; otherwise create an INVITED→ACTIVE membership.
       const existing = await ctx.db

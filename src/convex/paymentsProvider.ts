@@ -14,7 +14,7 @@
 // ===============================================================
 
 import { v } from "convex/values";
-import { internalAction } from "./_generated/server";
+import { action, internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import crypto from "crypto";
 
@@ -107,6 +107,17 @@ export const verifyAndReconcileWebhook = internalAction({
       (payment && typeof payment.notes === "object" && payment.notes !== null
         ? ((payment.notes as Record<string, unknown>).number as string | undefined)
         : undefined);
+    // SaaS subscription payments (section 24) ride the same verified
+    // webhook but reconcile in subscriptions.ts — never into the
+    // lawyers' client-invoice ledger.
+    const notes: Record<string, unknown> | undefined =
+      (payment && typeof payment.notes === "object" && payment.notes !== null
+        ? (payment.notes as Record<string, unknown>)
+        : undefined) ??
+      (link && typeof link.notes === "object" && link.notes !== null
+        ? (link.notes as Record<string, unknown>)
+        : undefined);
+    const isSaasPayment = notes?.kind === "saas";
     const amountMinor =
       payment && typeof payment.amount === "number"
         ? payment.amount
@@ -119,6 +130,27 @@ export const verifyAndReconcileWebhook = internalAction({
       eventType === "payment.captured" ||
       eventType === "payment_link.paid" ||
       eventType === "order.paid";
+
+    if (isSaasPayment) {
+      if (reconciles && providerPaymentId) {
+        await _ctx.runMutation(internal.subscriptions.reconcileSaasPaymentInternal, {
+          eventId,
+          eventType,
+          payloadJson: args.rawBody,
+          paymentLinkId,
+          providerPaymentId,
+          amountMinor,
+        });
+      } else {
+        await _ctx.runMutation(internal.subscriptions.recordSaasEventInternal, {
+          eventId,
+          eventType,
+          payloadJson: args.rawBody,
+          note: `Received (no reconciliation) — ${eventType}`,
+        });
+      }
+      return { ok: true, status: 200, body: "OK" };
+    }
 
     if (reconciles && providerPaymentId) {
       await _ctx.runMutation(internal.billing.reconcileWebhookInternal, {
@@ -216,6 +248,98 @@ export const createConsultationPaymentLink = internalAction({
     const shortUrl = typeof body.short_url === "string" ? body.short_url : "";
     await ctx.runMutation(internal.billing.attachConsultationLinkInternal, {
       consultationId: args.consultationId,
+      paymentLinkId: id,
+      paymentLinkUrl: shortUrl,
+    });
+    return { id, shortUrl, referenceId };
+  },
+});
+
+/**
+ * Public checkout entry: verifies a signed-in, billing-capable member
+ * against the current subscription state BEFORE creating any payment
+ * link, then creates it. Runs in the Node runtime so the client never
+ * handles provider calls.
+ */
+type CheckoutPrecheck =
+  | { allowed: false; reason: string }
+  | { allowed: true; reuseUrl?: string }
+  | {
+      allowed: true;
+      subscriptionId: string;
+      orgName: string;
+      planName: string;
+      amountMinor: number;
+      payerEmail?: string;
+      payerName: string;
+    };
+
+export const startSubscriptionCheckout = action({
+  args: {},
+  handler: async (ctx): Promise<{ url: string; reused: boolean }> => {
+    const pre = (await ctx.runQuery(
+      internal.subscriptions.checkoutPrecheckInternal,
+      {},
+    )) as CheckoutPrecheck;
+    if (!pre.allowed) {
+      throw new Error(pre.reason ?? "Checkout is not available right now.");
+    }
+    if ("reuseUrl" in pre && pre.reuseUrl) {
+      return { url: pre.reuseUrl, reused: true };
+    }
+    const body = await rz("/payment_links", "POST", {
+      amount: pre.amountMinor,
+      currency: "INR",
+      accept_partial: false,
+      reference_id: `sub-${pre.subscriptionId.slice(-8)}`,
+      description: `Advokate subscription — ${pre.planName} (${pre.orgName})`,
+      customer: {
+        name: pre.payerName,
+        email: pre.payerEmail,
+      },
+      notify: { sms: false, email: false },
+      notes: { kind: "saas", subscriptionId: pre.subscriptionId },
+    });
+    const id = String(body.id);
+    const shortUrl = typeof body.short_url === "string" ? body.short_url : "";
+    await ctx.runMutation(internal.subscriptions.attachPaymentLinkInternal, {
+      subscriptionId: pre.subscriptionId,
+      paymentLinkId: id,
+      paymentLinkUrl: shortUrl,
+    });
+    return { url: shortUrl, reused: false };
+  },
+});
+
+/** Payment link for a SaaS subscription period (section 24). */
+export const createSubscriptionPaymentLink = internalAction({
+  args: {
+    subscriptionId: v.id("subscriptions"),
+    orgName: v.string(),
+    planName: v.string(),
+    amountMinor: v.number(),
+    payerEmail: v.optional(v.string()),
+    payerName: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const referenceId = `sub-${args.subscriptionId.slice(-8)}-${Date.now()}`;
+    const body = await rz("/payment_links", "POST", {
+      amount: args.amountMinor,
+      currency: "INR",
+      accept_partial: false,
+      reference_id: referenceId,
+      description: `Advokate subscription — ${args.planName} (${args.orgName})`,
+      customer: {
+        name: args.payerName,
+        email: args.payerEmail,
+      },
+      notify: { sms: false, email: false },
+      notes: { kind: "saas", subscriptionId: args.subscriptionId },
+    });
+    const id = String(body.id);
+    const shortUrl = typeof body.short_url === "string" ? body.short_url : "";
+    await ctx.runMutation(internal.subscriptions.attachPaymentLinkInternal, {
+      subscriptionId: args.subscriptionId,
       paymentLinkId: id,
       paymentLinkUrl: shortUrl,
     });

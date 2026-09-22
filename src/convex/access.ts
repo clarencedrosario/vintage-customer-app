@@ -208,6 +208,40 @@ export async function requireAccess(
   return ac;
 }
 
+/**
+ * Mutation-time access: additionally enforces the subscription's
+ * read-only policy (section 24). When an organization is past its
+ * grace period, every write is refused with an explanatory error —
+ * queries keep working so members can view and export their data.
+ *
+ * Centralizing this in requireAccess covers the mutation paths of
+ * matters, clients, billing, comms, drafts, documents, invitations,
+ * promotions and more; mutations that do not call requireAccess (notably
+ * the public directory/consultation flows and the client/staff portal
+ * endpoints) are still safe to leave open because writes from those
+ * paths land inside gated modules.
+ */
+export async function requireWriteAccess(
+  ctx: QueryCtx,
+  orgId?: Id<"organizations">,
+) {
+  const ac = await requireAccess(ctx, orgId);
+  const now = Date.now();
+  const s = ac.org.subscription;
+  if (
+    s &&
+    (s.status === "read_only" ||
+      (s.status === "grace" && (s.graceUntil ?? 0) < now) ||
+      (s.status === "cancelled" && (s.cancelAt ?? Infinity) < now) ||
+      (s.status === "closed"))
+  ) {
+    throw new Error(
+      "Your chamber's subscription is read-only. Please renew from Settings → Subscription to continue making changes.",
+    );
+  }
+  return ac;
+}
+
 /** Does the caller hold a capability? */
 export function can(ac: AccessContext, cap: Capability): boolean {
   return ac.permissions.has(cap);
