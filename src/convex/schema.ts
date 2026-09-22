@@ -1511,4 +1511,97 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_submitted_by", ["submittedByUserId"]),
+
+  // ---------------- Firm knowledge (section 25) ----------------
+  // Precedents, research notes and saved authorities. Nothing is ever
+  // published automatically from a matter: every entry is authored
+  // deliberately, and reuse requires an explicit copy action by someone
+  // who can already see both the entry and the target matter.
+  knowledgeEntries: defineTable({
+    orgId: v.id("organizations"),
+    kind: v.union(
+      v.literal("precedent"),
+      v.literal("template"),
+      v.literal("research_note"),
+      v.literal("authority"),
+    ),
+    title: v.string(),
+    authorId: v.id("users"),
+    categoryId: v.optional(v.id("knowledgeCategories")),
+    tags: v.optional(v.array(v.string())),
+    state: v.union(v.literal("draft"), v.literal("approved"), v.literal("retired")),
+    // Who approved the current version (approved entries only).
+    approvedById: v.optional(v.id("users")),
+    approvedAt: v.optional(v.number()),
+    approvedVersion: v.optional(v.number()),
+    // Restrict approval-time visibility beyond org members when set.
+    restrictedRoles: v.optional(v.array(v.string())),
+    currentVersion: v.number(),
+    reuseCount: v.optional(v.number()),
+    lastReusedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_state", ["orgId", "state"]),
+
+  knowledgeCategories: defineTable({
+    orgId: v.id("organizations"),
+    name: v.string(),
+    createdAt: v.number(),
+  }).index("by_org", ["orgId"]),
+
+  // Immutable version rows — edits always create a new version and the
+  // entry returns to draft; an old approval never covers new text.
+  knowledgeVersions: defineTable({
+    entryId: v.id("knowledgeEntries"),
+    version: v.number(),
+    body: v.string(),
+    sourceUrl: v.optional(v.string()),
+    sourceRef: v.optional(v.string()),
+    changeNote: v.optional(v.string()),
+    authorId: v.id("users"),
+    createdAt: v.number(),
+  }).index("by_entry", ["entryId"]),
+
+  // ---------------- Court information (section 25) ----------------
+  // Cause lists and court updates are manually imported/entered and are
+  // always labelled as such — never presented as live synchronized data.
+  causeListEntries: defineTable({
+    orgId: v.id("organizations"),
+    listDate: v.string(), // YYYY-MM-DD, organisation-local
+    court: v.string(),
+    itemNumber: v.optional(v.string()),
+    caseTitle: v.string(),
+    caseNumber: v.optional(v.string()),
+    matterId: v.optional(v.id("matters")),
+    sourceName: v.string(),
+    sourceUrl: v.optional(v.string()),
+    checkedAt: v.number(),
+    checkedById: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_org_date", ["orgId", "listDate"])
+    .index("by_matter", ["matterId"]),
+
+  courtUpdates: defineTable({
+    orgId: v.id("organizations"),
+    kind: v.union(
+      v.literal("circular"),
+      v.literal("notification"),
+      v.literal("roster"),
+      v.literal("holiday"),
+      v.literal("other"),
+    ),
+    title: v.string(),
+    detail: v.optional(v.string()),
+    court: v.optional(v.string()),
+    effectiveFrom: v.optional(v.string()), // YYYY-MM-DD
+    sourceName: v.string(),
+    sourceUrl: v.optional(v.string()),
+    checkedAt: v.number(),
+    checkedById: v.id("users"),
+    matterId: v.optional(v.id("matters")),
+    createdAt: v.number(),
+  }).index("by_org", ["orgId"]),
 });
