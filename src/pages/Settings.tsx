@@ -1,5 +1,6 @@
 import { ChamberShell } from "@/components/ChamberShell";
 import { PromoteMyProfileCard, PromotionsOwnerCard } from "@/components/PromotionsCards";
+import { SubscriptionCard } from "@/components/SubscriptionCard";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -84,6 +85,7 @@ export default function Settings() {
       ) : (
         <div className="space-y-10">
           <OrgProfileCard key={profile._id} profile={profile} />
+          <SubscriptionCard />
           <PublicProfileCard />
           <VerificationDeskCard />
           <PromotionsOwnerCard />

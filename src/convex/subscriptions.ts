@@ -1,5 +1,4 @@
 import { v } from "convex/values";
-import { internal } from "./_generated/api";
 import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import type { QueryCtx, MutationCtx } from "./_generated/server";
 import { requireAccess, requireCapability, requireWriteAccess } from "./access";
@@ -406,12 +405,13 @@ export const checkoutPrecheckInternal = internalQuery({
       return { allowed: false as const, reason: "already active" };
     }
     if (sub.paymentLinkUrl && !sub.paymentLinkIdConsumed) {
-      return { allowed: true as const, reuseUrl: sub.paymentLinkUrl };
+      return { allowed: true as const, kind: "reuse" as const, url: sub.paymentLinkUrl };
     }
     const plan = await ctx.db.get(sub.planId);
     if (!plan) return { allowed: false as const, reason: "plan missing" };
     return {
       allowed: true as const,
+      kind: "new" as const,
       subscriptionId: sub._id,
       orgName: ac.org.name,
       planName: planLabel(plan, sub.interval),

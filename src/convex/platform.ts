@@ -188,6 +188,7 @@ export const consoleData = query({
         const s = subByOrg.get(o._id);
         return {
           orgId: o._id,
+          subscriptionId: s?._id ?? null,
           name: o.name,
           kind: o.kind,
           createdAt: o.createdAt,
@@ -292,6 +293,32 @@ export const setPlatformAdmin = mutation({
       "user",
       args.userId,
       target.email ?? undefined,
+    );
+  },
+});
+
+/** Email-addressed variant used by the console's grant form. */
+export const setPlatformAdminByEmail = mutation({
+  args: { email: v.string(), value: v.boolean() },
+  handler: async (ctx, args) => {
+    const admin = await requirePlatformAdmin(ctx);
+    const email = args.email.trim().toLowerCase();
+    const target = await ctx.db
+      .query("users")
+      .withIndex("email", (q) => q.eq("email", email))
+      .first();
+    if (!target) throw new Error("No account found with that email.");
+    if (target._id === admin._id && !args.value) {
+      throw new Error("You cannot revoke your own administrator access.");
+    }
+    await ctx.db.patch(target._id, { isPlatformAdmin: args.value });
+    await audit(
+      ctx,
+      admin,
+      args.value ? "admin.grant" : "admin.revoke",
+      "user",
+      target._id,
+      email,
     );
   },
 });

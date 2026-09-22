@@ -16,6 +16,7 @@
 import { v } from "convex/values";
 import { action, internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import crypto from "crypto";
 
 const API = "https://api.razorpay.com/v1";
@@ -263,9 +264,10 @@ export const createConsultationPaymentLink = internalAction({
  */
 type CheckoutPrecheck =
   | { allowed: false; reason: string }
-  | { allowed: true; reuseUrl?: string }
+  | { allowed: true; kind: "reuse"; url: string }
   | {
       allowed: true;
+      kind: "new";
       subscriptionId: string;
       orgName: string;
       planName: string;
@@ -284,8 +286,11 @@ export const startSubscriptionCheckout = action({
     if (!pre.allowed) {
       throw new Error(pre.reason ?? "Checkout is not available right now.");
     }
-    if ("reuseUrl" in pre && pre.reuseUrl) {
-      return { url: pre.reuseUrl, reused: true };
+    if (pre.kind === "reuse") {
+      if (!pre.url) {
+        throw new Error("Payment link could not be prepared. Please try again.");
+      }
+      return { url: pre.url, reused: true };
     }
     const body = await rz("/payment_links", "POST", {
       amount: pre.amountMinor,
@@ -303,7 +308,7 @@ export const startSubscriptionCheckout = action({
     const id = String(body.id);
     const shortUrl = typeof body.short_url === "string" ? body.short_url : "";
     await ctx.runMutation(internal.subscriptions.attachPaymentLinkInternal, {
-      subscriptionId: pre.subscriptionId,
+      subscriptionId: pre.subscriptionId as Id<"subscriptions">,
       paymentLinkId: id,
       paymentLinkUrl: shortUrl,
     });

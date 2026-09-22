@@ -31,6 +31,7 @@ import {
   Receipt,
   ScrollText,
   Settings,
+  Shield,
   Users,
   UsersRound,
 } from "lucide-react";
@@ -252,6 +253,22 @@ function OrgSwitcher({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
+/** Discreet top-bar entry to the platform console — only for platform admins. */
+function PlatformLink() {
+  const amAdmin = useQuery(api.platform.amIPlatformAdmin);
+  if (!amAdmin) return null;
+  return (
+    <NavLink
+      to="/platform"
+      title="Platform console"
+      aria-label="Platform console"
+      className="flex size-8 items-center justify-center rounded-md text-slate-500 hover:bg-muted hover:text-foreground"
+    >
+      <Shield className="size-4" aria-hidden="true" />
+    </NavLink>
+  );
+}
+
 /**
  * Authenticated desktop layout: fixed navy sidebar (~260px), top bar,
  * independently scrolling main content, responsive mobile navigation.
@@ -375,6 +392,7 @@ export function ChamberShell({
             </div>
 
             <div className="flex items-center gap-2">
+              <PlatformLink />
               <NotificationBell />
               {actions}
               <Button
