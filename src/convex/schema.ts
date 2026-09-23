@@ -1759,6 +1759,38 @@ export default defineSchema({
     performedAt: v.number(),
   }).index("by_org", ["orgId"]),
 
+  // ---------------- GitHub integration ----------------
+  // One row per organization. The token lives ONLY in the server-side
+  // environment (Keys tab → GITHUB_TOKEN); the browser never sees it.
+  // A repo is linked only when the caller can actually read it with the
+  // configured token — no unverified claims.
+  githubConnections: defineTable({
+    orgId: v.id("organizations"),
+    repo: v.string(), // "owner/name"
+    owner: v.string(),
+    name: v.string(),
+    defaultBranch: v.string(),
+    connectedById: v.id("users"),
+    connectedAt: v.number(),
+    lastVerifiedAt: v.number(),
+    lastError: v.optional(v.string()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_repo", ["orgId", "repo"]),
+
+  // Audit entries for GitHub actions, kept separate from the matter audit
+  // log (which requires a matterId). Connecting a repo still leaves a
+  // reviewable trail.
+  githubAudit: defineTable({
+    orgId: v.id("organizations"),
+    actorId: v.id("users"),
+    actorName: v.string(),
+    action: v.string(), // connect, disconnect, list_branches, push_chronology
+    repo: v.optional(v.string()),
+    detail: v.optional(v.string()),
+    createdAt: v.number(),
+  }).index("by_org", ["orgId"]),
+
   // ---------------- Offline court mode (section 27) ----------------
   // One row per prepared offline bundle (per user + device). The row
   // records WHAT was downloaded, when it was last verified against the

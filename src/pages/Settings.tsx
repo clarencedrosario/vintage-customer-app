@@ -1,5 +1,6 @@
 import { ChamberShell } from "@/components/ChamberShell";
 import { BackupCard, DataImportCard } from "@/components/DataAndBackupCards";
+import { GitHubCard } from "@/components/GitHubCard";
 import { PromoteMyProfileCard, PromotionsOwnerCard } from "@/components/PromotionsCards";
 import { SubscriptionCard } from "@/components/SubscriptionCard";
 import { Button } from "@/components/ui/button";
@@ -95,6 +96,7 @@ export default function Settings() {
           <NotificationPrefsCard />
           <DataImportCard />
           <BackupCard />
+          <GitHubCard />
           <PermissionsMatrixCard />
           <SecurityCard />
         </div>
