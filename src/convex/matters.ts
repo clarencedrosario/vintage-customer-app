@@ -1423,6 +1423,34 @@ export const listAudit = query({
 });
 
 /** All hearings across visible matters (cause list). */
+/** All hearings on a matter, newest first (access-checked). */
+export const listHearings = query({
+  args: { matterId: v.id("matters") },
+  handler: async (ctx, args) => {
+    const ac = await getAccessContext(ctx);
+    if (!ac) return [];
+    await requireMatter(ctx, ac, args.matterId);
+    const rows = await ctx.db
+      .query("hearings")
+      .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))
+      .collect();
+    return rows.sort((a, b) => b.at - a.at);
+  },
+});
+
+/** Resolve the matter behind a hearing (for deep links; access-checked). */
+export const matterForHearing = query({
+  args: { hearingId: v.id("hearings") },
+  handler: async (ctx, args) => {
+    const ac = await getAccessContext(ctx);
+    if (!ac) return null;
+    const hearing = await ctx.db.get(args.hearingId);
+    if (!hearing) return null;
+    const matter = await requireMatter(ctx, ac, hearing.matterId);
+    return matter._id;
+  },
+});
+
 export const allHearings = query({
   args: {},
   handler: async (ctx) => {

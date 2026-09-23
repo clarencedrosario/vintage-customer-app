@@ -59,10 +59,14 @@ export function HearingPackDialog({
   matterId,
   open,
   onOpenChange,
+  preselectHearingId,
 }: {
   matterId: Id<"matters">;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** When the caller opens the pack for a specific upcoming hearing
+   *  (e.g. straight after recording the outcome), preselect it. */
+  preselectHearingId?: Id<"hearings"> | null;
 }) {
   const data = useQuery(
     api.hearingPacks.context,
@@ -73,7 +77,7 @@ export function HearingPackDialog({
   const generate = useMutation(api.hearingPacks.generate);
   const recordDownload = useMutation(api.hearingPacks.recordDownload);
 
-  const [hearingId, setHearingId] = useState<string>("");
+  const [hearingId, setHearingId] = useState<string>(preselectHearingId ?? "");
   const [sections, setSections] = useState<string[]>(DEFAULT_SECTIONS);
   const [orderIds, setOrderIds] = useState<Id<"orders">[]>([]);
   const [documentIds, setDocumentIds] = useState<Id<"matterDocuments">[]>([]);

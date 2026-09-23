@@ -22,7 +22,9 @@ import {
 } from "@/components/ui/select";
 import { api } from "@/convex/_generated/api";
 import { HearingPackDialog } from "@/components/HearingPackDialog";
+import { HearingOutcomeDialog } from "@/components/HearingOutcomeDialog";
 import { AiStudio } from "@/components/AiStudio";
+import { Badge } from "@/components/ui/badge";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { MatterStatus } from "@/convex/schema";
 import type { Doc } from "@/convex/_generated/dataModel";
@@ -95,6 +97,16 @@ function DocumentLink({ documentId }: { documentId: Id<"matterDocuments"> }) {
 
 export default function MatterDetail() {
   const [packOpen, setPackOpen] = useState(false);
+  // Hearing the pack dialog should preselect (e.g. the newly scheduled
+  // next hearing straight after an outcome was recorded).
+  const [packHearingId, setPackHearingId] = useState<Id<"hearings"> | null>(null);
+  // Post-hearing chain (section 31): outcome → tasks → chronology event
+  // → client update draft → next hearing pack.
+  const [outcomeHearing, setOutcomeHearing] = useState<{
+    id: Id<"hearings">;
+    title: string;
+    court: string | null;
+  } | null>(null);
   const { matterId: rawId } = useParams<{ matterId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const matterId = rawId as Id<"matters"> | undefined;
@@ -129,6 +141,7 @@ export default function MatterDetail() {
   const timeEntries = useQuery(api.matters.listTime, matterId ? { matterId } : "skip");
   const expenses = useQuery(api.matters.listExpenses, matterId ? { matterId } : "skip");
   const events = useQuery(api.matters.listEvents, matterId ? { matterId } : "skip");
+  const hearings = useQuery(api.matters.listHearings, matterId ? { matterId } : "skip");
 
   const updateStatus = useMutation(api.matters.updateStatus);
   const addHearing = useMutation(api.matters.addHearing);
@@ -513,7 +526,7 @@ export default function MatterDetail() {
         {/* Hearings */}
         <TabsContent value="hearings" className="mt-6">
           <div className="mb-4 flex justify-end">
-            <Button variant="outline" size="sm" onClick={() => setPackOpen(true)}>
+            <Button variant="outline" size="sm" onClick={() => { setPackHearingId(null); setPackOpen(true); }}>
               <FileText className="mr-2 h-4 w-4" /> Build hearing pack
             </Button>
           </div>
@@ -522,8 +535,91 @@ export default function MatterDetail() {
               matterId={matterId}
               open={packOpen}
               onOpenChange={setPackOpen}
+              preselectHearingId={packHearingId}
             />
           )}
+          {outcomeHearing && matterId && (
+            <HearingOutcomeDialog
+              hearingId={outcomeHearing.id}
+              hearingTitle={outcomeHearing.title}
+              court={outcomeHearing.court}
+              open
+              onOpenChange={(v) => !v && setOutcomeHearing(null)}
+            />
+          )}
+
+          {/* Real hearing records — scheduled hearings expose the outcome
+              action that drives the whole post-hearing chain. */}
+          <div className="mb-4 space-y-2">
+            <p className="type-label ink-faded">Hearings on this matter</p>
+            {(hearings ?? []).length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                No hearings recorded yet. Schedule the first one below.
+              </p>
+            ) : (
+              (hearings ?? [])
+                .slice()
+                .sort((a, b) => b.at - a.at)
+                .slice(0, 8)
+                .map((h) => (
+                  <div
+                    key={h._id}
+                    className="flex flex-wrap items-center justify-between gap-2 rule-frame bg-card p-4"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-medium">{h.title}</span>
+                        <Badge
+                          variant={
+                            h.status === "held"
+                              ? "secondary"
+                              : h.status === "adjourned"
+                                ? "destructive"
+                                : h.status === "cancelled"
+                                  ? "outline"
+                                  : "default"
+                          }
+                        >
+                          {h.status}
+                        </Badge>
+                      </div>
+                      <p className="type-label mt-1 ink-faded">
+                        {formatDateTimeIN(h.at)}
+                        {h.court ? ` · ${h.court}` : ""}
+                        {h.outcome ? ` · ${h.outcome.slice(0, 110)}` : ""}
+                      </p>
+                    </div>
+                    {h.status === "scheduled" && (
+                      <div className="flex gap-2">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            setPackHearingId(h._id);
+                            setPackOpen(true);
+                          }}
+                        >
+                          <FileText className="mr-1 h-4 w-4" /> Prepare pack
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() =>
+                            setOutcomeHearing({
+                              id: h._id,
+                              title: h.title,
+                              court: h.court ?? null,
+                            })
+                          }
+                        >
+                          Record outcome
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                ))
+            )}
+          </div>
           <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
             <div className="space-y-3">
               {(events ?? []).filter((e) => e.kind === "hearing").length === 0 ? (
