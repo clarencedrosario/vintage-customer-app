@@ -14,6 +14,13 @@ const Landing = lazy(() => import("./pages/Landing.tsx"));
 const LoginPage = lazy(() => import("./pages/Login.tsx"));
 const FindALawyer = lazy(() => import("./pages/FindALawyer.tsx"));
 const Dashboard = lazy(() => import("./pages/Dashboard.tsx"));
+const Matters = lazy(() => import("./pages/Matters.tsx"));
+const CalendarPage = lazy(() => import("./pages/Calendar.tsx"));
+const CourtDay = lazy(() => import("./pages/CourtDay.tsx"));
+const Documents = lazy(() => import("./pages/Documents.tsx"));
+const AdvokateAI = lazy(() => import("./pages/AdvokateAI.tsx"));
+const Research = lazy(() => import("./pages/Research.tsx"));
+const PortalAdmin = lazy(() => import("./pages/PortalAdmin.tsx"));
 const Attention = lazy(() => import("./pages/Attention.tsx"));
 const MatterDetail = lazy(() => import("./pages/MatterDetail.tsx"));
 const Clients = lazy(() => import("./pages/Clients.tsx"));
@@ -157,6 +164,62 @@ createRoot(document.getElementById("root")!).render(
                 element={
                   <RequireAuth>
                     <Attention />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/matters"
+                element={
+                  <RequireAuth>
+                    <Matters />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/calendar"
+                element={
+                  <RequireAuth>
+                    <CalendarPage />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/court-day"
+                element={
+                  <RequireAuth>
+                    <CourtDay />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/documents"
+                element={
+                  <RequireAuth>
+                    <Documents />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/ai"
+                element={
+                  <RequireAuth>
+                    <AdvokateAI />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/research"
+                element={
+                  <RequireAuth>
+                    <Research />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/portal-admin"
+                element={
+                  <RequireAuth>
+                    <PortalAdmin />
                   </RequireAuth>
                 }
               />

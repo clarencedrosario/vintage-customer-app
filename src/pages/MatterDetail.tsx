@@ -41,6 +41,7 @@ import { useMutation, useQuery } from "convex/react";import {
   CircleDashed,
   ClipboardCheck,
   FileText,
+  Inbox,
   Gavel,
   History,
   Landmark,
@@ -187,7 +188,7 @@ export default function MatterDetail() {
   const tabParam = searchParams.get("tab");
   const activeTab =
     tabParam &&
-    ["hearings", "orders", "tasks", "documents", "time", "expenses", "invoices", "notes", "parties", "issues", "docket", "audit"].includes(
+    ["hearings", "orders", "tasks", "documents", "time", "expenses", "invoices", "notes", "parties", "issues", "docket", "audit", "ai", "requests"].includes(
       tabParam,
     )
       ? tabParam
@@ -473,6 +474,9 @@ export default function MatterDetail() {
           </TabsTrigger>
           <TabsTrigger value="tasks" className="gap-2">
             <ListChecks className="size-4" /> Tasks
+          </TabsTrigger>
+          <TabsTrigger value="requests" className="gap-2">
+            <Inbox className="size-4" /> Requests
           </TabsTrigger>
           <TabsTrigger value="documents" className="gap-2">
             <FileText className="size-4" /> Documents
@@ -967,6 +971,11 @@ export default function MatterDetail() {
           </div>
 
           {/* Client document-request checklist */}
+          <DocumentRequestPanel matterId={matterId!} />
+        </TabsContent>
+
+        {/* Requests — deep-linkable desk for client document requests */}
+        <TabsContent value="requests" className="mt-6">
           <DocumentRequestPanel matterId={matterId!} />
         </TabsContent>
 

@@ -35,7 +35,7 @@ import {
   Plus,
 } from "lucide-react";
 import { useRef, useState } from "react";
-import { Link } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import { toast } from "sonner";
 
 // ---------------------------------------------------------------------
@@ -107,7 +107,18 @@ type PlaybookRow = {
 export default function Tasks() {
   const [view, setView] = useState("mine");
   const [includeFirmWide, setIncludeFirmWide] = useState(true);
-  const [tab, setTab] = useState("tasks");
+  // Deep-linkable tab: /tasks?tab=playbooks (used by the Matters page).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabParam = searchParams.get("tab");
+  const [tabState, setTabState] = useState("tasks");
+  const tab =
+    tabParam && ["tasks", "deadlines", "playbooks"].includes(tabParam)
+      ? tabParam
+      : tabState;
+  const setTab = (value: string) => {
+    setTabState(value);
+    setSearchParams(value === "tasks" ? {} : { tab: value }, { replace: true });
+  };
 
   const caps = useQuery(api.workspace.myCapabilities);
   const members = useQuery(api.workspace.team);

@@ -13,7 +13,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Check, ChevronsUpDown, Building2, ClipboardList, FileCheck } from "lucide-react";
+import { Check, ChevronsUpDown, Building2, FileCheck } from "lucide-react";
 import {
   Sheet,
   SheetContent,
@@ -26,11 +26,17 @@ import {
   Bell,
   BellRing,
   BookOpen,
+  Bot,
+  CalendarDays,
+  ClipboardList,
   CloudOff,
+  FolderOpen,
+  Gavel,
   Landmark,
   LogOut,
   Menu,
   Receipt,
+  Scale,
   ScrollText,
   Settings,
   Shield,
@@ -38,26 +44,135 @@ import {
   UsersRound,
 } from "lucide-react";
 
-const NAV = [
-  { to: "/dashboard", label: "Overview", icon: Landmark },
-  { to: "/attention", label: "Morning docket", icon: BellRing },
-  { to: "/tasks", label: "Tasks", icon: ClipboardList },
-  { to: "/drafts", label: "Draft review", icon: FileCheck },
-  { to: "/comms", label: "Comms", icon: ScrollText },
-  { to: "/health", label: "Matter health", icon: Activity },
-  { to: "/reports", label: "Reports", icon: ScrollText },
-  { to: "/knowledge", label: "Knowledge & courts", icon: BookOpen },
-  { to: "/offline", label: "Offline court mode", icon: CloudOff },
-  { to: "/clients", label: "Clients", icon: Users },
-  { to: "/billing", label: "Billing", icon: Receipt },
-  { to: "/team", label: "Team", icon: UsersRound },
-  { to: "/settings", label: "Settings", icon: Settings },
+type NavItem = { to: string; label: string; icon: typeof Landmark };
+
+// Section 29 navigation for authorized practice users: docket →
+// matters/clients → COURT → PRACTICE → INTELLIGENCE → MANAGEMENT.
+// Client and support-staff portals use PORTAL_NAV instead.
+const NAV_GROUPS: { heading: string; items: NavItem[] }[] = [
+  {
+    heading: "",
+    items: [
+      { to: "/attention", label: "Morning Docket", icon: BellRing },
+      { to: "/matters", label: "Matters", icon: Landmark },
+      { to: "/clients", label: "Clients", icon: Users },
+    ],
+  },
+  {
+    heading: "Court",
+    items: [
+      { to: "/calendar", label: "Calendar", icon: CalendarDays },
+      { to: "/court-day", label: "Court Day", icon: Gavel },
+      { to: "/tasks", label: "Tasks & Deadlines", icon: ClipboardList },
+    ],
+  },
+  {
+    heading: "Practice",
+    items: [
+      { to: "/documents", label: "Documents", icon: FolderOpen },
+      { to: "/comms", label: "Communications", icon: ScrollText },
+      { to: "/billing", label: "Billing & Time", icon: Receipt },
+    ],
+  },
+  {
+    heading: "Intelligence",
+    items: [
+      { to: "/ai", label: "Advokate AI", icon: Bot },
+      { to: "/research", label: "Legal Research", icon: Scale },
+      { to: "/knowledge", label: "Firm Knowledge", icon: BookOpen },
+    ],
+  },
+  {
+    heading: "Management",
+    items: [
+      { to: "/team", label: "Team", icon: UsersRound },
+      { to: "/reports", label: "Reports", icon: Activity },
+      { to: "/portal-admin", label: "Client Portal Administration", icon: Shield },
+      { to: "/settings", label: "Settings", icon: Settings },
+    ],
+  },
 ];
 
-function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
+// Kept reachable from the sidebar's “More” section; these capabilities are
+// exposed inside their modules (docket, matters, documents).
+const NAV_MORE: NavItem[] = [
+  { to: "/dashboard", label: "Overview", icon: Landmark },
+  { to: "/health", label: "Matter health", icon: Activity },
+  { to: "/drafts", label: "Draft review", icon: FileCheck },
+  { to: "/offline", label: "Offline court mode", icon: CloudOff },
+];
+
+// Simplified navigation for client and support-staff portals.
+const PORTAL_NAV: Record<"client" | "staff", NavItem[]> = {
+  client: [
+    { to: "/portal", label: "My matters", icon: Landmark },
+    { to: "/portal?tab=documents", label: "My documents", icon: FolderOpen },
+    { to: "/portal?tab=requests", label: "Document requests", icon: ClipboardList },
+    { to: "/portal?tab=messages", label: "Messages", icon: ScrollText },
+  ],
+  staff: [
+    { to: "/staff", label: "My work", icon: ClipboardList },
+    { to: "/staff?tab=matters", label: "Matters I support", icon: Landmark },
+    { to: "/staff?tab=hearings", label: "Hearings", icon: Gavel },
+    { to: "/staff?tab=documents", label: "Documents", icon: FolderOpen },
+  ],
+};
+
+function SidebarNav({
+  onNavigate,
+  portal,
+}: {
+  onNavigate?: () => void;
+  portal?: "client" | "staff";
+}) {
+  // Client and support-staff accounts get a deliberately simplified nav.
+  if (portal) {
+    return (
+      <nav aria-label="Portal navigation" className="flex flex-col gap-1 px-3">
+        {PORTAL_NAV[portal].map((item) => (
+          <NavLink
+            key={item.to}
+            to={item.to}
+            onClick={onNavigate}
+            className={({ isActive }) =>
+              `sidebar-link${isActive ? " sidebar-link-active" : ""}`
+            }
+          >
+            <item.icon className="size-4 shrink-0" aria-hidden="true" />
+            {item.label}
+          </NavLink>
+        ))}
+      </nav>
+    );
+  }
   return (
     <nav aria-label="Chamber navigation" className="flex flex-col gap-1 px-3">
-      {NAV.map((item) => (
+      {NAV_GROUPS.map((group, gi) => (
+        <div key={group.heading || `g${gi}`}>
+          {group.heading && (
+            <p className="px-3 pb-1 pt-4 text-[10px] font-semibold uppercase tracking-[0.14em] text-sidebar-primary/80">
+              {group.heading}
+            </p>
+          )}
+          {group.items.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              onClick={onNavigate}
+              className={({ isActive }) =>
+                `sidebar-link${isActive ? " sidebar-link-active" : ""}`
+              }
+            >
+              <item.icon className="size-4 shrink-0" aria-hidden="true" />
+              {item.label}
+            </NavLink>
+          ))}
+        </div>
+      ))}
+      <p className="px-3 pb-1 pt-4 text-[10px] font-semibold uppercase tracking-[0.14em] text-sidebar-primary/80">
+        More
+      </p>
+      {NAV_MORE.map((item) => (
         <NavLink
           key={item.to}
           to={item.to}
@@ -291,6 +406,12 @@ export function ChamberShell({
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
+  // Client and support-staff accounts get a simplified sidebar.
+  const resolved = useQuery(api.portals.resolve);
+  const portal =
+    resolved?.portal === "client" || resolved?.portal === "staff"
+      ? resolved.portal
+      : undefined;
 
   const handleSignOut = async () => {
     await signOut();
@@ -329,7 +450,7 @@ export function ChamberShell({
           </span>
         </Link>
         <div className="flex-1 overflow-y-auto py-4">
-          <SidebarNav />
+          <SidebarNav portal={portal} />
         </div>
         <div className="space-y-3 border-t border-sidebar-border px-4 py-4">
           <OrgSwitcher />
@@ -375,7 +496,10 @@ export function ChamberShell({
                     </p>
                   </SheetHeader>
                   <div className="space-y-3 py-3">
-                    <SidebarNav onNavigate={() => setMobileOpen(false)} />
+                    <SidebarNav
+                      onNavigate={() => setMobileOpen(false)}
+                      portal={portal}
+                    />
                     <div className="px-3 pt-2">
                       <OrgSwitcher onNavigate={() => setMobileOpen(false)} />
                     </div>
