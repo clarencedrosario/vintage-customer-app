@@ -1695,6 +1695,70 @@ export default defineSchema({
     claimedAt: v.number(),
   }).index("by_occurrence", ["occurrenceKey"]),
 
+  // ---------------- Data import (section 28) ----------------
+  dataImports: defineTable({
+    orgId: v.id("organizations"),
+    batchId: v.string(),
+    entity: v.union(
+      v.literal("clients"),
+      v.literal("matters"),
+      v.literal("hearings"),
+      v.literal("chronology"),
+      v.literal("document_metadata"),
+    ),
+    status: v.union(
+      v.literal("staged"),
+      v.literal("committed"),
+      v.literal("discarded"),
+    ),
+    fileName: v.string(),
+    totalRows: v.number(),
+    validRows: v.number(),
+    errorCount: v.number(),
+    errors: v.array(v.object({ row: v.number(), message: v.string() })),
+    duplicateStrategy: v.union(v.literal("skip"), v.literal("create")),
+    duplicateCount: v.optional(v.number()),
+    createdCount: v.optional(v.number()),
+    updatedCount: v.optional(v.number()),
+    rows: v.array(v.any()),
+    committedById: v.optional(v.id("users")),
+    committedAt: v.optional(v.number()),
+    createdById: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_batch", ["batchId"]),
+
+  // Backups & restore tests (section 28). Convex performs platform-level
+  // backups of the database and object storage; what a chamber controls
+  // here is (a) its own full archive export and (b) an honest register of
+  // restore tests executed in a non-production environment.
+  backupRecords: defineTable({
+    orgId: v.id("organizations"),
+    kind: v.union(v.literal("archive_export"), v.literal("restore_test")),
+    label: v.string(),
+    counts: v.optional(
+      v.object({
+        clients: v.number(),
+        matters: v.number(),
+        hearings: v.number(),
+        orders: v.number(),
+        tasks: v.number(),
+        invoices: v.number(),
+        documents: v.number(),
+        events: v.number(),
+      }),
+    ),
+    environment: v.optional(v.string()),
+    procedureNote: v.optional(v.string()),
+    result: v.optional(
+      v.union(v.literal("passed"), v.literal("failed"), v.literal("partial")),
+    ),
+    retentionNote: v.optional(v.string()),
+    performedById: v.id("users"),
+    performedAt: v.number(),
+  }).index("by_org", ["orgId"]),
+
   // ---------------- Offline court mode (section 27) ----------------
   // One row per prepared offline bundle (per user + device). The row
   // records WHAT was downloaded, when it was last verified against the

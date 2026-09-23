@@ -1,4 +1,5 @@
 import { ChamberShell } from "@/components/ChamberShell";
+import { BackupCard, DataImportCard } from "@/components/DataAndBackupCards";
 import { PromoteMyProfileCard, PromotionsOwnerCard } from "@/components/PromotionsCards";
 import { SubscriptionCard } from "@/components/SubscriptionCard";
 import { Button } from "@/components/ui/button";
@@ -92,6 +93,8 @@ export default function Settings() {
           <PromoteMyProfileCard />
           <AutomationCard />
           <NotificationPrefsCard />
+          <DataImportCard />
+          <BackupCard />
           <PermissionsMatrixCard />
           <SecurityCard />
         </div>
