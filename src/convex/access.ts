@@ -1,142 +1,32 @@
 import type { QueryCtx, MutationCtx } from "./_generated/server";
 import { getCurrentUser } from "./users";
 import type { Doc, Id } from "./_generated/dataModel";
+import { MEMBERSHIP_STATUSES } from "./schema";
 import {
-  CONSOLE_ORG_ROLES,
-  MEMBERSHIP_STATUSES,
-  type OrgRole,
-} from "./schema";
+  DEFAULT_PERMISSIONS,
+  canViewDocument as canViewDocumentPolicy,
+  canViewMatter as canViewMatterPolicy,
+  isSubscriptionReadOnly,
+  normalizePermissions,
+  type Capability,
+} from "./accessPolicy";
 
 // ---------------------------------------------------------------------
-// Capability keys
+// Pure policy re-exports
+//
+// CAPABILITIES, DEFAULT_PERMISSIONS, normalizePermissions and the
+// Capability type live in accessPolicy.ts (pure, unit-tested); they are
+// re-exported here so every existing `from "./access"` import keeps
+// working. The decision rules for matter/document access and the
+// subscription read-only gate are likewise tested there via the
+// multi-tenant denial fixture.
 // ---------------------------------------------------------------------
-export const CAPABILITIES = [
-  // Matters
-  "matter.view_all",
-  "matter.create",
-  "matter.edit",
-  "matter.close",
-  "matter.team_restrict",
-  // Clients
-  "client.view_all",
-  "client.create",
-  "client.edit",
-  // Hearings / orders / tasks / notes
-  "hearing.manage",
-  "order.record",
-  "task.manage",
-  "note.write",
-  // Documents
-  "document.upload",
-  "document.view_internal",
-  // Time & billing
-  "time.log",
-  "expense.log",
-  "billing.invoice",
-  "billing.payment",
-  // Team & organization administration
-  "team.invite",
-  "team.manage", // suspend / reactivate / remove / roles
-  "permissions.edit",
-  "org.edit_profile",
-] as const;
-export type Capability = (typeof CAPABILITIES)[number];
-
-// ---------------------------------------------------------------------
-// Default permission matrix (editable per organization).
-// ---------------------------------------------------------------------
-export const DEFAULT_PERMISSIONS: Record<OrgRole, Capability[]> = {
-  owner: [...CAPABILITIES],
-  partner: [
-    "matter.view_all", "matter.create", "matter.edit", "matter.close",
-    "matter.team_restrict",
-    "client.view_all", "client.create", "client.edit",
-    "hearing.manage", "order.record", "task.manage", "note.write",
-    "document.upload", "document.view_internal",
-    "time.log", "expense.log", "billing.invoice", "billing.payment",
-    "team.invite",
-  ],
-  senior_associate: [
-    "matter.view_all", "matter.create", "matter.edit",
-    "client.view_all", "client.edit",
-    "hearing.manage", "order.record", "task.manage", "note.write",
-    "document.upload", "document.view_internal",
-    "time.log", "expense.log",
-  ],
-  associate: [
-    "matter.view_all", "matter.create", "matter.edit",
-    "client.view_all", "client.edit",
-    "task.manage", "note.write",
-    "document.upload", "document.view_internal",
-    "time.log", "expense.log",
- "hearing.manage",
-  ],
-  junior: [
-    "matter.view_all", "matter.create",
-    "client.view_all",
-    "task.manage", "note.write",
-    "document.upload", "document.view_internal",
-    "time.log", "expense.log",
-  ],
-  paralegal: [
-    "matter.view_all", "client.view_all",
-    "task.manage", "note.write",
-    "document.upload", "document.view_internal",
-    "expense.log",
-  "time.log",
-  ],
-  accountant: [
-    "matter.view_all",
-    "client.view_all",
-    "billing.invoice", "billing.payment",
-    "expense.log",
-  ],
-  administrator: [
-    "matter.view_all", "matter.create", "matter.edit",
-    "client.view_all", "client.create", "client.edit",
-    "hearing.manage", "order.record", "task.manage", "note.write",
-    "document.upload", "document.view_internal",
-    "time.log", "expense.log",
-    "team.invite", "team.manage",
-    "permissions.edit", "org.edit_profile",
- ],
-  support_staff: [
-    "task.manage", // their own assigned tasks only
-    "note.write", // matter notes restricted to assigned matters
-  ],
-  // Document upload was deliberately excluded from accountant:
-  // they see billing on matters, not case documents.
-};
-
-// Extra guard: support_staff are never granted document/matter-wide reads.
-export function normalizePermissions(
-  role: OrgRole,
-  requested: string[],
-): Capability[] {
-  const valid = new Set<string>(CAPABILITIES);
-  const cleaned = requested.filter((p): p is Capability => valid.has(p));
-  if (role === "support_staff") {
-    // Peons/support staff can never gain broad matter/document privileges.
-    const forbidden = new Set<Capability>([
-      "matter.view_all",
-      "client.view_all",
-      "document.view_internal",
-      "document.upload",
-      "billing.invoice",
-      "billing.payment",
-      "team.invite",
-      "team.manage",
-      "permissions.edit",
-      "org.edit_profile",
-      "matter.create",
-      "matter.edit",
-      "matter.close",
-      "matter.team_restrict",
-    ]);
-    return cleaned.filter((p) => !forbidden.has(p));
-  }
-  return cleaned;
-}
+export {
+  CAPABILITIES,
+  DEFAULT_PERMISSIONS,
+  normalizePermissions,
+} from "./accessPolicy";
+export type { Capability } from "./accessPolicy";
 
 // ---------------------------------------------------------------------
 // Context: current user + active organization + membership
@@ -152,7 +42,7 @@ export type AccessContext = {
 async function permissionsFor(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
-  orgRole: OrgRole,
+  orgRole: AccessContext["membership"]["orgRole"],
 ): Promise<Set<Capability>> {
   const rows = await ctx.db
     .query("rolePermissions")
@@ -226,15 +116,7 @@ export async function requireWriteAccess(
   orgId?: Id<"organizations">,
 ) {
   const ac = await requireAccess(ctx, orgId);
-  const now = Date.now();
-  const s = ac.org.subscription;
-  if (
-    s &&
-    (s.status === "read_only" ||
-      (s.status === "grace" && (s.graceUntil ?? 0) < now) ||
-      (s.status === "cancelled" && (s.cancelAt ?? Infinity) < now) ||
-      (s.status === "closed"))
-  ) {
+  if (isSubscriptionReadOnly(ac.org.subscription, Date.now())) {
     throw new Error(
       "Your chamber's subscription is read-only. Please renew from Settings → Subscription to continue making changes.",
     );
@@ -259,24 +141,12 @@ export function requireCapability(ac: AccessContext, cap: Capability): void {
 // ---------------------------------------------------------------------
 
 /**
- * May this member open the matter file? teamIds restricts access to the
- * responsible team; owner/partner/administrator always see everything.
+ * May this member open the matter file? Delegates to the pure policy
+ * rule (org match first, then role/team restriction) so the two-tenant
+ * fixture exercises the same code the server runs.
  */
 export function canViewMatter(ac: AccessContext, matter: Doc<"matters">): boolean {
-  if (matter.orgId !== ac.org._id) return false;
-  const role = ac.membership.orgRole;
-  if (
-    role === "owner" ||
-    role === "partner" ||
-    role === "administrator"
-  ) {
-    return true;
-  }
-  if (!ac.permissions.has("matter.view_all")) {
-    return false;
-  }
-  if (!matter.teamIds || matter.teamIds.length === 0) return true;
-  return matter.teamIds.includes(ac.user._id);
+  return canViewMatterPolicy(ac, matter);
 }
 
 /** Load a matter the caller may see, or null. */
@@ -315,11 +185,7 @@ export function canViewDocument(
   doc: Doc<"matterDocuments">,
   matter: Doc<"matters">,
 ): boolean {
-  if (!canViewMatter(ac, matter)) return false;
-  if (doc.visibility === "internal") {
-    return ac.permissions.has("document.view_internal");
-  }
-  return true;
+  return canViewDocumentPolicy(ac, doc, matter);
 }
 
 // ---------------------------------------------------------------------
