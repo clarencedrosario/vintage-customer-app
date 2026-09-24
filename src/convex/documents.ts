@@ -1,4 +1,4 @@
-import { query } from "./_generated/server";
+import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import {
   getAccessContext,
@@ -8,6 +8,7 @@ import {
 } from "./access";
 import type { AccessContext } from "./access";
 import { enforceTenantIsolation } from "./middleware/security";
+import { logUserAction } from "./auditLogger";
 import { rowBelongsToTenant } from "../lib/tenantIsolation";
 import {
   generateSecureDownloadLink,
@@ -186,7 +187,7 @@ export const getFileUrl = query({
  * degrading to unsigned links. Redemption happens on the /secure_file
  * HTTP route (http.ts), which verifies signature + expiry.
  */
-export const issueSecureDownloadLink = query({
+export const issueSecureDownloadLink = mutation({
   args: { documentId: v.id("matterDocuments") },
   handler: async (ctx, args) => {
     const ac = await guardWithTenant(ctx, args);
@@ -201,6 +202,16 @@ export const issueSecureDownloadLink = query({
       return null;
     }
     const link = generateSecureDownloadLink(doc.storageId, { secret });
+    // Layer-3 binding: immutable audit record for every link issued.
+    // Fail-silent by contract — a dropped log write never blocks the
+    // (already-authorized) issuance, and the audit row contains no
+    // token material, only who/what/when.
+    await logUserAction(ctx, {
+      userId: ac.user._id,
+      organizationId: ac.org._id,
+      actionType: "document.download_link_issued",
+      resourceId: args.documentId,
+    });
     return { path: link.path, expiresAt: link.expiresAt, documentName: doc.name };
   },
 });
