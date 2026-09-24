@@ -1,15 +1,16 @@
 # Acceptance report (section 30)
 
-Date: 24 September 2026 (updated after Feature 1 — Case Command Centre).
-This report states what was actually exercised and what was not. HTTP 200s
-and mocked tests are not treated as live proof.
+Date: 24 September 2026 (updated after Feature 3 — Conflict-of-Interest
+Check; Features 1–2 verified earlier). This report states what was actually
+exercised and what was not. HTTP 200s and mocked tests are not treated as
+live proof.
 
 ## Automated verification performed
 
 | Check | Result |
 | --- | --- |
 | TypeScript (solution build, `tsc -b --noEmit`) | **0 errors** (app, node, tests projects) |
-| Unit & component tests (`bun run test`, vitest) | **142 passed / 0 failed** (12 files) |
+| Unit & component tests (`bun run test`, vitest) | **162 passed / 0 failed** (13 files) |
 | Production build (`bun run build`) | **Passes** — clean bundle, ~16s |
 | Convex functions push (`bun convex dev --once`) | **Success** — includes `commandCentre.matterOverview` |
 | Dependency audit (`bun audit`) | **0 vulnerabilities** (as of the last full check) |
@@ -58,6 +59,67 @@ new access rule of its own.
 environment, so the tab was **not** clicked through live; cross-tenant denial
 over a real two-tenant HTTP session is covered at the decision layer only
 (see item 8 below).
+
+## Feature 3 — Conflict-of-Interest Check (implemented this run)
+
+**Built:** `src/lib/conflictFlow.ts` (pure matching engine),
+`src/convex/conflicts.ts` (intake, search, classification, override, gate,
+report), gated `matters.create`, `src/components/ConflictGatePanel.tsx`,
+`src/pages/Conflicts.tsx` (Conflicts desk, `/conflicts`), route + sidebar
+nav.
+
+- **Full intake captured:** proposed client, adverse parties, related
+  companies, directors/beneficial owners, witnesses, aliases, related
+  matters, referring party, engagement description (schema: `conflictChecks`
+  extended; legacy columns kept so the original desk keeps working).
+- **Labelled search tiers** across current/former clients, matters and their
+  opposing parties, contacts, chronology/notes mentions (witnesses/related
+  parties), organizations (visible matter courts), aliases from earlier
+  checks and prior checks themselves: **exact** (byte-identical),
+  **normalized** (case/punctuation/honorifics/initials/Indian corporate
+  suffixes stripped; org-form and person-name variants), **possible**
+  (fuzzy token overlap / containment) — every row shows its tier, and
+  email/phone identity matches count as normalized.
+- **Restricted conflicts:** matches visible only to a team the caller
+  cannot see are returned as **placeholders with no label, id or detail** —
+  a visible conflict indicator with zero data leakage; restricted matches
+  are counted in the summary so classification cannot be silently weakened,
+  and the rendered report contains no confidential text (asserted in
+  tests).
+- **Classification & gate:** authorized lawyers classify
+  no_conflict / possible_conflict / confirmed_conflict /
+  investigation_required with required reasoning; `matters.create` refuses
+  to open a matter until a check for the proposed client is cleared —
+  confirmed conflicts block until an **elevated override**
+  (`conflict.override`; owner/partner/administrator by default, never
+  grantable to support staff via the normalizePermissions ceiling) records
+  a reason; every action lands in the audit log; a **timestamped report**
+  renders per check.
+- Cross-tenant: a check id from another organization is refused at the
+  gate ("belongs to a different organization") and invisible in
+  get/search/register (org-scoped index queries).
+
+**Tests added:** `src/lib/conflictFlow.test.ts` (20 tests) — normalization,
+exact/normalized/possible tiers, **alias & adverse-party matching**, former
+clients/contacts/witnesses/directors/organizations coverage,
+**restricted-result hiding + summary counting + report leak check**,
+**opening gate** (pending/middle/confirmed/override-reason) and report
+rendering with override. **Tenant isolation** and role ceilings are enforced
+through the shared policy layer already covered by the two-tenant fixture
+(`accessPolicy.test.ts`, 17 tests) plus the new support-staff ceiling test
+for `conflict.override`; the live two-tenant HTTP round-trip remains the
+known open item (below).
+
+**Design decisions, stated:** bulk CSV matter import (`imports.ts`) is an
+administrative migration path and is deliberately **not** gated by the
+conflict check (importing an existing book of business is not an engagement
+decision); the intake search indexes chronology/notes text for
+witness/related-party mentions with a ≥4-character token threshold and
+clamps results to 40 matches per check.
+
+**Not verified (stated honestly):** no browser-driver tooling, so the desk
+was not clicked through live; matching is heuristic (token-based, not
+semantic) — it is evidence for human review, never an automatic bar.
 
 ## Automated verification performed (history)
 

@@ -15,6 +15,7 @@ const LoginPage = lazy(() => import("./pages/Login.tsx"));
 const FindALawyer = lazy(() => import("./pages/FindALawyer.tsx"));
 const Dashboard = lazy(() => import("./pages/Dashboard.tsx"));
 const Matters = lazy(() => import("./pages/Matters.tsx"));
+const Conflicts = lazy(() => import("./pages/Conflicts.tsx"));
 const CalendarPage = lazy(() => import("./pages/Calendar.tsx"));
 const CourtDay = lazy(() => import("./pages/CourtDay.tsx"));
 const Documents = lazy(() => import("./pages/Documents.tsx"));
@@ -220,6 +221,14 @@ createRoot(document.getElementById("root")!).render(
                 element={
                   <RequireAuth>
                     <PortalAdmin />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/conflicts"
+                element={
+                  <RequireAuth>
+                    <Conflicts />
                   </RequireAuth>
                 }
               />

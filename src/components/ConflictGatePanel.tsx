@@ -3,8 +3,8 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useMutation, useQuery } from "convex/react";
-import { Loader2, ScrollText, ShieldAlert, ShieldCheck } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { Loader2, ShieldAlert, ShieldCheck } from "lucide-react";
 import { Link } from "react-router";
 import { toast } from "sonner";
 
@@ -51,7 +51,6 @@ export function ConflictGatePanel({
       const res = await createCheck({
         proposedClientName: clientName.trim(),
         clientId: clientId as never,
-        adverseParties: title.trim() ? [title.trim()] : [],
         engagementDescription: `Matter opening: ${title.trim()}`,
       });
       setRunId(res.conflictId);
@@ -70,11 +69,13 @@ export function ConflictGatePanel({
     row !== undefined &&
     row !== null &&
     row.reviewStatus === "cleared" &&
-    canProceed(row);
+    row.classification !== "confirmed_conflict";
 
-  if (cleared) {
-    onCleared();
-  }
+  // Notify the dialog once when the explicit check becomes cleared, so it
+  // can re-enable submission. Never during render — effects only.
+  useEffect(() => {
+    if (cleared) onCleared();
+  }, [cleared, onCleared]);
 
   return (
     <div className="rounded-lg border border-[#B68A45]/40 bg-[#f6f1e6] p-4">
@@ -141,13 +142,6 @@ export function ConflictGatePanel({
   );
 }
 
-function canProceed(row: { classification: string | null; reviewStatus: string }): boolean {
-  // Confirmed conflicts need an override recorded server-side.
-  if (row.classification === "confirmed_conflict" && row.reviewStatus !== "cleared") {
-    return false;
-  }
-  return row.reviewStatus === "cleared";
-}
 
 /** Legacy inline quick-check hint (from the original conflict desk). */
 export function ConflictHintList({
@@ -159,10 +153,9 @@ export function ConflictHintList({
   return (
     <div className="rounded-lg border border-[#B68A45]/50 bg-[#f6f1e6] p-3">
       <p className="text-xs font-medium text-[#8a6a33]">
-        {matches.length} possible conflict{matches.length === 1 ? "" : "s"} — for
-        human review, not an automatic bar.{" "}
+        {matches.length} possible conflict{matches.length === 1 ? "" : "s"} — for        human review, not an automatic bar. {" "}
         <Link to="/conflicts" className="inline-flex items-center gap-1 underline">
-          <ScrollText className="size-3" aria-hidden="true" /> full check
+          full check
         </Link>
       </p>
       <ul className="mt-1 space-y-1">

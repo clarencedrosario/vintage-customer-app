@@ -41,6 +41,7 @@ import {
   Settings,
   Shield,
   Users,
+  ShieldAlert,
   UsersRound,
 } from "lucide-react";
 
@@ -56,6 +57,7 @@ const NAV_GROUPS: { heading: string; items: NavItem[] }[] = [
       { to: "/attention", label: "Morning Docket", icon: BellRing },
       { to: "/matters", label: "Matters", icon: Landmark },
       { to: "/clients", label: "Clients", icon: Users },
+      { to: "/conflicts", label: "Conflicts", icon: ShieldAlert },
     ],
   },
   {

@@ -1,4 +1,5 @@
 import { ChamberShell } from "@/components/ChamberShell";
+import { ConflictGatePanel } from "@/components/ConflictGatePanel";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -82,7 +83,9 @@ function NewMatterDialog() {
   const [leadLawyerId, setLeadLawyerId] = useState("");
   const [priority, setPriority] = useState("normal");
   const [billingArrangement, setBillingArrangement] = useState("");
+  const [conflictCleared, setConflictCleared] = useState(false);
   const [busy, setBusy] = useState(false);
+  const selectedClient = (clients ?? []).find((c) => c._id === clientId);
 
   const lawyerOptions = (members ?? []).filter(
     (m) => m.status === "active" && m.orgRole !== "support_staff",
@@ -91,6 +94,10 @@ function NewMatterDialog() {
   const handleCreate = async () => {
     if (!title.trim() || !clientId || !practiceArea) {
       toast.error("Title, client and practice area are required.");
+      return;
+    }
+    if (!conflictCleared) {
+      toast.error("Run and clear the conflict check before opening the matter.");
       return;
     }
     setBusy(true);
@@ -322,8 +329,21 @@ function NewMatterDialog() {
               className="min-h-[80px]"
             />
           </div>
-          <Button className="w-full" onClick={handleCreate} disabled={busy}>
-            {busy ? "Opening…" : "Open the matter"}
+          {selectedClient && (
+            <ConflictGatePanel
+              title={title}
+              clientId={selectedClient._id}
+              clientName={selectedClient.name}
+              onCleared={() => setConflictCleared(true)}
+            />
+          )}
+          {!selectedClient && (
+            <p className="type-label ink-faded">
+              Select a client to enable the conflict-of-interest check.
+            </p>
+          )}
+          <Button className="w-full" onClick={handleCreate} disabled={busy || !conflictCleared}>
+            {busy ? "Opening…" : conflictCleared ? "Open the matter" : "Conflict check required"}
           </Button>
         </div>
       </DialogContent>
