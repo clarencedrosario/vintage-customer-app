@@ -21,6 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { api } from "@/convex/_generated/api";
+import { CommandCentre } from "@/components/CommandCentre";
 import { HearingPackDialog } from "@/components/HearingPackDialog";
 import { HearingOutcomeDialog } from "@/components/HearingOutcomeDialog";
 import { ProposalReviewPanel } from "@/components/ProposalReviewPanel";
@@ -202,11 +203,11 @@ export default function MatterDetail() {
   const tabParam = searchParams.get("tab");
   const activeTab =
     tabParam &&
-    ["hearings", "orders", "tasks", "documents", "time", "expenses", "invoices", "notes", "parties", "issues", "docket", "audit", "ai", "requests"].includes(
+    ["command", "hearings", "orders", "tasks", "documents", "time", "expenses", "invoices", "notes", "parties", "issues", "docket", "audit", "ai", "requests"].includes(
       tabParam,
     )
       ? tabParam
-      : "hearings";
+      : "command";
   const setTab = (value: string) => {
     setSearchParams(value === "hearings" ? {} : { tab: value }, { replace: true });
   };
@@ -480,6 +481,9 @@ export default function MatterDetail() {
 
       <Tabs value={activeTab} onValueChange={setTab} className="mt-8">
         <TabsList className="flex-wrap">
+          <TabsTrigger value="command" className="gap-2">
+            <Landmark className="size-4" /> Command Centre
+          </TabsTrigger>
           <TabsTrigger value="hearings" className="gap-2">
             <Gavel className="size-4" /> Hearings
           </TabsTrigger>
@@ -523,6 +527,11 @@ export default function MatterDetail() {
             <Bot className="size-4" /> AI Studio
           </TabsTrigger>
         </TabsList>
+
+        {/* Command Centre — permission-aware aggregate situation board */}
+        <TabsContent value="command" className="mt-6">
+          {matterId && <CommandCentre matterId={matterId} />}
+        </TabsContent>
 
         {/* Hearings */}
         <TabsContent value="hearings" className="mt-6">

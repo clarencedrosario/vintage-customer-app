@@ -1,18 +1,65 @@
 # Acceptance report (section 30)
 
-Date: 24 September 2026 (updated). This report states what was actually
-exercised and what was not. HTTP 200s and mocked tests are not treated as
-live proof.
+Date: 24 September 2026 (updated after Feature 1 — Case Command Centre).
+This report states what was actually exercised and what was not. HTTP 200s
+and mocked tests are not treated as live proof.
 
 ## Automated verification performed
 
 | Check | Result |
 | --- | --- |
 | TypeScript (solution build, `tsc -b --noEmit`) | **0 errors** (app, node, tests projects) |
-| Unit & component tests (`bun run test`, vitest) | **55 passed / 0 failed** (6 files) |
-| Production build (`bun run build`) | **Passes** — clean bundle, ~15s |
-| Convex functions push (`bunx convex dev --once`) | **Success** — all functions deployed |
-| Dependency audit (`bun audit`) | **0 vulnerabilities** (was 25: 1 critical, 14 high, 9 moderate, 1 low) |
+| Unit & component tests (`bun run test`, vitest) | **142 passed / 0 failed** (12 files) |
+| Production build (`bun run build`) | **Passes** — clean bundle, ~16s |
+| Convex functions push (`bun convex dev --once`) | **Success** — includes `commandCentre.matterOverview` |
+| Dependency audit (`bun audit`) | **0 vulnerabilities** (as of the last full check) |
+
+## Feature 1 — Case Command Centre (implemented this run)
+
+**Built:** `src/convex/commandCentre.ts` (`matterOverview` aggregate query),
+`src/lib/commandCentre.ts` (pure urgency/gating/empty-state helpers),
+`src/components/CommandCentre.tsx` (tab UI) and the **default** "Command
+Centre" tab on the matter file (`/matters/:id?tab=command`, deep-linkable).
+
+- Derives everything from existing tables — no duplicate tables, no schema
+  change, no migration required.
+- Tenant + matter access enforced server-side: `getAccessContext` gate, then
+  the shared `canViewMatter` rule; cross-tenant and out-of-team callers get
+  `null` (identical to a missing matter — no existence leak).
+- Single aggregate subscription; one indexed `by_matter` read per table, batched
+  user-name resolution through a shared cache — no N+1. The payments section
+  reads `payments` per invoice (indexed, capped at 12 invoices) only for
+  `billing.payment` holders.
+- Sections gated server-side by capability: invoices (`billing.invoice`),
+  payments (`billing.payment`), internal-event chronology
+  (`document.view_internal`), audit (`matter.edit` / owner-partner-admin, the
+  same rule as `matters.listAudit`). A role without the capability never
+  receives the data — hiding is not the security boundary.
+- Urgency tiers: red for overdue, sepia `#8a6a33` for ≤48h, ordinary
+  otherwise; invoices are overdue only after the **IST end** of their due date.
+- Every row links to its authorized record (docket, tasks desk, document room,
+  requests, orders, invoices, audit). Empty states for every section.
+- Undertakings: no dedicated undertakings table exists in the schema, so the
+  section derives from **open `court_order`-category deadlines** plus
+  **outstanding order directions** — a deliberate mapping, not a new table.
+
+**Tests added:** `src/lib/commandCentre.test.ts` (30 tests) covering the
+urgency classifier (overdue / ≤48h / ordinary, undated rows, future hearings),
+overdue stamps, task open/blocked buckets, the update-due flag with the
+30-minute post-hearing grace, invoice outstanding math and IST due-date
+boundaries, **permission-controlled section gating** (billing roles vs
+paralegal, capability arrays, loading state), and empty-state coverage for
+every section. Cross-tenant / matter-access denial is enforced through the
+same `canViewMatter` pure policy already exercised by the two-tenant fixture
+in `src/convex/accessPolicy.test.ts` (17 tests); the Command Centre adds no
+new access rule of its own.
+
+**Not verified (stated honestly):** no browser-driver tooling exists in this
+environment, so the tab was **not** clicked through live; cross-tenant denial
+over a real two-tenant HTTP session is covered at the decision layer only
+(see item 8 below).
+
+## Automated verification performed (history)
 
 Outstanding TypeScript diagnostics: **none remaining.** The one real issue found
 during the pass (`@types/node` resolution inside the tests project, caused by the
