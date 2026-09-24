@@ -1586,6 +1586,52 @@ export default defineSchema({
     .index("by_org_date", ["orgId", "listDate"])
     .index("by_matter", ["matterId"]),
 
+  // ---------------- Outcome proposal workflow (Feature 2) ----------------
+  // One row per proposed follow-up action from a recorded hearing
+  // outcome. Nothing is applied automatically: each row is approved,
+  // edited or rejected by an authorized lawyer. Rejected rows are kept
+  // for audit; keys are deterministic per hearing so a retry cannot
+  // double-generate.
+  outcomeProposals: defineTable({
+    orgId: v.id("organizations"),
+    matterId: v.id("matters"),
+    hearingId: v.id("hearings"),
+    key: v.string(),
+    kind: v.union(
+      v.literal("chronology"),
+      v.literal("task"),
+      v.literal("deadline"),
+      v.literal("client_update"),
+      v.literal("next_hearing"),
+      v.literal("hearing_pack"),
+    ),
+    title: v.string(),
+    payload: v.any(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("approved"),
+      v.literal("rejected"),
+    ),
+    // Deadline provenance: the source sentence and calculation rule
+    // are stored with the proposal and echoed onto the deadline row.
+    deadlineSource: v.optional(v.string()),
+    deadlineRule: v.optional(v.string()),
+    proposedById: v.id("users"),
+    createdAt: v.number(),
+    // Decision trail (approved OR rejected — both are kept).
+    decidedAt: v.optional(v.number()),
+    decidedById: v.optional(v.id("users")),
+    decisionNote: v.optional(v.string()),
+    // The record created on approval (audit link).
+    resultId: v.optional(v.string()),
+    // Edited before approval: the materialized payload differs.
+    editedPayload: v.optional(v.any()),
+  })
+    .index("by_matter", ["matterId"])
+    .index("by_hearing", ["hearingId"])
+    .index("by_key", ["key"])
+    .index("by_org_status", ["orgId", "status"]),
+
   courtUpdates: defineTable({
     orgId: v.id("organizations"),
     kind: v.union(
