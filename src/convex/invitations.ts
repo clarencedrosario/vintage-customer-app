@@ -3,18 +3,20 @@ import { mutation, query } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
 import { getCurrentUser } from "./users";
 import { getAccessContext, requireAccess, requireCapability } from "./access";
-import { sha256Hex } from "./crypto";
+import {
+  freshInviteSalt,
+  invitationBlocker,
+  invitationStatus,
+  invitationTokenHash,
+  invitedEmailMatches,
+  seatAvailable,
+} from "../lib/invitationFlow";
 import { MEMBERSHIP_STATUSES } from "./schema";
 import type { Id } from "./_generated/dataModel";
 
-/** Invitations are hashed with a per-invite salt. */
-function tokenHash(salt: string, raw: string): string {
-  return sha256Hex(`${salt}:${raw}`);
-}
-
-function freshSalt(): string {
-  return Date.now().toString(36) + Math.floor(Math.random() * 1e9).toString(36);
-}
+/** Invitations are hashed with a per-invite salt (tested pure logic). */
+const tokenHash = invitationTokenHash;
+const freshSalt = freshInviteSalt;
 
 async function findByToken(ctx: { db: QueryCtx["db"] }, raw: string) {
   const rows = await ctx.db.query("invitations").collect();
@@ -119,6 +121,7 @@ export const listInvitations = query({
       return [];
     }
     const rows = await ctx.db.query("invitations").collect();
+    const now = Date.now();
     return rows
       .filter((r) => r.orgId === ac.org._id)
       .sort((a, b) => b.createdAt - a.createdAt)
@@ -127,13 +130,7 @@ export const listInvitations = query({
         email: r.email,
         kind: r.kind,
         orgRole: r.orgRole,
-        status: r.revokedAt
-          ? ("revoked" as const)
-          : r.usedAt
-            ? ("accepted" as const)
-            : Date.now() > r.expiresAt
-              ? ("expired" as const)
-              : ("pending" as const),
+        status: invitationStatus(r, now),
         expiresAt: r.expiresAt,
         createdAt: r.createdAt,
       }));
@@ -195,13 +192,22 @@ export const accept = mutation({
     if (!user.email) throw new Error("Your account has no verified email.");
 
     const invite = await findByToken(ctx, args.token);
+    // Same precedence as the pure invitationBlocker (unit-tested).
+    const blocker = invitationBlocker(
+      invite && {
+        usedAt: invite.usedAt,
+        revokedAt: invite.revokedAt,
+        expiresAt: invite.expiresAt,
+        email: invite.email,
+      },
+      Date.now(),
+    );
+    if (blocker === "not_valid") throw new Error("This invitation is not valid.");
+    if (blocker === "already_used") throw new Error("This invitation has already been used.");
+    if (blocker === "revoked") throw new Error("This invitation has been revoked.");
+    if (blocker === "expired") throw new Error("This invitation has expired.");
     if (!invite) throw new Error("This invitation is not valid.");
-    if (invite.usedAt) throw new Error("This invitation has already been used.");
-    if (invite.revokedAt) throw new Error("This invitation has been revoked.");
-    if (Date.now() > invite.expiresAt) {
-      throw new Error("This invitation has expired.");
-    }
-    if (user.email.trim().toLowerCase() !== invite.email) {
+    if (!invitedEmailMatches(invite.email, user.email)) {
       throw new Error("This invitation was issued to a different email address.");
     }
 
@@ -216,20 +222,18 @@ export const accept = mutation({
         const seatLimit = org.subscription?.status === "active" || org.subscription?.status === "trialing"
           ? (await getSubSeatLimit(ctx, invite.orgId))
           : null;
-        if (seatLimit !== null) {
-          const members = await ctx.db
-            .query("memberships")
-            .withIndex("by_org", (q) => q.eq("orgId", invite.orgId))
-            .collect();
-          const billable = members.filter(
-            (m) => m.status === "active" && m.seatExempt !== true,
-          ).length;
-          const incomingIsExempt = invite.seatExempt === true;
-          if (!incomingIsExempt && billable >= seatLimit) {
-            throw new Error(
-              `Your chamber's plan includes ${seatLimit} seat${seatLimit === 1 ? "" : "s"} and they are all in use. Upgrade the plan or free a seat to invite more members.`,
-            );
-          }
+        const members =
+          seatLimit !== null
+            ? await ctx.db
+                .query("memberships")
+                .withIndex("by_org", (q) => q.eq("orgId", invite.orgId))
+                .collect()
+            : [];
+        if (!seatAvailable(seatLimit, members, invite.seatExempt === true)) {
+          const n = seatLimit ?? 0;
+          throw new Error(
+            `Your chamber's plan includes ${n} seat${n === 1 ? "" : "s"} and they are all in use. Upgrade the plan or free a seat to invite more members.`,
+          );
         }
       }
 
@@ -265,7 +269,12 @@ export const accept = mutation({
         throw new Error("The connected client record no longer exists.");
       }
       await ctx.db.patch(invite.clientId, { userId: user._id });
-      await ctx.db.patch(user._id, { role: "client" });
+      // Legacy fallback role: only set it for accounts that have no role
+      // yet. Overwriting an existing firm role would mis-route the user's
+      // fallback portal when their memberships resolve to nothing.
+      if (!user.role) {
+        await ctx.db.patch(user._id, { role: "client" });
+      }
     }
 
     await ctx.db.patch(invite._id, { usedAt: now });

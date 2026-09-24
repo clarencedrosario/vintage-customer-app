@@ -5,7 +5,7 @@ Status legend:
 - **Awaiting external config** — implemented, but needs credentials/approvals you must supply (keys, merchant accounts, provider review).
 - **Incomplete** — not built yet.
 
-Last verified: 24 September 2026 — `tsc -b` 0 errors, 55/55 tests (17 new in the multi-tenant denial fixture), Convex push succeeds.
+Last verified: 24 September 2026 — `tsc -b` 0 errors, 68/68 tests (17 in the multi-tenant denial fixture, 13 in the invitation-lifecycle suite), Convex push and production build succeed.
 
 ## The connected chamber (this milestone's focus)
 
@@ -59,7 +59,7 @@ the pack builder can be reopened with that next hearing already selected.
 | Import | 5 entities, validation/preview/duplicates/error report, apply-once |
 | Backups | Archive export, restore-test register, documented procedure |
 | Navigation | Section 29 grouped sidebar, simplified portal navs, deep links |
-| Tests | 55 automated tests (parsing, formatting, exports, outcome chain, cards, multi-tenant denial fixture) |
+| Tests | 68 automated tests (parsing, formatting, exports, outcome chain, cards, multi-tenant denial fixture, invitation lifecycle) |
 
 ## Awaiting external configuration
 
@@ -83,7 +83,7 @@ the pack builder can be reopened with that next hearing already selected.
 
 ## Milestone status (section 31 list)
 
-1. **Source reconciliation, opening screen, account lifecycle** — done (landing, login/OTP, portals, invitations).
+1. **Source reconciliation, opening screen, account lifecycle** — done (landing, login/OTP, portals, invitations). Verified 24 Sep 2026: invitation lifecycle logic extracted to `src/lib/invitationFlow.ts` (pure, 13 unit tests: status register, SHA-256 salted token hashing, blocker precedence, invited-email match, seat gating) and one defect fixed — accepting a client invitation no longer overwrites an existing user's legacy `role` (which mis-routed firm members' fallback portal).
 2. **Clients, matters, teams, support-staff workflows** — done.
 3. **Hearings, chronology, tasks, deadlines, documents** — done (outcome chain now connected).
 4. **Client requests, Hearing Packs, review/approval** — done.
