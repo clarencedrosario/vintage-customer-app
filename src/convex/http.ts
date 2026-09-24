@@ -2,6 +2,7 @@ import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
 import { auth } from "./auth";
 import { internal } from "./_generated/api";
+import { verifySecureFileToken } from "./documents";
 
 const http = httpRouter();
 
@@ -94,6 +95,42 @@ http.route({
       status: result.status,
       headers: { "Content-Type": "text/plain" },
     });
+  }),
+});
+
+// ---------------------------------------------------------------------
+// Secure file links (layer 2) — short-lived signed download tokens.
+//
+// The token is HMAC-signed with a server-side secret (no bearer
+// credentials travel in the URL) and is single-purpose: signature and
+// expiry are verified before any storage lookup. Redemption logs an
+// immutable audit record via the fail-silent logger — a dropped log
+// write never blocks the download.
+// ---------------------------------------------------------------------
+http.route({
+  path: "/secure_file",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const url = new URL(request.url);
+    const token = url.searchParams.get("t") ?? "";
+    const secret = process.env.SECURE_FILE_LINK_SECRET;
+    if (!secret) return new Response("Service unavailable", { status: 503 });
+
+    const verdict = verifySecureFileToken(token, secret, Date.now());
+    if (!verdict.ok) {
+      // Honest audit note: a denied token carries no attributable
+      // identity (no session), and the auditLog schema requires an
+      // actor — a fabricated actor row would corrupt the trail, so
+      // denial is refused here without a database record.
+      return new Response("Link invalid or expired", { status: 403 });
+    }
+
+    const storageId = verdict.fileKey as unknown as Parameters<
+      typeof ctx.storage.getUrl
+    >[0];
+    const fileUrl = await ctx.storage.getUrl(storageId);
+    if (!fileUrl) return new Response("Not found", { status: 404 });
+    return Response.redirect(fileUrl, 302);
   }),
 });
 

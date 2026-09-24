@@ -6,7 +6,35 @@ import {
   canViewMatter,
   canViewDocument,
 } from "./access";
+import type { AccessContext } from "./access";
+import { enforceTenantIsolation } from "./middleware/security";
+import { rowBelongsToTenant } from "../lib/tenantIsolation";
+import {
+  generateSecureDownloadLink,
+  verifyDownloadToken,
+} from "../lib/documentManager";
 import type { Doc, Id } from "./_generated/dataModel";
+
+/**
+ * Layer-1 binding: run the tenant-isolation middleware, then cross-check
+ * the handler's own access context against the middleware-resolved
+ * tenant (two independent resolutions must agree). A middleware refusal
+ * maps to the established `null` contract so existing UI handling is
+ * unchanged — data simply never leaves the server.
+ */
+async function guardWithTenant(
+  ctx: Parameters<typeof getAccessContext>[0],
+  args: Record<string, unknown>,
+): Promise<AccessContext | null> {
+  try {
+    const tenant = await enforceTenantIsolation(ctx, args);
+    const ac = await getAccessContext(ctx);
+    if (!ac || ac.org._id !== tenant.organizationId) return null;
+    return ac;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Cross-matter document library: every matter document the caller is
@@ -29,7 +57,7 @@ export const library = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const ac = await getAccessContext(ctx);
+    const ac = await guardWithTenant(ctx, args);
     if (!ac) return null;
 
     const matters = (
@@ -108,7 +136,7 @@ export const saveComparison = query({
     documentBId: v.id("matterDocuments"),
   },
   handler: async (ctx, args) => {
-    const ac = await getAccessContext(ctx);
+    const ac = await guardWithTenant(ctx, args);
     if (!ac) return null;
     const a = await ctx.db.get(args.documentAId);
     const b = await ctx.db.get(args.documentBId);
@@ -130,16 +158,56 @@ export const saveComparison = query({
   },
 });
 
-/** Resolve a library document URL (matter + document-level access enforced). */
+/**
+ * Resolve a library document URL (matter + document-level access
+ * enforced, tenant isolation middleware bound).
+ */
 export const getFileUrl = query({
   args: { documentId: v.id("matterDocuments") },
   handler: async (ctx, args) => {
-    const ac = await getAccessContext(ctx);
+    const ac = await guardWithTenant(ctx, args);
     if (!ac) return null;
     const doc = await ctx.db.get(args.documentId);
     if (!doc || !doc.storageId) return null;
     const matter = await requireMatter(ctx, ac, doc.matterId);
     if (!canViewDocument(ac, doc, matter)) return null;
+    if (!rowBelongsToTenant(matter, { userId: ac.user._id, organizationId: ac.org._id })) {
+      return null;
+    }
     return await ctx.storage.getUrl(doc.storageId);
   },
 });
+
+/**
+ * Layer-2 binding: issue a 15-minute signed download link for a
+ * document the caller is authorized to open. Requires
+ * SECURE_FILE_LINK_SECRET in the server environment (Keys tab);
+ * without it the feature reports unconfigured (null) rather than
+ * degrading to unsigned links. Redemption happens on the /secure_file
+ * HTTP route (http.ts), which verifies signature + expiry.
+ */
+export const issueSecureDownloadLink = query({
+  args: { documentId: v.id("matterDocuments") },
+  handler: async (ctx, args) => {
+    const ac = await guardWithTenant(ctx, args);
+    if (!ac) return null;
+    const secret = process.env.SECURE_FILE_LINK_SECRET;
+    if (!secret) return null; // awaiting external configuration
+    const doc = await ctx.db.get(args.documentId);
+    if (!doc || !doc.storageId) return null;
+    const matter = await requireMatter(ctx, ac, doc.matterId);
+    if (!canViewDocument(ac, doc, matter)) return null;
+    if (!rowBelongsToTenant(matter, { userId: ac.user._id, organizationId: ac.org._id })) {
+      return null;
+    }
+    const link = generateSecureDownloadLink(doc.storageId, { secret });
+    return { path: link.path, expiresAt: link.expiresAt, documentName: doc.name };
+  },
+});
+
+/**
+ * Layer-2 verification helper for the /secure_file route (kept beside
+ * issuance so the token format has exactly one definition point).
+ */
+export const verifySecureFileToken = (token: string, secret: string, now: number) =>
+  verifyDownloadToken(token, secret, now);

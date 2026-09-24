@@ -88,6 +88,37 @@ export function sha256Hex(text: string): string {
     .join("");
 }
 
+/**
+ * HMAC-SHA256 of a UTF-8 message with a UTF-8 key → lowercase hex.
+ * Pure implementation (RFC 2104) built on sha256Bytes, so secure-link
+ * token signing works inside the query/mutation sandbox without
+ * node:crypto. Block size 64 bytes; keys longer than that are hashed
+ * first.
+ */
+export function hmacSha256Hex(key: string, message: string): string {
+  const enc = new TextEncoder();
+  let keyBytes: Uint8Array = enc.encode(key);
+  const blockSize = 64;
+  if (keyBytes.length > blockSize) keyBytes = sha256Bytes(keyBytes);
+
+  const padded = new Uint8Array(blockSize);
+  padded.set(keyBytes);
+
+  const msgBytes = enc.encode(message);
+  const inner = new Uint8Array(blockSize + msgBytes.length);
+  for (let i = 0; i < blockSize; i++) inner[i] = padded[i] ^ 0x36;
+  inner.set(msgBytes, blockSize);
+
+  const innerHash = sha256Bytes(inner);
+  const outer = new Uint8Array(blockSize + innerHash.length);
+  for (let i = 0; i < blockSize; i++) outer[i] = padded[i] ^ 0x5c;
+  outer.set(innerHash, blockSize);
+
+  return [...sha256Bytes(outer)]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 // ---------------------------------------------------------------------
 // SHA-1 + HMAC-SHA1 (needed for TOTP per RFC 6238)
 // ---------------------------------------------------------------------
