@@ -6,6 +6,7 @@ import {
   requireAccess,
   requireCapability,
   requireMatter,
+  requireWriteAccess,
   type AccessContext,
 } from "./access";
 import { refreshNextHearing } from "./matters";
@@ -136,29 +137,55 @@ export const listForHearing = query({
     const hearing = await ctx.db.get(args.hearingId);
     if (!hearing) return null;
     await requireMatter(ctx, ac, hearing.matterId);
-    const rows = await ctx.db
-      .query("outcomeProposals")
-      .withIndex("by_hearing", (q) => q.eq("hearingId", args.hearingId))
-      .collect();
-    return rows
-      .sort((a, b) => a.createdAt - b.createdAt)
-      .map((r) => ({
-        _id: r._id,
-        key: r.key,
-        kind: r.kind,
-        title: r.title,
-        payload: r.payload,
-        status: r.status,
-        deadlineSource: r.deadlineSource,
-        deadlineRule: r.deadlineRule,
-        decisionNote: r.decisionNote,
-        resultId: r.resultId,
-        decidedAt: r.decidedAt,
-        edited: r.editedPayload !== undefined,
-        createdAt: r.createdAt,
-      }));
+    return serializeRows(
+      await ctx.db
+        .query("outcomeProposals")
+        .withIndex("by_hearing", (q) => q.eq("hearingId", args.hearingId))
+        .collect(),
+    );
   },
 });
+
+/**
+ * Review desk list for a matter: all proposals across its hearings,
+ * access-checked (org + matter-level team restriction) and sorted
+ * oldest first so a hearing's set reads together.
+ */
+export const listForMatter = query({
+  args: { matterId: v.id("matters") },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    await requireMatter(ctx, ac, args.matterId);
+    return serializeRows(
+      await ctx.db
+        .query("outcomeProposals")
+        .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))
+        .collect(),
+    );
+  },
+});
+
+/** Shared shape for both review lists (no confidential payload in the row). */
+function serializeRows(rows: Doc<"outcomeProposals">[]) {
+  return rows
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .map((r) => ({
+      _id: r._id,
+      hearingId: r.hearingId,
+      key: r.key,
+      kind: r.kind,
+      title: r.title,
+      payload: r.payload as Record<string, unknown>,
+      status: r.status,
+      deadlineSource: r.deadlineSource,
+      deadlineRule: r.deadlineRule,
+      decisionNote: r.decisionNote,
+      resultId: r.resultId,
+      decidedAt: r.decidedAt,
+      edited: r.editedPayload !== undefined,
+      createdAt: r.createdAt,
+    }));
+}
 
 // ---------------- Generation (idempotent) ----------------
 
@@ -207,7 +234,7 @@ export const proposeOutcomeActions = mutation({
     updateNextPack: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
-    const ac = await requireAccess(ctx);
+    const ac = await requireWriteAccess(ctx);
     requireCapability(ac, "hearing.manage");
     const hearing = await ctx.db.get(args.hearingId);
     if (!hearing) throw new Error("Hearing not found.");
@@ -372,7 +399,7 @@ export const approveProposal = mutation({
     decisionNote: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const ac = await requireAccess(ctx);
+    const ac = await requireWriteAccess(ctx);
     requireCapability(ac, "hearing.manage");
     const row = await ctx.db.get(args.proposalId);
     if (!row || row.orgId !== ac.org._id) {
@@ -538,7 +565,7 @@ export const approveProposal = mutation({
 export const approveAllForHearing = mutation({
   args: { hearingId: v.id("hearings") },
   handler: async (ctx, args) => {
-    const ac = await requireAccess(ctx);
+    const ac = await requireWriteAccess(ctx);
     requireCapability(ac, "hearing.manage");
     const hearing = await ctx.db.get(args.hearingId);
     if (!hearing) throw new Error("Hearing not found.");
@@ -574,7 +601,7 @@ export const approveAllForHearing = mutation({
 export const rejectProposal = mutation({
   args: { proposalId: v.id("outcomeProposals"), note: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    const ac = await requireAccess(ctx);
+    const ac = await requireWriteAccess(ctx);
     requireCapability(ac, "hearing.manage");
     const row = await ctx.db.get(args.proposalId);
     if (!row || row.orgId !== ac.org._id) {

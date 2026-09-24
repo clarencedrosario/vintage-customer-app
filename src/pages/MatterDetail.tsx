@@ -23,6 +23,7 @@ import {
 import { api } from "@/convex/_generated/api";
 import { HearingPackDialog } from "@/components/HearingPackDialog";
 import { HearingOutcomeDialog } from "@/components/HearingOutcomeDialog";
+import { ProposalReviewPanel } from "@/components/ProposalReviewPanel";
 import { AiStudio } from "@/components/AiStudio";
 import { Badge } from "@/components/ui/badge";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -546,6 +547,20 @@ export default function MatterDetail() {
               open
               onOpenChange={(v) => !v && setOutcomeHearing(null)}
             />
+          )}
+
+          {/* Feature 2 review desk — proposals from recorded outcomes are
+              approved, edited or rejected here before anything is created. */}
+          {matterId && (
+            <div className="mb-4">
+              <ProposalReviewPanel
+                matterId={matterId}
+                onOpenPack={() => {
+                  setPackHearingId(null);
+                  setPackOpen(true);
+                }}
+              />
+            </div>
           )}
 
           {/* Real hearing records — scheduled hearings expose the outcome
