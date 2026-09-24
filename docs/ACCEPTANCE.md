@@ -1,14 +1,15 @@
 # Acceptance report (section 30)
 
-Date: 23 September 2026. This report states what was actually exercised and
-what was not. HTTP 200s and mocked tests are not treated as live proof.
+Date: 24 September 2026 (updated). This report states what was actually
+exercised and what was not. HTTP 200s and mocked tests are not treated as
+live proof.
 
 ## Automated verification performed
 
 | Check | Result |
 | --- | --- |
 | TypeScript (solution build, `tsc -b --noEmit`) | **0 errors** (app, node, tests projects) |
-| Unit & component tests (`bun run test`, vitest) | **31 passed / 0 failed** (4 files) |
+| Unit & component tests (`bun run test`, vitest) | **55 passed / 0 failed** (6 files) |
 | Production build (`bun run build`) | **Passes** — clean bundle, ~15s |
 | Convex functions push (`bunx convex dev --once`) | **Success** — all functions deployed |
 | Dependency audit (`bun audit`) | **0 vulnerabilities** (was 25: 1 critical, 14 high, 9 moderate, 1 low) |
@@ -58,6 +59,19 @@ preserve; the new suite is the baseline going forward.
   backup card states that restore tests must be real and manual; admin actions
   are disabled while capabilities load; recorded exports/restore tests render
   with results.
+- `src/convex/accessPolicy.test.ts` — **multi-tenant denial fixture** (added
+  24 September 2026; it was previously referenced in comments/docs but did not
+  exist): two-tenant fixture asserting cross-organization matter denial for
+  every role including owner, direct-row document denial, matter team
+  restriction, internal-document capability checks, the support-staff
+  permission ceiling (override attempts cannot escalate), unknown-capability
+  handling, and the subscription read-only gate boundary conditions. These are
+  the exact pure functions `access.ts` delegates to on every server request.
+
+Scope note, stated honestly: this fixture exercises the **decision layer** —
+org-scoping, role/team/document rules and the write gate — without a live
+database. It does not execute live authentication or a real two-tenant
+network round-trip; that remains under item 8 below.
 
 ## What is verified live vs. not — the honest list
 
@@ -101,11 +115,15 @@ preserve; the new suite is the baseline going forward.
 7. **Persistence after restart.** Convex is a managed database; data model
    durability is the platform's contract. Application-level persistence across
    a restart was not separately rehearsed here.
-8. **Cross-organization denial and privilege escalation.** Every query/mutation
-   funnels through `getAccessContext`/`requireAccess` with org-scoped indexes
-   and same-org linked-ID checks (verified by reading the code paths), but no
-   automated test exercises a two-tenant fixture asserting denial. That is the
-   most valuable next test to add against a real deployment.
+8. **Cross-organization denial and privilege escalation.** The decision layer
+   is now covered by the automated multi-tenant denial fixture
+   (`src/convex/accessPolicy.test.ts`): cross-org matter denial for all roles,
+   cross-org document denial, team restriction, the support-staff ceiling and
+   the subscription write gate. What is **still not** exercised: a live
+   two-tenant deployment asserting denial over real HTTP/websocket
+   authentication (the ctx-bound membership lookup in `getAccessContext` and
+   the org-scoped index queries). That remains the most valuable next check on
+   a real deployment.
 
 ## Cost / credentials checklist for the operator
 

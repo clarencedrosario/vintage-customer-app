@@ -5,7 +5,7 @@ Status legend:
 - **Awaiting external config** — implemented, but needs credentials/approvals you must supply (keys, merchant accounts, provider review).
 - **Incomplete** — not built yet.
 
-Last verified: 23 September 2026 — `tsc -b` 0 errors, 38/38 tests, production build passes, Convex push succeeds, `bun audit` clean.
+Last verified: 24 September 2026 — `tsc -b` 0 errors, 55/55 tests (17 new in the multi-tenant denial fixture), Convex push succeeds.
 
 ## The connected chamber (this milestone's focus)
 
@@ -59,7 +59,7 @@ the pack builder can be reopened with that next hearing already selected.
 | Import | 5 entities, validation/preview/duplicates/error report, apply-once |
 | Backups | Archive export, restore-test register, documented procedure |
 | Navigation | Section 29 grouped sidebar, simplified portal navs, deep links |
-| Tests | 38 automated tests (parsing, formatting, exports, outcome chain, cards) |
+| Tests | 55 automated tests (parsing, formatting, exports, outcome chain, cards, multi-tenant denial fixture) |
 
 ## Awaiting external configuration
 
@@ -77,7 +77,7 @@ the pack builder can be reopened with that next hearing already selected.
 | --- | --- |
 | Browser-journey test run | Not executed here (no driver tooling); routes/guards verified by typecheck and code review |
 | Migration upgrade rehearsal | Needs a staging deployment with existing data |
-| Multi-tenant denial test fixture | Recommended first addition on a live deployment |
+| Multi-tenant denial test fixture | Done as a pure-policy fixture (`src/convex/accessPolicy.test.ts`); a live two-tenant run on a deployed environment remains an operator check |
 | Source repository handover | Platform-managed VCS; export/ownership transfer happens at publishing time |
 | Demo/synthetic account removal | None shipped; verify none exist before public deploy |
 
