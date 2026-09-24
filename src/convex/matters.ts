@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { mutation, query, MutationCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { openingGate } from "./conflicts";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   canViewDocument,
@@ -135,6 +136,7 @@ export const create = mutation({
   args: {
     title: v.string(),
     clientId: v.id("clients"),
+    conflictCheckId: v.optional(v.id("conflictChecks")),
     practiceArea: v.string(),
     court: v.optional(v.string()),
     jurisdiction: v.optional(v.string()),
@@ -168,6 +170,12 @@ export const create = mutation({
       throw new Error("That client belongs to a different organization.");
     }
 
+    // Conflict-of-interest gate: a cleared (or elevated-override)
+    // conflict check for this proposed client is required first.
+    const gate = await openingGate(ctx, ac, title, client.name, args.conflictCheckId);
+    if (!gate.ok) throw new Error(gate.reason);
+    void gate;
+
     // team restriction requires the elevated capability
     let teamIds = args.teamIds;
     if (teamIds && teamIds.length > 0 && !mayRestrictTeam(ac.membership.orgRole)) {
@@ -181,11 +189,12 @@ export const create = mutation({
     );
     const now = Date.now();
 
-    const matterId = await ctx.db.insert("matters", {
+    const matterId =    await ctx.db.insert("matters", {
       orgId: ac.org._id,
       title,
       reference,
       clientId: args.clientId,
+      conflictCheckId: gate.conflictId,
       practiceArea: args.practiceArea.trim(),
       court: args.court?.trim() || undefined,
       jurisdiction: args.jurisdiction?.trim() || undefined,

@@ -382,6 +382,13 @@ export const acknowledgeConflictCheck = mutation({
       status: "reviewed",
       reviewedBy: ac.user._id,
       reviewedNote: `${args.note.trim()} (${args.matchCount} possible match${args.matchCount === 1 ? "" : "es"} considered)`,
+      // Legacy desk entries are human-reviewed on record: they satisfy
+      // the Feature-3 gate as cleared-by-review.
+      reviewStatus: "cleared",
+      classification: "no_conflict",
+      classificationReason: "Reviewed on the legacy conflict desk.",
+      decidedById: ac.user._id,
+      decidedAt: Date.now(),
       createdBy: ac.user._id,
       createdAt: Date.now(),
     });

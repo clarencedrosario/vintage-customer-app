@@ -43,6 +43,10 @@ export const CAPABILITIES = [
   "team.manage", // suspend / reactivate / remove / roles
   "permissions.edit",
   "org.edit_profile",
+  // Conflict-of-interest governance: clearing a confirmed conflict via
+  // override. Owner/partner/administrator by default; NOT grantable to
+  // support staff (enforced in normalizePermissions below).
+  "conflict.override",
 ] as const;
 export type Capability = (typeof CAPABILITIES)[number];
 
@@ -59,6 +63,7 @@ export const DEFAULT_PERMISSIONS: Record<OrgRole, Capability[]> = {
     "document.upload", "document.view_internal",
     "time.log", "expense.log", "billing.invoice", "billing.payment",
     "team.invite",
+    "conflict.override",
   ],
   senior_associate: [
     "matter.view_all", "matter.create", "matter.edit",
@@ -102,6 +107,7 @@ export const DEFAULT_PERMISSIONS: Record<OrgRole, Capability[]> = {
     "time.log", "expense.log",
     "team.invite", "team.manage",
     "permissions.edit", "org.edit_profile",
+    "conflict.override",
   ],
   support_staff: [
     "task.manage", // their own assigned tasks only
@@ -140,6 +146,7 @@ export function normalizePermissions(
       "matter.edit",
       "matter.close",
       "matter.team_restrict",
+      "conflict.override",
     ]);
     return cleaned.filter((p) => !forbidden.has(p));
   }
