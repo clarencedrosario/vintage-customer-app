@@ -171,7 +171,30 @@ export const AI_KINDS = [
   "evidence_map",
   "assertion_review",
   "voice_note",
+  // Legal AI contextual modes (Ask My Matter / Ask This Document /
+  // Smart Timeline / Document Comparison / AI Morning Briefing).
+  "ask_matter",
+  "ask_document",
+  "smart_timeline",
+  "compare",
+  "morning_briefing",
 ] as const;
+
+/**
+ * Kinds that assemble their own source set server-side from matter
+ * context (the caller's authorized sources on the matter), rather than
+ * requiring an explicit selection in the studio. Access is unchanged:
+ * only sources already visible on a matter the caller can open are used.
+ */
+export const AUTO_SOURCE_KINDS: ReadonlySet<string> = new Set([
+  "ask_matter",
+  "smart_timeline",
+  "morning_briefing",
+]);
+
+/** The morning briefing reads recent jobs on all of the caller's matters. */
+export const MORNING_BRIEFING_MATTER_CAP = 8;
+export const MORNING_BRIEFING_SOURCE_CAP = 10;
 
 /** Organization tokens used this month (IST month key). */
 export const usage = query({
@@ -204,6 +227,8 @@ export const prepareJob = mutation({
     inputNote: v.optional(v.string()),
     transcript: v.optional(v.string()),
     storageId: v.optional(v.id("_storage")),
+    // Ask This Document: the document being viewed.
+    documentId: v.optional(v.id("matterDocuments")),
   },
   handler: async (ctx, args) => {
     const ac = await requireAccess(ctx);
@@ -242,6 +267,22 @@ export const prepareJob = mutation({
       }
     }
 
+    // Ask This Document: the question is anchored to ONE document. The
+    // caller must be able to open the matter; the source must belong to
+    // that matter. The runner receives exactly that source.
+    if (args.kind === "ask_document") {
+      if (!args.documentId) {
+        throw new Error("Ask This Document needs the document you are viewing.");
+      }
+      if (sourceIds.length > 0) {
+        throw new Error("Ask This Document uses the document itself; do not select extra sources.");
+      }
+      const doc = await ctx.db.get(args.documentId);
+      if (!doc || doc.matterId !== args.matterId) {
+        throw new Error("That document is not on this matter.");
+      }
+    }
+
     const id = await ctx.db.insert("aiJobs", {
       orgId: ac.org._id,
       matterId: args.matterId,
@@ -251,6 +292,7 @@ export const prepareJob = mutation({
       inputNote: args.inputNote?.trim().slice(0, 4000) || undefined,
       transcript: args.transcript?.slice(0, 40_000),
       storageId: args.storageId,
+      documentId: args.documentId,
       monthKey: key,
       requestedById: ac.user._id,
       createdAt: Date.now(),
