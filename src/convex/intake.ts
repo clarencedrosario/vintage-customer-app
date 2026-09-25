@@ -77,6 +77,8 @@ async function logAudit(
 
 const actorName = (u: Doc<"users">) => u.name ?? u.email ?? "Member";
 
+
+
 // ---------------------------------------------------------------------
 // Firm-side register
 // ---------------------------------------------------------------------
@@ -161,17 +163,25 @@ type SaveArgs = {
   prospectiveIdentityNo?: string;
 };
 
+/**
+ * Who the edit is attributed to. Firm-side edits carry the acting
+ * user; completion-link edits are attributed to the prospective
+ * client by the link's email, with the firm-side creator recorded as
+ * a traceable stand-in id (no user row exists yet for a new client).
+ */
+type EditorScope = {
+  orgId: Id<"organizations">;
+  editorId: Id<"users">;
+  editorName: string;
+};
+
 async function saveDraftCore(
   ctx: MutationCtx,
-  ac: {
-    org: { _id: Id<"organizations"> };
-    user: Doc<"users">;
-    permissions: Set<string>;
-  },
+  scope: EditorScope,
   args: SaveArgs,
 ) {
   const row = await ctx.db.get(args.intakeId);
-  if (!row || row.orgId !== ac.org._id) {
+  if (!row || row.orgId !== scope.orgId) {
     throw new Error("Intake not found in your organization.");
   }
   if (!mayEditIntake(row.state)) {
@@ -220,7 +230,7 @@ async function saveDraftCore(
     (
       await ctx.db
         .query("clients")
-        .withIndex("by_org", (q) => q.eq("orgId", ac.org._id))
+        .withIndex("by_org", (q) => q.eq("orgId", scope.orgId))
         .collect()
     ).map((c) => ({
       key: c._id,
@@ -239,8 +249,8 @@ async function saveDraftCore(
     prospectivePhone: phone || undefined,
     prospectiveIdentityNo: identityNo || undefined,
     duplicateHits: duplicateHits as unknown as Array<Record<string, unknown>>,
-    lastEditedById: ac.user._id,
-    lastEditedByName: actorName(ac.user),
+    lastEditedById: scope.editorId,
+    lastEditedByName: scope.editorName,
     updatedAt: now(),
   });
 
@@ -262,7 +272,11 @@ export const saveDraft = mutation({
     if (!can(ac, "matter.create") && !can(ac, "client.edit")) {
       throw new Error("Your role is not permitted to edit this intake.");
     }
-    return await saveDraftCore(ctx, ac, args);
+    return await saveDraftCore(
+      ctx,
+      { orgId: ac.org._id, editorId: ac.user._id, editorName: actorName(ac.user) },
+      args,
+    );
   },
 });
 
@@ -284,7 +298,11 @@ export const clientSaveDraft = mutation({
     }
     const ac = await getAccessContext(ctx);
     if (!ac) throw new Error("You no longer have access to this intake.");
-    return await saveDraftCore(ctx, { ...ac, user }, args);
+    return await saveDraftCore(
+      ctx,
+      { orgId: ac.org._id, editorId: user._id, editorName: actorName(user) },
+      args,
+    );
   },
 });
 
@@ -1071,6 +1089,146 @@ export const intakeChecklist = query({
     kycChecklist(
       (args.clientKind as IntakeClientKind | undefined) ?? undefined,
     ),
+});
+
+/**
+ * Token-authorized intake lookup for NEW-client completion links.
+ * The link works while it is live (not used, not revoked, not expired)
+ * and the intake is still editable. Existing-client intakes never
+ * authorize through the token alone — the caller must be the bound,
+ * authenticated account (handled by the separate mutations above).
+ */
+async function intakeByCompletionToken(
+  ctx: QueryCtx,
+  token: string,
+): Promise<Doc<"intakes"> | null> {
+  const rows = await ctx.db.query("intakes").collect();
+  for (const row of rows) {
+    if (
+      row.invite &&
+      row.clientMode === "new_client" &&
+      !row.invite.usedAt &&
+      !row.invite.revokedAt &&
+      now() <= row.invite.expiresAt &&
+      row.invite.tokenHash === invitationTokenHash(row.invite.salt, token)
+    ) {
+      return row;
+    }
+  }
+  return null;
+}
+
+/** New-client draft save through the completion link (no account yet). */
+export const clientTokenSaveDraft = mutation({
+  args: {
+    token: v.string(),
+    form: v.optional(v.any()),
+    prospectiveName: v.optional(v.string()),
+    prospectiveEmail: v.optional(v.string()),
+    prospectivePhone: v.optional(v.string()),
+    prospectiveIdentityNo: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const row = await intakeByCompletionToken(ctx, args.token);
+    if (!row) throw new Error("This completion link is not valid or has expired.");
+    if (!mayEditIntake(row.state)) {
+      throw new Error(
+        `This intake is ${INTAKE_STATE_LABELS[row.state].toLowerCase()} and can no longer be edited.`,
+      );
+    }
+    return await saveDraftCore(
+      ctx,
+      {
+        orgId: row.orgId,
+        editorId: row.createdById!,
+        editorName: `Client (via completion link) — ${row.invite?.email ?? "unknown"}`,
+      },
+      {
+        intakeId: row._id,
+        form: args.form,
+        prospectiveName: args.prospectiveName,
+        prospectiveEmail: args.prospectiveEmail,
+        prospectivePhone: args.prospectivePhone,
+        prospectiveIdentityNo: args.prospectiveIdentityNo,
+      },
+    );
+  },
+});
+
+/**
+ * New-client submit through the completion link: validates required
+ * fields, flips the state to submitted and burns the link (single use).
+ */
+export const clientTokenSubmit = mutation({
+  args: { token: v.string() },
+  handler: async (ctx, args) => {
+    const row = await intakeByCompletionToken(ctx, args.token);
+    if (!row) throw new Error("This completion link is not valid or has expired.");
+    const next = canTransitionIntake(row.state, "submit");
+    if (!next) {
+      throw new Error(
+        `This intake cannot be submitted from its current state (${INTAKE_STATE_LABELS[row.state]}).`,
+      );
+    }
+    const form = (row.form as IntakeFormData) ?? {};
+    const missing = intakeMissingRequiredFields(form);
+    if (missing.length > 0) {
+      throw new Error(
+        `Intake is incomplete: ${missing
+          .slice(0, 4)
+          .map((m) => m.label)
+          .join(", ")}${missing.length > 4 ? ` and ${missing.length - 4} more` : ""}.`,
+      );
+    }
+    const t = now();
+    await ctx.db.patch(row._id, {
+      state: next,
+      invite: row.invite ? { ...row.invite, usedAt: t } : undefined,
+      clientCompletedAt: t,
+      updatedAt: t,
+    });
+    await logAudit(
+      ctx,
+      row.orgId,
+      row.createdById!,
+      row.createdByName ?? row.invite?.email ?? "Client",
+      "Client intake submitted (completion link)",
+      row._id,
+      row.invite?.email,
+    );
+  },
+});
+
+/** New-client engagement signature through the completion link. */
+export const clientTokenAcceptEngagement = mutation({
+  args: { token: v.string(), template: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const row = await intakeByCompletionToken(ctx, args.token);
+    if (!row) throw new Error("This completion link is not valid or has expired.");
+    if (!mayEditIntake(row.state)) {
+      throw new Error(
+        `This intake is ${INTAKE_STATE_LABELS[row.state].toLowerCase()} — engagement can no longer be accepted.`,
+      );
+    }
+    const form = { ...((row.form as IntakeFormData) ?? {}) } as IntakeFormData;
+    form.engagementTemplate =
+      args.template?.trim().slice(0, 120) || form.engagementTemplate;
+    form.engagementAccepted = true;
+    form.engagementSignedAt = now();
+    await ctx.db.patch(row._id, {
+      form,
+      clientCompletedAt: row.clientCompletedAt ?? now(),
+      updatedAt: now(),
+    });
+    await logAudit(
+      ctx,
+      row.orgId,
+      row.createdById!,
+      row.invite?.email ?? "Client (completion link)",
+      "Engagement letter accepted (signed via completion link)",
+      row._id,
+    );
+  },
 });
 
 // ---------------------------------------------------------------------
