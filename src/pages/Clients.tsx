@@ -92,6 +92,8 @@ function AddClientDialog() {
   const [stateName, setStateName] = useState("");
   const [pincode, setPincode] = useState("");
   const [gstin, setGstin] = useState("");
+  const [pan, setPan] = useState("");
+  const [cin, setCin] = useState("");
   const [notes, setNotes] = useState("");
   const [conflictNote, setConflictNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -106,6 +108,8 @@ function AddClientDialog() {
     setStateName("");
     setPincode("");
     setGstin("");
+    setPan("");
+    setCin("");
     setNotes("");
     setConflictNote("");
     setKind("individual");
@@ -129,6 +133,8 @@ function AddClientDialog() {
         state: stateName || undefined,
         pincode: pincode || undefined,
         gstin: gstin || undefined,
+        pan: pan || undefined,
+        cin: cin || undefined,
         notes: notes || undefined,
       });
       toast.success("Client added to the chamber's record.");
@@ -269,6 +275,32 @@ function AddClientDialog() {
                 onChange={(e) => setPincode(e.target.value)}
                 placeholder="400001"
                 maxLength={6}
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="cl-pan">
+                PAN <span className="ink-faded">(if held)</span>
+              </Label>
+              <Input
+                id="cl-pan"
+                value={pan}
+                onChange={(e) => setPan(e.target.value.toUpperCase())}
+                placeholder="ABCDE1234F"
+                maxLength={10}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="cl-cin">
+                CIN / registration no. <span className="ink-faded">(if held)</span>
+              </Label>
+              <Input
+                id="cl-cin"
+                value={cin}
+                onChange={(e) => setCin(e.target.value.toUpperCase())}
+                placeholder="U27200MH2011PTC221100"
+                maxLength={21}
               />
             </div>
           </div>

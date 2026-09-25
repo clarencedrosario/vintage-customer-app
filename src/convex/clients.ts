@@ -37,15 +37,19 @@ export const get = query({
   },
 });
 
-/** Create a client (individual / company / trust / government). */
+/** Create a client (individual / company / partnership / LLP / trust / society / government / other). */
 export const create = mutation({
   args: {
     name: v.string(),
     kind: v.union(
       v.literal("individual"),
       v.literal("company"),
+      v.literal("partnership"),
+      v.literal("llp"),
       v.literal("trust"),
+      v.literal("society"),
       v.literal("government"),
+      v.literal("other"),
     ),
     email: v.optional(v.string()),
     phone: v.optional(v.string()),
@@ -55,6 +59,8 @@ export const create = mutation({
     state: v.optional(v.string()),
     pincode: v.optional(v.string()),
     gstin: v.optional(v.string()),
+    pan: v.optional(v.string()),
+    cin: v.optional(v.string()),
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -75,11 +81,28 @@ export const create = mutation({
       throw new Error("That GSTIN does not look valid.");
     }
 
+    if (
+      args.pan &&
+      !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(args.pan.trim().toUpperCase())
+    ) {
+      throw new Error("That PAN does not look valid.");
+    }
+    if (
+      args.cin &&
+      !/^[LU][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6}$/.test(
+        args.cin.trim().toUpperCase(),
+      )
+    ) {
+      throw new Error("That CIN does not look valid.");
+    }
+
     return await ctx.db.insert("clients", {
       orgId: ac.org._id,
       ...args,
       name,
       gstin: args.gstin?.trim().toUpperCase() || undefined,
+      pan: args.pan?.trim().toUpperCase() || undefined,
+      cin: args.cin?.trim().toUpperCase() || undefined,
       createdBy: ac.user._id,
       createdAt: Date.now(),
     });
@@ -95,8 +118,12 @@ export const update = mutation({
       v.union(
         v.literal("individual"),
         v.literal("company"),
+        v.literal("partnership"),
+        v.literal("llp"),
         v.literal("trust"),
+        v.literal("society"),
         v.literal("government"),
+        v.literal("other"),
       ),
     ),
     email: v.optional(v.string()),
@@ -107,6 +134,8 @@ export const update = mutation({
     state: v.optional(v.string()),
     pincode: v.optional(v.string()),
     gstin: v.optional(v.string()),
+    pan: v.optional(v.string()),
+    cin: v.optional(v.string()),
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {

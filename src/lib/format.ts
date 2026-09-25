@@ -72,8 +72,12 @@ export function financialYearLabel(fyStart = "04-01"): string {
 export const CLIENT_KINDS = [
   { value: "individual", label: "Individual" },
   { value: "company", label: "Company" },
+  { value: "partnership", label: "Partnership" },
+  { value: "llp", label: "LLP" },
   { value: "trust", label: "Trust" },
-  { value: "government", label: "Government" },
+  { value: "society", label: "Society" },
+  { value: "government", label: "Government Body" },
+  { value: "other", label: "Other" },
 ] as const;
 
 export const INDIAN_STATES = [

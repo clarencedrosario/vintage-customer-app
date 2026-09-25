@@ -91,8 +91,12 @@ export function mayEditIntake(state: IntakeState): boolean {
 export const INTAKE_CLIENT_KINDS = [
   "individual",
   "company",
+  "partnership",
+  "llp",
   "trust",
+  "society",
   "government",
+  "other",
 ] as const;
 export type IntakeClientKind = (typeof INTAKE_CLIENT_KINDS)[number];
 
@@ -193,7 +197,14 @@ export type IntakeFormData = {
 
 export type MissingField = { stage: IntakeStage; key: string; label: string };
 
-const ORG_KINDS: IntakeClientKind[] = ["company", "trust", "government"];
+const ORG_KINDS: IntakeClientKind[] = [
+  "company",
+  "partnership",
+  "llp",
+  "trust",
+  "society",
+  "government",
+];
 
 /**
  * Required fields at submit time — "org/matter-type required fields":

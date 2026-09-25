@@ -86,8 +86,12 @@ const CLIENT_STAGES: IntakeStage[] = [
 const KINDS: { value: IntakeClientKind; label: string }[] = [
   { value: "individual", label: "Individual" },
   { value: "company", label: "Company" },
+  { value: "partnership", label: "Partnership" },
+  { value: "llp", label: "LLP" },
   { value: "trust", label: "Trust" },
-  { value: "government", label: "Government" },
+  { value: "society", label: "Society" },
+  { value: "government", label: "Government Body" },
+  { value: "other", label: "Other" },
 ];
 
 const MATTER_KIND_LABELS: Record<IntakeMatterKind, string> = {

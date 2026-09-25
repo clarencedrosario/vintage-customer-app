@@ -241,8 +241,12 @@ export default defineSchema({
     kind: v.union(
       v.literal("individual"),
       v.literal("company"),
+      v.literal("partnership"),
+      v.literal("llp"),
       v.literal("trust"),
+      v.literal("society"),
       v.literal("government"),
+      v.literal("other"),
     ),
     name: v.string(),
     email: v.optional(v.string()),
@@ -253,6 +257,8 @@ export default defineSchema({
     state: v.optional(v.string()),
     pincode: v.optional(v.string()),
     gstin: v.optional(v.string()),
+    pan: v.optional(v.string()),
+    cin: v.optional(v.string()),
     notes: v.optional(v.string()),
     responsibleLawyerId: v.optional(v.id("users")),
     archivedAt: v.optional(v.number()),
@@ -443,6 +449,28 @@ export default defineSchema({
     jurisdiction: v.optional(v.string()),
     caseNumber: v.optional(v.string()),
     bench: v.optional(v.string()),
+    // Court-registry identifiers (guided New Matter form, Court step).
+    caseType: v.optional(v.string()),
+    caseYear: v.optional(v.string()),
+    courtroom: v.optional(v.string()),
+    cnrNumber: v.optional(v.string()),
+    filingNumber: v.optional(v.string()),
+    registrationNumber: v.optional(v.string()),
+    // Parties detail captured at opening (parties are also seeded into
+    // matterParties when provided).
+    clientRole: v.optional(v.string()),
+    otherParties: v.optional(v.string()),
+    // Structured billing (Billing step); billingArrangement keeps the
+    // free-text summary for display.
+    billingType: v.optional(
+      v.union(
+        v.literal("hourly"),
+        v.literal("fixed"),
+        v.literal("retainer"),
+        v.literal("non_billable"),
+      ),
+    ),
+    billingRate: v.optional(v.string()),
     opposingParty: v.optional(v.string()),
     opposingCounsel: v.optional(v.string()),
     billingArrangement: v.optional(v.string()),
@@ -739,6 +767,12 @@ export default defineSchema({
     body: v.string(),
     fromClient: v.optional(v.boolean()),
     toClient: v.optional(v.boolean()),
+    // Note confidentiality: internal working notes vs notes shared with
+    // the client (client-portal reads continue to key off fromClient /
+    // toClient; this stamps intent on every note).
+    confidentiality: v.optional(
+      v.union(v.literal("internal"), v.literal("shared_with_client")),
+    ),
     createdAt: v.number(),
   }).index("by_matter", ["matterId"]),
 

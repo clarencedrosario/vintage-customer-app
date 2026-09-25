@@ -439,9 +439,16 @@ export default function Client360() {
                 .join(", ") || "No address recorded"}
             </p>
             <p className="text-sm text-muted-foreground">
-              {[c.phone, c.email, c.gstin ? `GSTIN ${c.gstin}` : ""]
-                .filter(Boolean)
-                .join(" · ") || "No contact details recorded"}
+              {
+                [
+                  c.phone,
+                  c.email,
+                  c.gstin ? `GSTIN ${c.gstin}` : "",
+                  c.pan ? `PAN ${c.pan}` : "",
+                  c.cin ? `CIN ${c.cin}` : "",
+                ]
+                  .filter(Boolean)
+                  .join(" · ") || "No contact details recorded"}
             </p>
           </div>
           <dl className="grid grid-cols-3 gap-4 text-right">

@@ -138,10 +138,30 @@ export const create = mutation({
     clientId: v.id("clients"),
     conflictCheckId: v.optional(v.id("conflictChecks")),
     practiceArea: v.string(),
+    reference: v.optional(v.string()),
     court: v.optional(v.string()),
     jurisdiction: v.optional(v.string()),
     caseNumber: v.optional(v.string()),
     bench: v.optional(v.string()),
+    caseType: v.optional(v.string()),
+    caseYear: v.optional(v.string()),
+    courtroom: v.optional(v.string()),
+    cnrNumber: v.optional(v.string()),
+    filingNumber: v.optional(v.string()),
+    registrationNumber: v.optional(v.string()),
+    clientRole: v.optional(v.string()),
+    otherParties: v.optional(v.string()),
+    billingType: v.optional(
+      v.union(
+        v.literal("hourly"),
+        v.literal("fixed"),
+        v.literal("retainer"),
+        v.literal("non_billable"),
+      ),
+    ),
+    billingRate: v.optional(v.string()),
+    supportingLawyerIds: v.optional(v.array(v.id("users"))),
+    juniorStaffIds: v.optional(v.array(v.id("users"))),
     opposingParty: v.optional(v.string()),
     opposingCounsel: v.optional(v.string()),
     description: v.optional(v.string()),
@@ -182,14 +202,27 @@ export const create = mutation({
       teamIds = undefined; // silently drop rather than fail the filing
     }
 
-    const reference = await nextMatterReference(
-      ctx,
-      ac.org._id,
-      ac.org.invoicePrefix,
-    );
+    const reference =
+      args.reference?.trim() ||
+      (await nextMatterReference(ctx, ac.org._id, ac.org.invoicePrefix));
     const now = Date.now();
 
-    const matterId =    await ctx.db.insert("matters", {
+    // Compose the billing summary from the structured selection, unless
+    // the caller supplied free text directly.
+    const BILLING_LABEL: Record<string, string> = {
+      hourly: "Hourly",
+      fixed: "Fixed fee",
+      retainer: "Retainer",
+      non_billable: "Non-billable",
+    };
+    const billingArrangement =
+      args.billingArrangement?.trim() ||
+      [args.billingType ? BILLING_LABEL[args.billingType] : null, args.billingRate?.trim()]
+        .filter(Boolean)
+        .join(" — ") ||
+      undefined;
+
+    const matterId = await ctx.db.insert("matters", {
       orgId: ac.org._id,
       title,
       reference,
@@ -200,6 +233,17 @@ export const create = mutation({
       jurisdiction: args.jurisdiction?.trim() || undefined,
       caseNumber: args.caseNumber?.trim() || undefined,
       bench: args.bench?.trim() || undefined,
+      caseType: args.caseType?.trim() || undefined,
+      caseYear: args.caseYear?.trim() || undefined,
+      courtroom: args.courtroom?.trim() || undefined,
+      cnrNumber: args.cnrNumber?.trim().toUpperCase() || undefined,
+      filingNumber: args.filingNumber?.trim() || undefined,
+      registrationNumber: args.registrationNumber?.trim() || undefined,
+      clientRole: args.clientRole?.trim() || undefined,
+      otherParties: args.otherParties?.trim().slice(0, MAX_TEXT) || undefined,
+      billingType: args.billingType || undefined,
+      billingRate: args.billingRate?.trim() || undefined,
+      billingArrangement,
       opposingParty: args.opposingParty?.trim() || undefined,
       opposingCounsel: args.opposingCounsel?.trim() || undefined,
       description: args.description?.trim() || undefined,
@@ -207,16 +251,96 @@ export const create = mutation({
       teamIds,
       leadLawyerId: args.leadLawyerId || undefined,
       priority: args.priority ?? undefined,
-      billingArrangement: args.billingArrangement?.trim() || undefined,
       keyDates: args.keyDates?.length ? args.keyDates : undefined,
       createdBy: ac.user._id,
       createdAt: now,
       updatedAt: now,
     });
 
+    // Seed the parties register from the form: client (with role),
+    // opposing party and any "other parties" line.
+    const partyRows: {
+      name: string;
+      side: "ours" | "opposing" | "neutral";
+      role?: string;
+      counsel?: string;
+    }[] = [
+      {
+        name: client.name,
+        side: "ours" as const,
+        role: args.clientRole?.trim() || "Client",
+      },
+    ];
+    if (args.opposingParty?.trim()) {
+      partyRows.push({
+        name: args.opposingParty.trim(),
+        side: "opposing",
+        counsel: args.opposingCounsel?.trim() || undefined,
+      });
+    }
+    for (const raw of (args.otherParties ?? "").split(/[,;\n]/)) {
+      const name = raw.trim();
+      if (name) partyRows.push({ name, side: "neutral" });
+    }
+    for (const p of partyRows) {
+      await ctx.db.insert("matterParties", {
+        orgId: ac.org._id,
+        matterId,
+        name: p.name,
+        side: p.side,
+        role: p.role,
+        counsel: p.counsel,
+        createdBy: ac.user._id,
+        createdAt: now,
+      });
+    }
+
     await logEvent(ctx, matterId, "created", `Matter opened — ${reference}.`);
     await audit(ctx, ac, matterId, "Matter opened", `${reference} — ${title}.`);
     return matterId;
+  },
+});
+
+/**
+ * Register rows for the matters desk: one flat row per matter with the
+ * client name, lead-lawyer name and court joined. Org-scoped and
+ * canViewMatter-filtered, like matters.list.
+ */
+export const registerRows = query({
+  args: {},
+  handler: async (ctx) => {
+    const ac = await getAccessContext(ctx);
+    if (!ac) return [];
+    const matters = await ctx.db
+      .query("matters")
+      .withIndex("by_org", (q) => q.eq("orgId", ac.org._id))
+      .collect();
+    const visible = matters
+      .filter((m) => canViewMatter(ac, m))
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+    return Promise.all(
+      visible.map(async (m) => {
+        const client = await ctx.db.get(m.clientId);
+        const lead = m.leadLawyerId
+          ? ((await ctx.db.get(m.leadLawyerId)) as Doc<"users"> | null)
+          : null;
+        return {
+          _id: m._id,
+          reference: m.reference,
+          title: m.title,
+          status: m.status,
+          practiceArea: m.practiceArea,
+          priority: m.priority,
+          court: m.court ?? null,
+          caseNumber: m.caseNumber ?? null,
+          nextHearingAt: m.nextHearingAt ?? null,
+          leadLawyerName: lead?.name ?? lead?.email ?? null,
+          clientName: client?.name ?? null,
+          clientId: m.clientId,
+          archivedAt: m.archivedAt ?? null,
+        };
+      }),
+    );
   },
 });
 
@@ -230,6 +354,23 @@ export const update = mutation({
     jurisdiction: v.optional(v.string()),
     caseNumber: v.optional(v.string()),
     bench: v.optional(v.string()),
+    caseType: v.optional(v.string()),
+    caseYear: v.optional(v.string()),
+    courtroom: v.optional(v.string()),
+    cnrNumber: v.optional(v.string()),
+    filingNumber: v.optional(v.string()),
+    registrationNumber: v.optional(v.string()),
+    clientRole: v.optional(v.string()),
+    otherParties: v.optional(v.string()),
+    billingType: v.optional(
+      v.union(
+        v.literal("hourly"),
+        v.literal("fixed"),
+        v.literal("retainer"),
+        v.literal("non_billable"),
+      ),
+    ),
+    billingRate: v.optional(v.string()),
     opposingParty: v.optional(v.string()),
     opposingCounsel: v.optional(v.string()),
     description: v.optional(v.string()),
@@ -257,6 +398,31 @@ export const update = mutation({
       patch.caseNumber.trim() !== (matter.caseNumber ?? "")
     )
       changes.push("case number");
+    if (patch.cnrNumber !== undefined) changes.push("CNR number");
+    if (
+      patch.filingNumber !== undefined &&
+      patch.filingNumber.trim() !== (matter.filingNumber ?? "")
+    )
+      changes.push("filing number");
+    if (
+      patch.registrationNumber !== undefined &&
+      patch.registrationNumber.trim() !== (matter.registrationNumber ?? "")
+    )
+      changes.push("registration number");
+    if (patch.caseType !== undefined) changes.push("case type");
+    if (patch.courtroom !== undefined) changes.push("courtroom");
+    if (patch.clientRole !== undefined) changes.push("client role");
+    if (patch.otherParties !== undefined) changes.push("other parties");
+    if (
+      patch.billingType !== undefined &&
+      patch.billingType !== (matter.billingType ?? null)
+    )
+      changes.push("billing type");
+    if (
+      patch.billingRate !== undefined &&
+      patch.billingRate.trim() !== (matter.billingRate ?? "")
+    )
+      changes.push("billing rate");
     if (patch.priority !== undefined && patch.priority !== (matter.priority ?? "normal"))
       changes.push("priority");
     if (
@@ -1297,7 +1463,13 @@ export const addExpense = mutation({
 // ---------------- Notes ----------------
 
 export const addNote = mutation({
-  args: { matterId: v.id("matters"), body: v.string() },
+  args: {
+    matterId: v.id("matters"),
+    body: v.string(),
+    confidentiality: v.optional(
+      v.union(v.literal("internal"), v.literal("shared_with_client")),
+    ),
+  },
   handler: async (ctx, args) => {
     const ac = await requireAccess(ctx);
     requireCapability(ac, "note.write");
@@ -1310,6 +1482,7 @@ export const addNote = mutation({
       matterId: args.matterId,
       authorId: ac.user._id,
       body,
+      confidentiality: args.confidentiality ?? "internal",
       createdAt: Date.now(),
     });
     await logEvent(ctx, args.matterId, "note", "Note added to the file.", {

@@ -60,29 +60,61 @@ const FIRM_VIEW_ROLES: readonly OrgRole[] = [
   "administrator",
 ];
 
+type MatterFormStep = 0 | 1 | 2 | 3 | 4;
+
+const STEPS: { title: string; hint: string }[] = [
+  { title: "Basic", hint: "What the matter is and how it is staffed on the desk" },
+  { title: "Court", hint: "Forum and court-registry identifiers" },
+  { title: "Parties", hint: "Who is on each side of the file" },
+  { title: "Team", hint: "Advocates responsible for the matter" },
+  { title: "Billing", hint: "How this matter is billed" },
+];
+
 function NewMatterDialog() {
   const clients = useQuery(api.clients.list);
   const members = useQuery(api.workspace.team);
   const createMatter = useMutation(api.matters.create);
 
   const [open, setOpen] = useState(false);
+  const [step, setStep] = useState<MatterFormStep>(0);
+
+  // Basic
   const [title, setTitle] = useState("");
+  const [reference, setReference] = useState("");
+  const [description, setDescription] = useState("");
+  const [practiceArea, setPracticeArea] = useState("");
+  const [matterType, setMatterType] = useState("");
+  const [priority, setPriority] = useState("normal");
+  const [clientId, setClientId] = useState("");
   const conflict = useQuery(
     api.clients.conflictCheck,
     title.trim().length >= 3 ? { name: title.trim() } : "skip",
   );
-  const [clientId, setClientId] = useState("");
-  const [practiceArea, setPracticeArea] = useState("");
+  // Court
   const [court, setCourt] = useState("");
-  const [jurisdiction, setJurisdiction] = useState("");
-  const [caseNumber, setCaseNumber] = useState("");
   const [bench, setBench] = useState("");
+  const [courtroom, setCourtroom] = useState("");
+  const [caseType, setCaseType] = useState("");
+  const [caseNumber, setCaseNumber] = useState("");
+  const [caseYear, setCaseYear] = useState("");
+  const [cnrNumber, setCnrNumber] = useState("");
+  const [filingNumber, setFilingNumber] = useState("");
+  const [registrationNumber, setRegistrationNumber] = useState("");
+  const [jurisdiction, setJurisdiction] = useState("");
+  // Parties
+  const [clientRole, setClientRole] = useState("");
   const [opposingParty, setOpposingParty] = useState("");
   const [opposingCounsel, setOpposingCounsel] = useState("");
-  const [description, setDescription] = useState("");
+  const [otherParties, setOtherParties] = useState("");
+  // Team
   const [leadLawyerId, setLeadLawyerId] = useState("");
-  const [priority, setPriority] = useState("normal");
+  const [supportingLawyerIds, setSupportingLawyerIds] = useState<string[]>([]);
+  const [juniorStaffIds, setJuniorStaffIds] = useState<string[]>([]);
+  // Billing
+  const [billingType, setBillingType] = useState("");
+  const [billingRate, setBillingRate] = useState("");
   const [billingArrangement, setBillingArrangement] = useState("");
+
   const [conflictCleared, setConflictCleared] = useState(false);
   const [busy, setBusy] = useState(false);
   const selectedClient = (clients ?? []).find((c) => c._id === clientId);
@@ -90,48 +122,102 @@ function NewMatterDialog() {
   const lawyerOptions = (members ?? []).filter(
     (m) => m.status === "active" && m.orgRole !== "support_staff",
   );
+  const juniorOptions = (members ?? []).filter(
+    (m) => m.status === "active" && m.orgRole === "support_staff",
+  );
+
+  const reset = () => {
+    setStep(0);
+    setTitle("");
+    setReference("");
+    setDescription("");
+    setPracticeArea("");
+    setMatterType("");
+    setPriority("normal");
+    setClientId("");
+    setCourt("");
+    setBench("");
+    setCourtroom("");
+    setCaseType("");
+    setCaseNumber("");
+    setCaseYear("");
+    setCnrNumber("");
+    setFilingNumber("");
+    setRegistrationNumber("");
+    setJurisdiction("");
+    setClientRole("");
+    setOpposingParty("");
+    setOpposingCounsel("");
+    setOtherParties("");
+    setLeadLawyerId("");
+    setSupportingLawyerIds([]);
+    setJuniorStaffIds([]);
+    setBillingType("");
+    setBillingRate("");
+    setBillingArrangement("");
+    setConflictCleared(false);
+  };
+
+  const basicComplete = title.trim() && clientId && practiceArea;
+  const stepComplete = (s: MatterFormStep) => {
+    if (s === 0) return Boolean(basicComplete);
+    return true;
+  };
 
   const handleCreate = async () => {
-    if (!title.trim() || !clientId || !practiceArea) {
+    if (!basicComplete) {
       toast.error("Title, client and practice area are required.");
+      setStep(0);
       return;
     }
     if (!conflictCleared) {
       toast.error("Run and clear the conflict check before opening the matter.");
+      setStep(2);
       return;
     }
     setBusy(true);
     try {
-      await createMatter({
+      const teamIds = [
+        ...(leadLawyerId ? [leadLawyerId] : []),
+        ...supportingLawyerIds,
+        ...juniorStaffIds,
+      ];
+      const matterId = await createMatter({
         title,
         clientId: clientId as never,
+        reference: reference || undefined,
         practiceArea,
         court: court || undefined,
         jurisdiction: jurisdiction || undefined,
         caseNumber: caseNumber || undefined,
         bench: bench || undefined,
+        caseType: caseType || undefined,
+        caseYear: caseYear || undefined,
+        courtroom: courtroom || undefined,
+        cnrNumber: cnrNumber || undefined,
+        filingNumber: filingNumber || undefined,
+        registrationNumber: registrationNumber || undefined,
+        clientRole: clientRole || undefined,
         opposingParty: opposingParty || undefined,
         opposingCounsel: opposingCounsel || undefined,
+        otherParties: otherParties || undefined,
         description: description || undefined,
         leadLawyerId: (leadLawyerId || undefined) as never,
+        teamIds: teamIds.length > 0 ? (teamIds as never) : undefined,
         priority: priority as "normal" | "high" | "urgent",
+        billingType: (billingType || undefined) as
+          | "hourly"
+          | "fixed"
+          | "retainer"
+          | "non_billable"
+          | undefined,
+        billingRate: billingRate || undefined,
         billingArrangement: billingArrangement || undefined,
       });
       toast.success("Matter opened. The reference has been assigned.");
       setOpen(false);
-      setTitle("");
-      setClientId("");
-      setPracticeArea("");
-      setCourt("");
-      setJurisdiction("");
-      setCaseNumber("");
-      setBench("");
-      setOpposingParty("");
-      setOpposingCounsel("");
-      setDescription("");
-      setLeadLawyerId("");
-      setPriority("normal");
-      setBillingArrangement("");
+      reset();
+      window.location.assign(`/matters/${matterId}`);
     } catch (err) {
       toast.error(
         err instanceof Error ? err.message : "Could not open the matter.",
@@ -141,210 +227,472 @@ function NewMatterDialog() {
     }
   };
 
+  const toggleIn =
+    (list: string[], setList: (v: string[]) => void) => (id: string) =>
+      setList(list.includes(id) ? list.filter((x) => x !== id) : [...list, id]);
+
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) reset(); }}>
       <DialogTrigger asChild>
         <Button className="gap-2">
           <Plus className="size-4" aria-hidden="true" />
           Open a matter
         </Button>
       </DialogTrigger>
-      <DialogContent className="sm:max-w-xl">
+      <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <p className="type-label ink-faded">New Entry</p>
           <DialogTitle className="font-serif text-2xl">
             Open a matter
           </DialogTitle>
+          <p className="text-xs text-muted-foreground">{STEPS[step].hint}</p>
         </DialogHeader>
-        <div className="max-h-[65vh] space-y-4 overflow-y-auto pr-1">
-          <div className="space-y-2">
-            <Label htmlFor="nm-title">Matter title</Label>
-            <Input
-              id="nm-title"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="e.g. Writ petition — land acquisition"
-            />
-            {conflict && conflict.matches.length > 0 && (
-              <div className="rounded-lg border border-[#B68A45]/50 bg-[#f6f1e6] p-3">
-                <p className="text-xs font-medium text-[#8a6a33]">
-                  {conflict.matches.length} possible conflict
-                  {conflict.matches.length === 1 ? "" : "s"} — for human
-                  review, not an automatic bar.
-                </p>
-                <ul className="mt-1 space-y-1">
-                  {conflict.matches.slice(0, 4).map((m) => (
-                    <li key={m.clientId} className="text-xs text-muted-foreground">
-                      · {m.clientName}: {m.evidence[0]}
-                    </li>
-                  ))}
-                </ul>
+
+        {/* Step rail */}
+        <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="New matter steps">
+          {STEPS.map((s, i) => (
+            <button
+              key={s.title}
+              type="button"
+              role="tab"
+              aria-selected={step === i}
+              onClick={() => setStep(i as MatterFormStep)}
+              className={`rounded-full border px-3 py-1 text-xs transition-colors ${
+                step === i
+                  ? "border-[#B68A45] bg-[#B68A45] text-white"
+                  : "border-[#B68A45]/40 text-[#8a6a33] hover:bg-[#f6f1e6]"
+              }`}
+            >
+              {i + 1}. {s.title}
+              {!stepComplete(i as MatterFormStep) && (
+                <span className="ml-1" aria-hidden="true">
+                  ·
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+
+        <div className="max-h-[60vh] space-y-4 overflow-y-auto pr-1">
+          {step === 0 && (
+            <>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="nm-title">Matter name *</Label>
+                  <Input
+                    id="nm-title"
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    placeholder="e.g. Writ petition — land acquisition"
+                  />
+                  {conflict && conflict.matches.length > 0 && (
+                    <div className="rounded-lg border border-[#B68A45]/50 bg-[#f6f1e6] p-3">
+                      <p className="text-xs font-medium text-[#8a6a33]">
+                        {conflict.matches.length} possible conflict
+                        {conflict.matches.length === 1 ? "" : "s"} — for human
+                        review, not an automatic bar.
+                      </p>
+                      <ul className="mt-1 space-y-1">
+                        {conflict.matches.slice(0, 4).map((m) => (
+                          <li key={m.clientId} className="text-xs text-muted-foreground">
+                            · {m.clientName}: {m.evidence[0]}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="nm-ref">
+                    Reference <span className="ink-faded">(auto if blank)</span>
+                  </Label>
+                  <Input
+                    id="nm-ref"
+                    value={reference}
+                    onChange={(e) => setReference(e.target.value)}
+                    placeholder="ADV/2026/0000"
+                  />
+                </div>
               </div>
-            )}
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label>Client</Label>
-              <Select value={clientId} onValueChange={setClientId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select a client" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(clients ?? []).map((c) => (
-                    <SelectItem key={c._id} value={c._id}>
-                      {c.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {(clients ?? []).length === 0 && (
-                <p className="text-xs text-muted-foreground">
-                  No clients yet — add one from the Clients page first.
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Client *</Label>
+                  <Select value={clientId} onValueChange={setClientId}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select a client" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(clients ?? []).map((c) => (
+                        <SelectItem key={c._id} value={c._id}>
+                          {c.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {(clients ?? []).length === 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      No clients yet — add one from the Clients page first.
+                    </p>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <Label>Practice area *</Label>
+                  <Select value={practiceArea} onValueChange={setPracticeArea}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select practice area" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {PRACTICE_AREAS.map((a) => (
+                        <SelectItem key={a} value={a}>
+                          {a}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="nm-mtype">Type</Label>
+                  <Input
+                    id="nm-mtype"
+                    value={matterType}
+                    onChange={(e) => setMatterType(e.target.value)}
+                    placeholder="e.g. Original side appeal"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Priority</Label>
+                  <Select value={priority} onValueChange={setPriority}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="normal">Normal</SelectItem>
+                      <SelectItem value="high">High</SelectItem>
+                      <SelectItem value="urgent">Urgent</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="nm-desc">Description</Label>
+                <Textarea
+                  id="nm-desc"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  placeholder="The nature of the dispute or engagement…"
+                  className="min-h-[70px]"
+                />
+              </div>
+            </>
+          )}
+
+          {step === 1 && (
+            <>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="nm-court">Court / forum</Label>
+                  <Input
+                    id="nm-court"
+                    value={court}
+                    onChange={(e) => setCourt(e.target.value)}
+                    placeholder="e.g. Bombay High Court"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="nm-bench">Bench</Label>
+                  <Input
+                    id="nm-bench"
+                    value={bench}
+                    onChange={(e) => setBench(e.target.value)}
+                    placeholder="e.g. Division Bench I"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="nm-room">Courtroom</Label>
+                  <Input
+                    id="nm-room"
+                    value={courtroom}
+                    onChange={(e) => setCourtroom(e.target.value)}
+                    placeholder="e.g. Court No. 7"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="nm-jur">Jurisdiction</Label>
+                  <Input
+                    id="nm-jur"
+                    value={jurisdiction}
+                    onChange={(e) => setJurisdiction(e.target.value)}
+                    placeholder="e.g. Maharashtra — original side"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="nm-ctype">Case type</Label>
+                  <Input
+                    id="nm-ctype"
+                    value={caseType}
+                    onChange={(e) => setCaseType(e.target.value)}
+                    placeholder="WP / SLP / CA"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="nm-caseno">Case number</Label>
+                  <Input
+                    id="nm-caseno"
+                    value={caseNumber}
+                    onChange={(e) => setCaseNumber(e.target.value)}
+                    placeholder="1234"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="nm-cyear">Year</Label>
+                  <Input
+                    id="nm-cyear"
+                    value={caseYear}
+                    onChange={(e) => setCaseYear(e.target.value)}
+                    placeholder="2026"
+                    maxLength={4}
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="nm-cnr">CNR number</Label>
+                  <Input
+                    id="nm-cnr"
+                    value={cnrNumber}
+                    onChange={(e) => setCnrNumber(e.target.value.toUpperCase())}
+                    placeholder="MHBW010123452026"
+                    maxLength={16}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="nm-filing">Filing number</Label>
+                  <Input
+                    id="nm-filing"
+                    value={filingNumber}
+                    onChange={(e) => setFilingNumber(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="nm-reg">Registration number</Label>
+                  <Input
+                    id="nm-reg"
+                    value={registrationNumber}
+                    onChange={(e) => setRegistrationNumber(e.target.value)}
+                  />
+                </div>
+              </div>
+            </>
+          )}
+
+          {step === 2 && (
+            <>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="nm-crole">Client role</Label>
+                  <Input
+                    id="nm-crole"
+                    value={clientRole}
+                    onChange={(e) => setClientRole(e.target.value)}
+                    placeholder="e.g. Petitioner / Plaintiff / Appellant"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="nm-opp">Opposing party</Label>
+                  <Input
+                    id="nm-opp"
+                    value={opposingParty}
+                    onChange={(e) => setOpposingParty(e.target.value)}
+                    placeholder="e.g. State of Maharashtra"
+                  />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="nm-oppc">Opposing counsel</Label>
+                <Input
+                  id="nm-oppc"
+                  value={opposingCounsel}
+                  onChange={(e) => setOpposingCounsel(e.target.value)}
+                  placeholder="e.g. Adv. S. Deshmukh"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="nm-other">
+                  Other parties{" "}
+                  <span className="ink-faded">(comma-separated proforma respondents, intervenors…)</span>
+                </Label>
+                <Textarea
+                  id="nm-other"
+                  value={otherParties}
+                  onChange={(e) => setOtherParties(e.target.value)}
+                  className="min-h-[60px]"
+                />
+              </div>
+              {selectedClient && (
+                <ConflictGatePanel
+                  title={title}
+                  clientId={selectedClient._id}
+                  clientName={selectedClient.name}
+                  onCleared={() => setConflictCleared(true)}
+                />
+              )}
+              {!selectedClient && (
+                <p className="type-label ink-faded">
+                  Select a client to enable the conflict-of-interest check.
                 </p>
               )}
-            </div>
-            <div className="space-y-2">
-              <Label>Category / practice area</Label>
-              <Select value={practiceArea} onValueChange={setPracticeArea}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select practice area" />
-                </SelectTrigger>
-                <SelectContent>
-                  {PRACTICE_AREAS.map((a) => (
-                    <SelectItem key={a} value={a}>
-                      {a}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="nm-court">Court / forum</Label>
-              <Input
-                id="nm-court"
-                value={court}
-                onChange={(e) => setCourt(e.target.value)}
-                placeholder="e.g. Bombay High Court"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="nm-bench">Bench</Label>
-              <Input
-                id="nm-bench"
-                value={bench}
-                onChange={(e) => setBench(e.target.value)}
-                placeholder="e.g. Division Bench I"
-              />
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="nm-jur">Jurisdiction</Label>
-              <Input
-                id="nm-jur"
-                value={jurisdiction}
-                onChange={(e) => setJurisdiction(e.target.value)}
-                placeholder="e.g. Maharashtra — original side"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="nm-caseno">Case number</Label>
-              <Input
-                id="nm-caseno"
-                value={caseNumber}
-                onChange={(e) => setCaseNumber(e.target.value)}
-                placeholder="e.g. WP/1234/2026"
-              />
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="nm-opp">Opposing party</Label>
-              <Input
-                id="nm-opp"
-                value={opposingParty}
-                onChange={(e) => setOpposingParty(e.target.value)}
-                placeholder="e.g. State of Maharashtra"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="nm-oppc">Opposing counsel</Label>
-              <Input
-                id="nm-oppc"
-                value={opposingCounsel}
-                onChange={(e) => setOpposingCounsel(e.target.value)}
-                placeholder="e.g. Adv. S. Deshmukh"
-              />
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label>Lead lawyer</Label>
-              <Select value={leadLawyerId} onValueChange={setLeadLawyerId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Unassigned" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="">— Unassigned —</SelectItem>
-                  {lawyerOptions.map((m) => (
-                    <SelectItem key={m.userId} value={m.userId}>
-                      {m.name ?? m.email}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>Priority</Label>
-              <Select value={priority} onValueChange={setPriority}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="normal">Normal</SelectItem>
-                  <SelectItem value="high">High</SelectItem>
-                  <SelectItem value="urgent">Urgent</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="nm-bill">Billing arrangement</Label>
-            <Input
-              id="nm-bill"
-              value={billingArrangement}
-              onChange={(e) => setBillingArrangement(e.target.value)}
-              placeholder="e.g. Fixed fee ₹50,000 per stage · hourly ₹3,000/hr"
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="nm-desc">Brief description</Label>
-            <Textarea
-              id="nm-desc"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="The nature of the dispute or engagement…"
-              className="min-h-[80px]"
-            />
-          </div>
-          {selectedClient && (
-            <ConflictGatePanel
-              title={title}
-              clientId={selectedClient._id}
-              clientName={selectedClient.name}
-              onCleared={() => setConflictCleared(true)}
-            />
+            </>
           )}
-          {!selectedClient && (
-            <p className="type-label ink-faded">
-              Select a client to enable the conflict-of-interest check.
-            </p>
+
+          {step === 3 && (
+            <>
+              <div className="space-y-2">
+                <Label>Lead lawyer</Label>
+                <Select value={leadLawyerId} onValueChange={setLeadLawyerId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Unassigned" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">— Unassigned —</SelectItem>
+                    {lawyerOptions.map((m) => (
+                      <SelectItem key={m.userId} value={m.userId}>
+                        {m.name ?? m.email}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Supporting lawyers</Label>
+                <div className="flex flex-wrap gap-1.5">
+                  {lawyerOptions.map((m) => {
+                    const on = supportingLawyerIds.includes(m.userId);
+                    return (
+                      <button
+                        key={m.userId}
+                        type="button"
+                        onClick={() => toggleIn(supportingLawyerIds, setSupportingLawyerIds)(m.userId)}
+                        className={`rounded-full border px-3 py-1 text-xs ${
+                          on
+                            ? "border-[#B68A45] bg-[#B68A45] text-white"
+                            : "border-[#B68A45]/40 text-[#8a6a33] hover:bg-[#f6f1e6]"
+                        }`}
+                        aria-pressed={on}
+                      >
+                        {m.name ?? m.email}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label>Junior / paralegal</Label>
+                <div className="flex flex-wrap gap-1.5">
+                  {juniorOptions.length === 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      No support-staff members in the chamber yet.
+                    </p>
+                  )}
+                  {juniorOptions.map((m) => {
+                    const on = juniorStaffIds.includes(m.userId);
+                    return (
+                      <button
+                        key={m.userId}
+                        type="button"
+                        onClick={() => toggleIn(juniorStaffIds, setJuniorStaffIds)(m.userId)}
+                        className={`rounded-full border px-3 py-1 text-xs ${
+                          on
+                            ? "border-[#B68A45] bg-[#B68A45] text-white"
+                            : "border-[#B68A45]/40 text-[#8a6a33] hover:bg-[#f6f1e6]"
+                        }`}
+                        aria-pressed={on}
+                      >
+                        {m.name ?? m.email}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Team members can only be restricted after opening by owner /
+                partner / administrator roles (matter-level restriction).
+              </p>
+            </>
           )}
-          <Button className="w-full" onClick={handleCreate} disabled={busy || !conflictCleared}>
-            {busy ? "Opening…" : conflictCleared ? "Open the matter" : "Conflict check required"}
+
+          {step === 4 && (
+            <>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Billing type</Label>
+                  <Select value={billingType} onValueChange={setBillingType}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select arrangement" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="hourly">Hourly</SelectItem>
+                      <SelectItem value="fixed">Fixed fee</SelectItem>
+                      <SelectItem value="retainer">Retainer</SelectItem>
+                      <SelectItem value="non_billable">Non-billable</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="nm-rate">Rate</Label>
+                  <Input
+                    id="nm-rate"
+                    value={billingRate}
+                    onChange={(e) => setBillingRate(e.target.value)}
+                    placeholder="e.g. ₹3,000 per hour"
+                  />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="nm-bill">
+                  Billing notes <span className="ink-faded">(free text — overrides the summary above)</span>
+                </Label>
+                <Input
+                  id="nm-bill"
+                  value={billingArrangement}
+                  onChange={(e) => setBillingArrangement(e.target.value)}
+                  placeholder="e.g. Fixed fee ₹50,000 per stage"
+                />
+              </div>
+            </>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between border-t border-border pt-4">
+          <Button
+            variant="ghost"
+            onClick={() => setStep((s) => Math.max(0, s - 1) as MatterFormStep)}
+            disabled={step === 0}
+          >
+            Back
           </Button>
+          {step < 4 ? (
+            <Button
+              onClick={() => setStep((s) => Math.min(4, s + 1) as MatterFormStep)}
+              disabled={step === 0 && !stepComplete(0)}
+            >
+              Next: {STEPS[step + 1].title}
+            </Button>
+          ) : (
+            <Button
+              onClick={handleCreate}
+              disabled={busy || !conflictCleared || !basicComplete}
+            >
+              {busy
+                ? "Opening…"
+                : conflictCleared
+                  ? "Open the matter"
+                  : "Conflict check required"}
+            </Button>
+          )}
         </div>
       </DialogContent>
     </Dialog>
