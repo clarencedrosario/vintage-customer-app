@@ -12,6 +12,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -29,12 +30,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Bell,
+  CheckCheck,
+  Inbox,
   Mail,
   MessageSquare,
   MessagesSquare,
   Plus,
   RefreshCw,
   Send,
+  ShieldAlert,
   ShieldCheck,
 } from "lucide-react";
 import { formatDateTimeIN } from "@/lib/format";
@@ -69,7 +73,7 @@ export default function Comms() {
   const prefs = useQuery(api.comm.myPreferences);
   const notifications = useQuery(api.conversations.notificationFeed) ?? [];
   const matters = useQuery(api.matters.list) ?? [];
-  const [tab, setTab] = useState<"threads" | "notifications" | "whatsapp" | "preferences">("threads");
+  const [tab, setTab] = useState<"threads" | "outbox" | "notifications" | "whatsapp" | "preferences">("threads");
   const [openId, setOpenId] = useState<Id<"conversations"> | null>(null);
   const [newOpen, setNewOpen] = useState(false);
   const [updateOpen, setUpdateOpen] = useState(false);
@@ -84,6 +88,7 @@ export default function Comms() {
       <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)}>
         <TabsList className="mb-4 flex-wrap">
           <TabsTrigger value="threads">Threads</TabsTrigger>
+          <TabsTrigger value="outbox">Client messages</TabsTrigger>
           <TabsTrigger value="notifications">Delivery log</TabsTrigger>
           <TabsTrigger value="whatsapp">WhatsApp</TabsTrigger>
           <TabsTrigger value="preferences">Preferences</TabsTrigger>
@@ -156,6 +161,10 @@ export default function Comms() {
               )}
             </div>
           </div>
+        </TabsContent>
+
+        <TabsContent value="outbox">
+          <OutboxDesk matters={matters} />
         </TabsContent>
 
         <TabsContent value="notifications">
@@ -727,5 +736,594 @@ function PreferencesPanel({
         Save preferences
       </Button>
     </div>
+  );
+}
+
+// =====================================================================
+// FEATURE 6 — Client communication approval: the outbox desk.
+// =====================================================================
+
+type OutboxRow = {
+  _id: Id<"commOutbox">;
+  matterId?: Id<"matters">;
+  matterReference: string | null;
+  category: string;
+  channel: "email" | "whatsapp" | "in_thread";
+  recipientDisplay: string;
+  subject: string;
+  status: string;
+  requiresApproval: boolean;
+  currentVersion: number;
+  approvedVersion?: number;
+  approvedByName?: string;
+  reviewNote?: string;
+  sourceLabel?: string;
+  attempts: number;
+  lastError?: string;
+  createdByName?: string;
+};
+
+const OUTBOX_STATUS_LABELS: Record<string, string> = {
+  draft: "Draft",
+  pending_approval: "Awaiting approval",
+  approved: "Approved — ready to send",
+  rejected: "Rejected",
+  returned: "Returned with comments",
+  queued: "Queued",
+  sent: "Sent",
+  delivered: "Delivered",
+  read: "Read",
+  failed: "Failed",
+  cancelled: "Cancelled",
+  awaiting_configuration: "Awaiting provider configuration",
+};
+
+function OutboxStatusBadge({ status }: { status: string }) {
+  if (status === "failed" || status === "rejected") {
+    return <Badge className="bg-[#7a1f1f] text-white">{OUTBOX_STATUS_LABELS[status]}</Badge>;
+  }
+  if (["awaiting_configuration", "pending_approval", "returned"].includes(status)) {
+    return <Badge className="bg-[#8a6a33] text-white">{OUTBOX_STATUS_LABELS[status]}</Badge>;
+  }
+  if (["sent", "delivered", "read"].includes(status)) {
+    return <Badge className="bg-[#2f4f3a] text-white">{OUTBOX_STATUS_LABELS[status]}</Badge>;
+  }
+  return <Badge variant="outline">{OUTBOX_STATUS_LABELS[status] ?? status}</Badge>;
+}
+
+function OutboxDesk({
+  matters,
+}: {
+  matters: Array<{ _id: Id<"matters">; reference: string; title: string }>;
+}) {
+  const rows = useQuery(api.commOutbox.list) as OutboxRow[] | undefined;
+  const caps = useQuery(api.workspace.myCapabilities);
+  const policy = useQuery(api.commOutbox.categoryPolicy) as
+    | Array<{ category: string; requiresApproval: boolean; overridden: boolean }>
+    | undefined;
+  const canApprove = caps?.capabilities.includes("matter.edit") ?? false;
+  const canCompose = (caps?.capabilities.includes("note.write") ?? false) || canApprove;
+
+  const [composeOpen, setComposeOpen] = useState(false);
+  const [detailId, setDetailId] = useState<Id<"commOutbox"> | null>(null);
+  const detail = useQuery(
+    api.commOutbox.detail,
+    detailId ? { outboxId: detailId } : "skip",
+  );
+
+  const queue = useMutation(api.commOutbox.queue);
+  const attempt = useMutation(api.commOutbox.attemptDelivery);
+  const retry = useMutation(api.commOutbox.retry);
+  const cancel = useMutation(api.commOutbox.cancel);
+  const approve = useMutation(api.commOutbox.approve);
+  const rejectOrReturn = useMutation(api.commOutbox.rejectOrReturn);
+
+  const act = async (fn: () => Promise<unknown>, ok: string) => {
+    try {
+      await fn();
+      toast.success(ok);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "That did not go through.");
+    }
+  };
+
+  const pending = (rows ?? []).filter((r) => r.status === "pending_approval");
+  const rest = (rows ?? []).filter((r) => r.status !== "pending_approval");
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="max-w-xl text-sm ink-faded">
+          Messages prepared for the client. Legal and substantive categories
+          need a lawyer's approval before anything leaves the chamber — the
+          exact approved wording is preserved and later edits require fresh
+          approval.
+        </p>
+        {canCompose && (
+          <Button size="sm" onClick={() => setComposeOpen(true)}>
+            <Plus className="size-4" /> Prepare message
+          </Button>
+        )}
+      </div>
+
+      {pending.length > 0 && (
+        <section>
+          <h2 className="mb-2 font-serif text-lg">
+            Awaiting approval <span className="text-sm ink-faded">({pending.length})</span>
+          </h2>
+          <div className="space-y-2">
+            {pending.map((r) => (
+              <Card key={r._id}>
+                <CardContent className="flex flex-wrap items-start justify-between gap-3 p-4">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <OutboxStatusBadge status={r.status} />
+                      <span className="text-xs uppercase tracking-wide ink-faded">
+                        {r.category.replace(/_/g, " ")} · {r.channel.replace(/_/g, " ")}
+                      </span>
+                    </div>
+                    <p className="mt-1 truncate font-medium">{r.subject}</p>
+                    <p className="text-sm ink-faded">
+                      {r.matterReference ? `${r.matterReference} · ` : ""}v{r.currentVersion} · prepared by {r.createdByName ?? "staff"}
+                      {r.sourceLabel ? ` · from ${r.sourceLabel}` : ""}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 flex-wrap gap-1.5">
+                    <Button size="sm" variant="outline" onClick={() => setDetailId(r._id)}>
+                      Open
+                    </Button>
+                    {canApprove && (
+                      <>
+                        <Button
+                          size="sm"
+                          onClick={() =>
+                            act(() => approve({ outboxId: r._id }), "Approved — ready to queue.")
+                          }
+                        >
+                          <CheckCheck className="mr-1 size-3.5" /> Approve
+                        </Button>
+                        <ReturnDialog row={r} decide={rejectOrReturn} act={act} />
+                      </>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <section>
+        <h2 className="mb-2 font-serif text-lg">All messages</h2>
+        {rows === undefined && <p className="text-sm ink-faded">Loading the outbox…</p>}
+        {rows !== undefined && rows.length === 0 && (
+          <Card className="border-dashed">
+            <CardContent className="py-10 text-center text-sm ink-faded">
+              <Inbox className="mx-auto mb-3 size-8" />
+              No client messages yet. Prepare one with “Prepare message” —
+              approval flows here before delivery.
+            </CardContent>
+          </Card>
+        )}
+        <div className="space-y-2">
+          {rest.map((r) => (
+            <Card key={r._id}>
+              <CardContent className="flex flex-wrap items-start justify-between gap-3 p-4">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <OutboxStatusBadge status={r.status} />
+                    <span className="text-xs uppercase tracking-wide ink-faded">
+                      {r.category.replace(/_/g, " ")} · v{r.currentVersion}
+                    </span>
+                  </div>
+                  <p className="mt-1 truncate font-medium">{r.subject}</p>
+                  <p className="text-sm ink-faded">
+                    {r.matterReference ? `${r.matterReference} · ` : ""}
+                    to {r.recipientDisplay}
+                    {r.lastError ? ` · ${r.lastError}` : ""}
+                  </p>
+                </div>
+                <div className="flex shrink-0 flex-wrap gap-1.5">
+                  <Button size="sm" variant="outline" onClick={() => setDetailId(r._id)}>
+                    Open
+                  </Button>
+                  {r.status === "approved" && (
+                    <Button
+                      size="sm"
+                      onClick={() =>
+                        act(async () => {
+                          await queue({ outboxId: r._id });
+                          await attempt({ outboxId: r._id });
+                        }, "Message dispatched for delivery.")
+                      }
+                    >
+                      <Send className="mr-1 size-3.5" /> Send
+                    </Button>
+                  )}
+                  {(r.status === "failed" || r.status === "awaiting_configuration") && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        act(async () => {
+                          await retry({ outboxId: r._id });
+                          await attempt({ outboxId: r._id });
+                        }, "Retrying delivery.")
+                      }
+                    >
+                      <RefreshCw className="mr-1 size-3.5" /> Retry
+                    </Button>
+                  )}
+                  {["draft", "pending_approval", "approved", "queued"].includes(r.status) && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-destructive"
+                      onClick={() =>
+                        act(() => cancel({ outboxId: r._id }), "Message cancelled.")
+                      }
+                    >
+                      Cancel
+                    </Button>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      </section>
+
+      <OutboxDetailDialog
+        detail={detail}
+        canApprove={canApprove}
+        onClose={() => setDetailId(null)}
+        act={act}
+        approve={approve}
+        rejectOrReturn={rejectOrReturn}
+      />
+      <ComposeDialog
+        open={composeOpen}
+        onClose={() => setComposeOpen(false)}
+        matters={matters}
+        policy={policy}
+      />
+    </div>
+  );
+}
+
+function ReturnDialog({
+  row,
+  decide,
+  act,
+}: {
+  row: OutboxRow;
+  decide: ReturnType<typeof useMutation<typeof api.commOutbox.rejectOrReturn>>;
+  act: (fn: () => Promise<unknown>, ok: string) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [note, setNote] = useState("");
+  const [decision, setDecision] = useState<"rejected" | "returned">("returned");
+  return (
+    <>
+      <Button
+        size="sm"
+        variant="ghost"
+        className="text-destructive"
+        onClick={() => setOpen(true)}
+      >
+        <ShieldAlert className="mr-1 size-3.5" /> Review
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="font-serif">Review decision</DialogTitle>
+            <DialogDescription>
+              Return sends it back to the author with your comments; reject
+              closes it. Both are kept in the record.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Select
+              value={decision}
+              onValueChange={(v) => setDecision(v as "rejected" | "returned")}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="returned">Return with comments</SelectItem>
+                <SelectItem value="rejected">Reject</SelectItem>
+              </SelectContent>
+            </Select>
+            <Textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Required — what should change, or why this is refused."
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              disabled={!note.trim()}
+              onClick={() =>
+                act(async () => {
+                  await decide({ outboxId: row._id, decision, note: note.trim() });
+                  setNote("");
+                  setOpen(false);
+                }, decision === "rejected" ? "Message rejected." : "Message returned with comments.")
+              }
+            >
+              Confirm
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+function OutboxDetailDialog({
+  detail,
+  canApprove,
+  onClose,
+  act,
+  approve,
+  rejectOrReturn,
+}: {
+  detail:
+    | {
+        row: {
+          _id: Id<"commOutbox">;
+          category: string;
+          status: string;
+          subject: string;
+          currentVersion: number;
+          approvedByName?: string;
+          reviewNote?: string;
+        };
+        versions: Array<{
+          version: number;
+          subject: string;
+          body: string;
+          status: string;
+          authorName?: string;
+          reviewNote?: string;
+        }>;
+      }
+    | null
+    | undefined;
+  canApprove: boolean;
+  onClose: () => void;
+  act: (fn: () => Promise<unknown>, ok: string) => Promise<void>;
+  approve: ReturnType<typeof useMutation<typeof api.commOutbox.approve>>;
+  rejectOrReturn: ReturnType<typeof useMutation<typeof api.commOutbox.rejectOrReturn>>;
+}) {
+  return (
+    <Dialog open={!!detail} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
+        {detail && (
+          <>
+            <DialogHeader>
+              <DialogTitle className="font-serif">{detail.row.subject}</DialogTitle>
+              <DialogDescription>
+                {detail.row.category.replace(/_/g, " ")} ·{" "}
+                {OUTBOX_STATUS_LABELS[detail.row.status] ?? detail.row.status} · v
+                {detail.row.currentVersion}
+                {detail.row.approvedByName
+                  ? ` · approved by ${detail.row.approvedByName}`
+                  : ""}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3">
+              {detail.row.reviewNote && (
+                <p className="rounded border border-border bg-background p-2.5 text-sm">
+                  Reviewer note: {detail.row.reviewNote}
+                </p>
+              )}
+              <pre className="whitespace-pre-wrap rounded border border-border bg-background p-3 font-serif text-sm">
+                {detail.versions[0]?.body ?? ""}
+              </pre>
+              <details>
+                <summary className="cursor-pointer text-sm ink-faded">
+                  Version history ({detail.versions.length})
+                </summary>
+                <ul className="mt-2 space-y-2 text-xs ink-faded">
+                  {detail.versions.map((v) => (
+                    <li key={v.version} className="rounded border border-border p-2">
+                      <span className="font-medium">v{v.version}</span> — {v.status}
+                      {v.authorName ? ` · by ${v.authorName}` : ""}
+                      {v.reviewNote ? ` · “${v.reviewNote}”` : ""}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            </div>
+            <DialogFooter>
+              {detail.row.status === "pending_approval" && canApprove && (
+                <>
+                  <Button
+                    onClick={() =>
+                      act(() => approve({ outboxId: detail.row._id }), "Approved.")
+                    }
+                  >
+                    Approve v{detail.row.currentVersion}
+                  </Button>
+                  <ReturnDialog
+                    row={detail.row as unknown as OutboxRow}
+                    decide={rejectOrReturn}
+                    act={act}
+                  />
+                </>
+              )}
+            </DialogFooter>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ComposeDialog({
+  open,
+  onClose,
+  matters,
+  policy,
+}: {
+  open: boolean;
+  onClose: () => void;
+  matters: Array<{ _id: Id<"matters">; reference: string; title: string }>;
+  policy:
+    | Array<{ category: string; requiresApproval: boolean; overridden: boolean }>
+    | undefined;
+}) {
+  const compose = useMutation(api.commOutbox.compose);
+  const [matterId, setMatterId] = useState("");
+  const [category, setCategory] = useState("matter_update");
+  const [channel, setChannel] = useState<"email" | "whatsapp" | "in_thread">("in_thread");
+  const [recipient, setRecipient] = useState("");
+  const [subject, setSubject] = useState("");
+  const [body, setBody] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const catPolicy = policy?.find((p) => p.category === category);
+  const needsApproval = catPolicy?.requiresApproval ?? false;
+
+  return (
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="font-serif">Prepare a client message</DialogTitle>
+          <DialogDescription>
+            {needsApproval
+              ? "This category needs a lawyer's approval before delivery."
+              : "This category can be sent without lawyer approval."}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label htmlFor="ob-matter">Matter (optional)</Label>
+              <Select value={matterId} onValueChange={setMatterId}>
+                <SelectTrigger id="ob-matter">
+                  <SelectValue placeholder="None" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No linked matter</SelectItem>
+                  {matters.map((m) => (
+                    <SelectItem key={m._id} value={m._id}>
+                      {m.reference} — {m.title}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label htmlFor="ob-category">Category</Label>
+              <Select value={category} onValueChange={setCategory}>
+                <SelectTrigger id="ob-category">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {[
+                    ["hearing_update", "Hearing update"],
+                    ["deadline_reminder", "Deadline reminder"],
+                    ["document_request", "Document request"],
+                    ["matter_update", "Matter update"],
+                    ["appointment", "Appointment"],
+                    ["billing_notice", "Billing notice"],
+                    ["secure_message", "Secure message"],
+                  ].map(([v, l]) => (
+                    <SelectItem key={v} value={v}>
+                      {l}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label htmlFor="ob-channel">Channel</Label>
+              <Select
+                value={channel}
+                onValueChange={(v) => setChannel(v as typeof channel)}
+              >
+                <SelectTrigger id="ob-channel">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="in_thread">Client thread</SelectItem>
+                  <SelectItem value="email">Email</SelectItem>
+                  <SelectItem value="whatsapp">WhatsApp</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {channel !== "in_thread" && (
+              <div>
+                <Label htmlFor="ob-recipient">Recipient</Label>
+                <Input
+                  id="ob-recipient"
+                  value={recipient}
+                  onChange={(e) => setRecipient(e.target.value)}
+                  placeholder={channel === "email" ? "client@example.com" : "+91…"}
+                />
+              </div>
+            )}
+          </div>
+          <div>
+            <Label htmlFor="ob-subject">Subject</Label>
+            <Input
+              id="ob-subject"
+              value={subject}
+              onChange={(e) => setSubject(e.target.value)}
+            />
+          </div>
+          <div>
+            <Label htmlFor="ob-body">Message</Label>
+            <Textarea
+              id="ob-body"
+              rows={6}
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button
+            disabled={busy || !subject.trim() || !body.trim()}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                await compose({
+                  matterId:
+                    matterId && matterId !== "none"
+                      ? (matterId as Id<"matters">)
+                      : undefined,
+                  category,
+                  channel,
+                  recipient: recipient || undefined,
+                  subject: subject.trim(),
+                  body: body.trim(),
+                });
+                toast.success(
+                  needsApproval
+                    ? "Prepared — sent to the approval queue."
+                    : "Prepared and approved for sending.",
+                );
+                setSubject("");
+                setBody("");
+                setRecipient("");
+                onClose();
+              } catch (e) {
+                toast.error(
+                  e instanceof Error ? e.message : "Could not prepare the message.",
+                );
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            Prepare
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

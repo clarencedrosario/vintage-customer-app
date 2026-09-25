@@ -1,5 +1,6 @@
 // =====================================================================
-// FEATURE 5 — Deadline rules engine: table definitions.
+// Feature 5 — Deadline rules engine: table definitions.
+// Feature 6 — Client communication approval: table definitions.
 //
 // Kept in a dedicated module that schema.ts spreads into the main
 // schema (extend, never duplicate). All rows are org-scoped.
@@ -120,4 +121,119 @@ export const featureFiveTables = {
     .index("by_matter", ["matterId"])
     .index("by_org_status", ["orgId", "status"])
     .index("by_dedupe", ["dedupeKey"]),
+};
+
+// =====================================================================
+// FEATURE 6 — Client communication approval (the outbox)
+// =====================================================================
+
+export const COMM_CATEGORIES = [
+  "hearing_update",
+  "deadline_reminder",
+  "document_request",
+  "matter_update",
+  "appointment",
+  "billing_notice",
+  "secure_message",
+] as const;
+
+export const featureSixTables = {
+  // Per-org approval policy per category. Rows are created lazily when
+  // a firm overrides the default; absent rows use the pure defaults in
+  // src/lib/commOutboxFlow.ts.
+  commCategoryConfig: defineTable({
+    orgId: v.id("organizations"),
+    category: v.union(...COMM_CATEGORIES.map((c) => v.literal(c))),
+    requiresApproval: v.boolean(),
+    updatedById: v.id("users"),
+    updatedAt: v.number(),
+  })
+    .index("by_org_category", ["orgId", "category"])
+    .index("by_org", ["orgId"]),
+
+  // One row per outbound client communication. Approval attaches to an
+  // EXACT version; later edits create a new version and reset approval.
+  // Delivery states mirror the provider log; retries never duplicate a
+  // live send (guarded on status).
+  commOutbox: defineTable({
+    orgId: v.id("organizations"),
+    matterId: v.optional(v.id("matters")),
+    clientId: v.optional(v.id("clients")),
+    category: v.union(...COMM_CATEGORIES.map((c) => v.literal(c))),
+    channel: v.union(
+      v.literal("email"),
+      v.literal("whatsapp"),
+      v.literal("in_thread"),
+    ),
+    recipientUserId: v.optional(v.id("users")),
+    recipient: v.optional(v.string()), // email address / phone
+    subject: v.string(),
+    // Roll-up status of the CURRENT version + delivery pipeline.
+    status: v.union(
+      v.literal("draft"),
+      v.literal("pending_approval"),
+      v.literal("approved"),
+      v.literal("rejected"),
+      v.literal("returned"),
+      v.literal("queued"),
+      v.literal("sent"),
+      v.literal("delivered"),
+      v.literal("read"),
+      v.literal("failed"),
+      v.literal("cancelled"),
+      v.literal("awaiting_configuration"),
+    ),
+    requiresApproval: v.boolean(), // frozen from policy at creation
+    currentVersion: v.number(),
+    approvedVersion: v.optional(v.number()),
+    approvedAt: v.optional(v.number()),
+    approvedById: v.optional(v.id("users")),
+    approvedByName: v.optional(v.string()),
+    reviewNote: v.optional(v.string()), // rejection/return comments
+    // Source record provenance.
+    sourceKind: v.optional(v.string()), // "hearing" | "order" | "deadline" | …
+    sourceId: v.optional(v.string()),
+    sourceLabel: v.optional(v.string()),
+    // Delivery bookkeeping.
+    providerMessageId: v.optional(v.string()),
+    attempts: v.number(),
+    lastError: v.optional(v.string()),
+    sentAt: v.optional(v.number()),
+    deliveredAt: v.optional(v.number()),
+    readAt: v.optional(v.number()),
+    conversationId: v.optional(v.id("conversations")),
+    createdById: v.id("users"),
+    createdByName: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_matter", ["matterId"])
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_provider_msg", ["providerMessageId"]),
+
+  // Immutable version rows — the exact approved text is preserved even
+  // when later edits create new versions.
+  commOutboxVersions: defineTable({
+    outboxId: v.id("commOutbox"),
+    version: v.number(),
+    subject: v.string(),
+    body: v.string(),
+    status: v.union(
+      v.literal("drafted"),
+      v.literal("pending_approval"),
+      v.literal("approved"),
+      v.literal("rejected"),
+      v.literal("returned"),
+    ),
+    authorId: v.id("users"),
+    authorName: v.optional(v.string()),
+    reviewerId: v.optional(v.id("users")),
+    reviewedAt: v.optional(v.number()),
+    reviewNote: v.optional(v.string()),
+    approvedAt: v.optional(v.number()),
+    approvedById: v.optional(v.id("users")),
+    revisesVersion: v.optional(v.number()),
+    createdAt: v.number(),
+  }).index("by_outbox", ["outboxId"]),
 };

@@ -2,7 +2,7 @@ import { defineSchema, defineTable } from "convex/server";
 import { authTables } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { DEADLINE_CATEGORIES } from "./constants";
-import { featureFiveTables } from "./schemaExtras";
+import { featureFiveTables, featureSixTables } from "./schemaExtras";
 
 // ---------------------------------------------------------------------
 // Shared constants (imported across the backend)
@@ -108,6 +108,7 @@ export function portalForRole(
 export default defineSchema({
   ...authTables,
   ...featureFiveTables,
+  ...featureSixTables,
 
   users: defineTable({
     name: v.optional(v.string()),
