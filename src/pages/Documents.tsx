@@ -37,7 +37,7 @@ import {
   X,
 } from "lucide-react";
 import { Link } from "react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { VAULT_FOLDERS } from "@/convex/schemaExtras";
 
@@ -97,6 +97,10 @@ export default function Documents() {
   const [clsTags, setClsTags] = useState("");
   const [clsNote, setClsNote] = useState("");
   const [renameFor, setRenameFor] = useState<LibDoc | null>(null);
+  const [uploadVersionFor, setUploadVersionFor] = useState<string | null>(null);
+  const [uploadVersionName, setUploadVersionName] = useState("");
+  const [uploadVersionBusy, setUploadVersionBusy] = useState(false);
+  const versionFileRef = useRef<HTMLInputElement | null>(null);
   const [renameValue, setRenameValue] = useState("");
 
   const lib = useQuery(api.documents.library, {
@@ -117,12 +121,12 @@ export default function Documents() {
   const fullText = useQuery(
     api.vault.search,
     mode === "fulltext" && search.trim() ? { q: search } : "skip",
-  ) as { results: SearchHit[]; terms: string[] } | null | undefined;
+  ) as { results: SearchHit[]; terms: string[] } | undefined;
 
   const versions = useQuery(
     api.vault.versions,
     versionsFor ? { documentId: versionsFor as Id<"matterDocuments"> } : "skip",
-  ) as VersionRow[] | null | undefined;
+  ) as VersionRow[] | undefined;
 
   const openUrl = useQuery(
     api.documents.getFileUrl,
@@ -135,6 +139,8 @@ export default function Documents() {
   const archiveFn = useMutation(api.vault.setArchived);
   const removeFn = useMutation(api.vault.remove);
   const restoreVersionFn = useMutation(api.vault.restoreVersion);
+  const addVersionFn = useMutation(api.vault.addVersion);
+  const uploadVersionUrlFn = useMutation(api.matters.generateDocumentUploadUrl);
 
   useEffect(() => {
     if (openId === null) return;
@@ -162,6 +168,35 @@ export default function Documents() {
 
   const vaultLib = vaultData ?? null;
   const rows = mode === "name" ? (vaultLib?.documents ?? []) : [];
+  const versionsForDoc = versionsFor
+    ? (byId.get(versionsFor) ?? rows.find((r) => r._id === versionsFor) ?? null)
+    : null;
+
+  const uploadNewVersion = async (doc: LibDoc, file: File) => {
+    setUploadVersionBusy(true);
+    try {
+      const url = await uploadVersionUrlFn({ matterId: doc.matterId as Id<"matters"> });
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": file.type || "application/octet-stream" },
+        body: file,
+      });
+      const { storageId } = (await res.json()) as { storageId: Id<"_storage"> };
+      await addVersionFn({
+        documentId: doc._id as Id<"matterDocuments">,
+        storageId,
+        name: uploadVersionName.trim() || doc.name,
+        sizeBytes: file.size,
+      });
+      toast.success("Version uploaded — the live file now points to the new version.");
+      setUploadVersionFor(null);
+      setUploadVersionName("");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Version upload failed.");
+    } finally {
+      setUploadVersionBusy(false);
+    }
+  };
   const activeSearch = mode === "fulltext" ? fullText : undefined;
 
   return (
@@ -579,12 +614,39 @@ export default function Documents() {
                 switches the live file — nothing is destroyed.
               </DialogDescription>
             </DialogHeader>
+            {versionsForDoc && (
+              <div className="mb-3 space-y-2 rounded border border-border bg-muted/30 p-3">
+                <p className="type-label ink-faded">Add a new version</p>
+                <Input
+                  value={uploadVersionName}
+                  onChange={(e) => setUploadVersionName(e.target.value)}
+                  placeholder={`File name (defaults to "${versionsForDoc.name}")`}
+                />
+                <input
+                  ref={versionFileRef}
+                  type="file"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f && versionsForDoc) void uploadNewVersion(versionsForDoc, f);
+                    e.target.value = "";
+                  }}
+                />
+                <Button
+                  size="sm"
+                  disabled={uploadVersionBusy}
+                  onClick={() => versionFileRef.current?.click()}
+                >
+                  {uploadVersionBusy ? "Uploading…" : "Choose file & upload"}
+                </Button>
+              </div>
+            )}
             {versions === undefined ? (
               <p className="text-sm text-muted-foreground">Retrieving…</p>
             ) : versions.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                Only the original upload exists so far. Upload a new version
-                from the matter's Documents tab.
+                Only the original upload exists so far. Add the first version
+                with the panel above.
               </p>
             ) : (
               <ul className="space-y-2">

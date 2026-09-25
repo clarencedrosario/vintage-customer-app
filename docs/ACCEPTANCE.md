@@ -437,6 +437,24 @@ org-scoping, role/team/document rules and the write gate — without a live
 database. It does not execute live authentication or a real two-tenant
 network round-trip; that remains under item 8 below.
 
+## Feature 10 — Document Vault & Billing / Time (this run, 25 Sep 2026)
+
+**Document Vault (`/vault`, "Document Vault" nav entry):**
+- The 10-folder structure exactly as specified (01 Pleadings … 10 Miscellaneous), backed by `vaultMeta` (folder, tags, classification) keyed to each matter document; an "Unclassified" rail entry surfaces records not yet filed.
+- Lifecycle actions: open (signed, access-checked URL), rename, move (refile between folders), tag, classify, archive/restore, delete (with confirm). Every mutation is capability-gated (`document.upload`) and audit-logged.
+- Version control: `vaultVersions` keeps immutable per-version rows; the first new version seeds v1 from the live file; Restore switches the live pointer without destroying history; new versions upload directly from the Vault page (signed upload URL → `vault.addVersion`).
+- Global search: filename mode and a full-text mode over extracted document text (`aiSources.pages`). Natural-language handling drops stopwords but keeps ₹/percent tokens, so "Find all documents mentioning the payment of ₹25 lakh" matches the ₹25 lakh token; results are ranked with page-anchored snippets and never cross matter access boundaries.
+- Document comparison (A/B pick) and AI analysis stay in the matter AI studio ("Ask this document" pins the extracted source); AI answers carry source/page references and the professional-review disclosure.
+
+**Billing & Time:**
+- Timer-based and manual time entries (Start/Stop fills the minutes; or type them) and billable/non-billable classification on both time and expenses.
+- Expenses now carry the specified categories (court fee, filing, travel, printing, courier, misc) and a receipt attachment (file → Convex storage → `receiptStorageId`) plus a billable flag.
+- Hourly rates, fixed fees/retainers, GST (existing invoice taxModel CGST/SGST/IGST), payment tracking, and outstanding/overdue balances ride on the existing billing engine — `billable` now also returns started/ended times, category and receipt fields.
+
+**Automated verification this run:** `tsc -b --noEmit` 0 errors · 271/271 tests · `bun convex dev --once` push of `vaultTables` (vaultMeta, vaultVersions) and the extended timeEntries/expenses fields · production build passes.
+
+**Not verified (honest):** no browser click-through of the Vault page or the new Billing forms (no browser-driver tooling); full-text search only covers documents whose text was extracted (text layer or OCR via the AI Sources tab) — unextracted scans are invisible to it; version/receipt uploads were not exercised with real files; no live AI call (still no OPENAI_API_KEY here); search is keyword-based with currency awareness — vector/semantic similarity is **not** claimed.
+
 ## What is verified live vs. not — the honest list
 
 **Verified in this environment (tooling permitted):**

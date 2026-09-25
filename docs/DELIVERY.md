@@ -85,6 +85,12 @@ the pack builder can be reopened with that next hearing already selected.
 | Source repository handover | Platform-managed VCS; export/ownership transfer happens at publishing time |
 | Demo/synthetic account removal | None shipped; verify none exist before public deploy |
 
+## Document Vault & Billing (added 25 Sep 2026)
+
+- **Document Vault** (`/vault`): the specified 10-folder structure, rename/move/tag/classify/archive/delete, version control with restore and direct version uploads, filename + natural-language full-text search over extracted document text (₹/percent aware, page-anchored snippets, matter-boundary safe). Search and AI analysis read only extracted text (`aiSources`) — scans need OCR first.
+- **Billing & Time**: timer and manual time entries, billable/non-billable on time and expenses, expense categories (court fee / filing / travel / printing / courier / misc), receipt attachments, and the existing rates / fixed-fee / retainer / GST / payment-tracking engine now surfacing the new fields.
+- Verified: `tsc -b --noEmit` clean, 271/271 tests, `bun convex dev --once` push (new `vaultMeta`/`vaultVersions` tables + extended `timeEntries`/`expenses` fields), production build. Not verified live: browser click-through of the Vault and new billing forms, real-file version/receipt uploads, OCR on scans, live AI calls (no OPENAI_API_KEY in this environment).
+
 ## Milestone status (section 31 list)
 
 1. **Source reconciliation, opening screen, account lifecycle** — done (landing, login/OTP, portals, invitations). Verified 24 Sep 2026: invitation lifecycle logic extracted to `src/lib/invitationFlow.ts` (pure, 13 unit tests: status register, SHA-256 salted token hashing, blocker precedence, invited-email match, seat gating) and one defect fixed — accepting a client invitation no longer overwrites an existing user's legacy `role` (which mis-routed firm members' fallback portal).
