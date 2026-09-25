@@ -50,6 +50,12 @@ export const WHATSAPP_TEMPLATES: Record<
     params: ["clientName", "matterRef", "updateText"],
     languageCode: "en",
   },
+  appointment_reminder: {
+    label: "Appointment reminder",
+    category: "hearing",
+    params: ["clientName", "matterRef", "appointmentDate", "place"],
+    languageCode: "en",
+  },
 };
 
 // ---------------------------------------------------------------------
@@ -200,6 +206,47 @@ export const sendHearingReminder = mutation({
       templateName: "hearing_reminder",
       languageCode: WHATSAPP_TEMPLATES.hearing_reminder.languageCode,
       params: [client.name, matter.reference, when, matter.court ?? "the court"],
+    });
+    return { ok: true as const };
+  },
+});
+
+/**
+ * Send a WhatsApp appointment reminder (consultations and chamber visits
+ * use the same hearings table; this surfaces them to the client with a
+ * friendlier framing than the hearing reminder).
+ */
+export const sendAppointmentReminder = mutation({
+  args: { hearingId: v.id("hearings") },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    if (!can(ac, "hearing.manage") && !can(ac, "team.manage")) {
+      throw new Error("Your role is not permitted to send reminders.");
+    }
+    const hearing = await ctx.db.get(args.hearingId);
+    if (!hearing) throw new Error("Appointment not found.");
+    const matter = await requireMatter(ctx, ac, hearing.matterId);
+    const client = await ctx.db.get(matter.clientId);
+    if (!client?.userId) {
+      throw new Error(
+        "This client has no portal identity — invite them from the client file first.",
+      );
+    }
+    const target = await userWhatsappTarget(ctx, ac.org._id, client.userId, "hearing");
+    if (!target) throw new Error("The client has not opted in to WhatsApp reminders.");
+
+    const when = new Date(hearing.at).toLocaleString("en-IN", {
+      timeZone: ac.org.timezone || "Asia/Kolkata",
+    });
+    const place = hearing.court ?? hearing.purpose ?? "the chamber";
+    await ctx.scheduler.runAfter(0, api.notify.sendWhatsappTemplate, {
+      orgId: ac.org._id,
+      to: target.to,
+      recipientUserId: client.userId,
+      category: "hearing_reminder",
+      templateName: "appointment_reminder",
+      languageCode: WHATSAPP_TEMPLATES.appointment_reminder.languageCode,
+      params: [client.name, matter.reference, when, place],
     });
     return { ok: true as const };
   },

@@ -25,6 +25,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { formatDateIN, formatINR, formatINRCompact, todayIN } from "@/lib/format";
 import {
   buildInvoicePdf,
+  inr,
   invoiceFileName,
   type InvoicePdfData,
 } from "@/lib/invoicePdf";
@@ -37,7 +38,10 @@ import {
   Download,
   ExternalLink,
   Inbox,
+  Mail,
+  MessageCircle,
   Plus,
+  Printer,
   Receipt,
   Send,
   UserPlus,
@@ -425,10 +429,14 @@ function InvoiceDetailDialog({
         phone?: string;
         email?: string;
         gstin?: string;
+        pan?: string;
+        bankDetails?: string;
+        upiId?: string;
         website?: string;
       }
     | null
     | undefined;
+  const logoUrl = useQuery(api.orgs.logoUrl);
 
   const updateDraft = useMutation(api.billing.updateDraft);
   const send = useMutation(api.billing.send);
@@ -500,7 +508,25 @@ function InvoiceDetailDialog({
     }
   };
 
-  const downloadPdf = (kind: "invoice" | "receipt") => {
+  /** Convert the firm logo to a data URL for the PDF; null on failure. */
+  const logoDataUrl = async (): Promise<string | null> => {
+    if (!logoUrl) return null;
+    try {
+      const res = await fetch(logoUrl);
+      const blob = await res.blob();
+      if (!blob.type.startsWith("image/")) return null;
+      return await new Promise<string | null>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : null);
+        reader.onerror = () => resolve(null);
+        reader.readAsDataURL(blob);
+      });
+    } catch {
+      return null;
+    }
+  };
+
+  const downloadPdf = async (kind: "invoice" | "receipt") => {
     if (!d || !org) return;
     const data: InvoicePdfData = {
       kind,
@@ -519,10 +545,10 @@ function InvoiceDetailDialog({
         phone: org.phone ?? null,
         email: org.email ?? null,
         gstin: org.gstin ?? null,
-        bankDetails: org.website
-          ? `See ${org.website} for our bank details`
-          : null,
-        upiId: null,
+        pan: org.pan ?? null,
+        bankDetails: org.bankDetails ?? null,
+        upiId: org.upiId ?? null,
+        logoDataUrl: await logoDataUrl(),
       },
       clientName: d.client?.name ?? "Client",
       clientAddress: [
@@ -555,6 +581,113 @@ function InvoiceDetailDialog({
     };
     const doc = buildInvoicePdf(data);
     doc.save(invoiceFileName(data));
+  };
+
+  /** Open the generated PDF in a new tab for printing. */
+  const printPdf = async () => {
+    if (!d || !org) return;
+    const data = await invoiceDataForPdf("invoice");
+    const doc = buildInvoicePdf(data);
+    doc.autoPrint();
+    const url = doc.output("bloburl");
+    window.open(url, "_blank");
+  };
+
+  /** Shared data builder for download/print/share paths. */
+  const invoiceDataForPdf = async (
+    kind: "invoice" | "receipt",
+  ): Promise<InvoicePdfData> => {
+    if (!d || !org) throw new Error("Invoice not loaded.");
+    return {
+      kind,
+      number: d.number,
+      issuedOn: d.issuedOn,
+      dueOn: d.dueOn ?? null,
+      status: d.status,
+      arrangement: d.arrangement ?? null,
+      org: {
+        name: org.name,
+        addressLine1: org.addressLine1 ?? null,
+        addressLine2: org.addressLine2 ?? null,
+        city: org.city ?? null,
+        state: org.state ?? null,
+        pincode: org.pincode ?? null,
+        phone: org.phone ?? null,
+        email: org.email ?? null,
+        gstin: org.gstin ?? null,
+        pan: org.pan ?? null,
+        bankDetails: org.bankDetails ?? null,
+        upiId: org.upiId ?? null,
+        logoDataUrl: await logoDataUrl(),
+      },
+      clientName: d.client?.name ?? "Client",
+      clientAddress: [
+        d.client?.addressLine1,
+        [d.client?.city, d.client?.state, d.client?.pincode].filter(Boolean).join(" "),
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      clientGstin: d.client?.gstin ?? null,
+      matterReference: d.matter?.reference ?? null,
+      matterTitle: d.matter?.title ?? null,
+      lines: d.lines ?? [],
+      subtotalMinor: d.subtotalMinor,
+      discountAmountMinor: d.discountAmountMinor,
+      taxModel: d.taxModel,
+      taxRateBps: d.taxRateBps,
+      cgstMinor: d.cgstMinor,
+      sgstMinor: d.sgstMinor,
+      igstMinor: d.igstMinor,
+      totalMinor: d.totalMinor,
+      amountPaidMinor: d.amountPaidMinor,
+      balanceMinor: d.balanceMinor,
+      notes: d.notes ?? null,
+      payments: d.payments.map((p) => ({
+        receivedOn: p.receivedOn,
+        amountMinor: p.amountMinor,
+        mode: p.mode,
+        reference: p.reference ?? null,
+      })),
+    };
+  };
+
+  /** Email the invoice: opens the mail client with a summary + attachment hint. */
+  const emailInvoice = async () => {
+    if (!d) return;
+    try {
+      const data = await invoiceDataForPdf("invoice");
+      const subject = `Invoice ${data.number} — ${data.org.name}`;
+      const body = [
+        `Dear ${data.clientName},`,
+        ``,
+        `Please find invoice ${data.number} dated ${data.issuedOn} for ${inr(data.totalMinor)}${data.dueOn ? `, due ${data.dueOn}` : ""}.`,
+        `The PDF is attached (generated from the chamber's records).`,
+        ``,
+        data.org.bankDetails ? `Payment details: ${data.org.bankDetails}` : ``,
+        data.org.upiId ? `UPI: ${data.org.upiId}` : ``,
+        ``,
+        `Kind regards,`,
+        data.org.name,
+      ]
+        .filter(Boolean)
+        .join("\n");
+      window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+      // Also save the PDF so it can be attached from the downloads folder.
+      buildInvoicePdf(data).save(invoiceFileName(data));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not prepare the email.");
+    }
+  };
+
+  /** WhatsApp the invoice summary using the wa.me deep link. */
+  const whatsappInvoice = () => {
+    if (!d || !org) return;
+    const total = formatINR(d.totalMinor / 100);
+    const message = `Invoice ${d.number} from ${org.name}: ${total}${d.dueOn ? `, due ${d.dueOn}` : ""}. The PDF follows from our records.${org.upiId ? ` UPI: ${org.upiId}` : ""}`;
+    window.open(
+      `https://wa.me/?text=${encodeURIComponent(message)}`,
+      "_blank",
+    );
   };
 
   const run = (fn: () => Promise<unknown>, ok: string) => {
@@ -907,11 +1040,24 @@ function InvoiceDetailDialog({
               {!isDraft && (
                 <>
                   <RecordPaymentButton invoiceId={d._id} balanceMinor={d.balanceMinor} />
-                  <Button variant="outline" size="sm" onClick={() => downloadPdf("invoice")}>
+                  <Button variant="outline" size="sm" onClick={() => void downloadPdf("invoice")}>
                     <Download className="mr-1.5 size-3.5" /> Invoice PDF
                   </Button>
+                  <Button variant="outline" size="sm" onClick={() => void printPdf()}>
+                    <Printer className="mr-1.5 size-3.5" /> Print
+                  </Button>
+                  {d.status !== "draft" && (
+                    <Button variant="outline" size="sm" onClick={() => void emailInvoice()}>
+                      <Mail className="mr-1.5 size-3.5" /> Email
+                    </Button>
+                  )}
+                  {d.status !== "draft" && (
+                    <Button variant="outline" size="sm" onClick={whatsappInvoice}>
+                      <MessageCircle className="mr-1.5 size-3.5" /> WhatsApp
+                    </Button>
+                  )}
                   {d.amountPaidMinor > 0 && (
-                    <Button variant="outline" size="sm" onClick={() => downloadPdf("receipt")}>
+                    <Button variant="outline" size="sm" onClick={() => void downloadPdf("receipt")}>
                       <Receipt className="mr-1.5 size-3.5" /> Receipt PDF
                     </Button>
                   )}

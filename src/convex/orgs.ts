@@ -159,6 +159,9 @@ export const profile = query({
       state: ac.org.state,
       pincode: ac.org.pincode,
       gstin: ac.org.gstin,
+      pan: ac.org.pan ?? null,
+      bankDetails: ac.org.bankDetails ?? null,
+      upiId: ac.org.upiId ?? null,
       phone: ac.org.phone,
       email: ac.org.email,
       website: ac.org.website,
@@ -191,6 +194,9 @@ export const updateOrg = mutation({
     state: v.optional(v.string()),
     pincode: v.optional(v.string()),
     gstin: v.optional(v.string()),
+    pan: v.optional(v.string()),
+    bankDetails: v.optional(v.string()),
+    upiId: v.optional(v.string()),
     phone: v.optional(v.string()),
     email: v.optional(v.string()),
     website: v.optional(v.string()),
@@ -217,11 +223,20 @@ export const updateOrg = mutation({
     ) {
       throw new Error("That GSTIN does not look valid.");
     }
+    if (
+      args.pan &&
+      !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(args.pan.trim().toUpperCase())
+    ) {
+      throw new Error("That PAN does not look valid (AAAAA9999A).");
+    }
     const { name, ...rest } = args;
     const patch: Record<string, unknown> = {};
     if (name !== undefined && name.trim().length >= 2) patch.name = name.trim();
     if (rest.gstin !== undefined) {
       patch.gstin = rest.gstin.trim().toUpperCase() || undefined;
+    }
+    if (rest.pan !== undefined) {
+      patch.pan = rest.pan.trim().toUpperCase() || undefined;
     }
     for (const [k, val] of Object.entries(rest)) {
       if (val !== undefined) patch[k] = val;

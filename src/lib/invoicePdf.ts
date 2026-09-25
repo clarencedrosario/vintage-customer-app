@@ -19,9 +19,12 @@ export type InvoicePdfOrg = {
   phone?: string | null;
   email?: string | null;
   gstin?: string | null;
+  pan?: string | null;
   // Payment instructions shown on the invoice.
   bankDetails?: string | null;
   upiId?: string | null;
+  // Optional firm logo (data URL, drawn top-right of the header band).
+  logoDataUrl?: string | null;
 };
 
 export type InvoicePdfData = {
@@ -120,6 +123,24 @@ export function buildInvoicePdf(data: InvoicePdfData): jsPDF {
   // ---------------- Header band ----------------
   doc.setFillColor(...NAVY);
   doc.rect(0, 0, PAGE_W, 34, "F");
+  // Firm logo (drawn after the band so it sits on top, right-aligned).
+  if (data.org.logoDataUrl) {
+    try {
+      const fmt = data.org.logoDataUrl.includes("image/png") ? "PNG" : "JPEG";
+      doc.addImage(
+        data.org.logoDataUrl,
+        fmt,
+        PAGE_W - MARGIN - 20,
+        7,
+        20,
+        20,
+        undefined,
+        "FAST",
+      );
+    } catch {
+      /* an unreadable logo must never break invoice generation */
+    }
+  }
   doc.setFont("helvetica", "bold");
   doc.setFontSize(15);
   doc.setTextColor(255, 255, 255);
@@ -211,6 +232,13 @@ export function buildInvoicePdf(data: InvoicePdfData): jsPDF {
     doc.text("FIRM GSTIN", MARGIN, y);
     setBody();
     doc.text(safe(data.org.gstin, 20), MARGIN + 34, y);
+    y += 5;
+  }
+  if (data.org.pan) {
+    setLabel();
+    doc.text("FIRM PAN", MARGIN, y);
+    setBody();
+    doc.text(safe(data.org.pan, 12), MARGIN + 34, y);
     y += 5;
   }
 

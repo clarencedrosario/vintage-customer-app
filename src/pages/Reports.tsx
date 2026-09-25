@@ -119,6 +119,14 @@ const BADGE_COLS = new Set(["Status", "Type", "Priority", "Overdue"]);
 
 export default function Reports() {
   const data = useQuery(api.reports.get) as ReportsData | null | undefined;
+  const caps = useQuery(api.workspace.myCapabilities);
+  const canAudit = caps?.capabilities.includes("audit.view") ?? false;
+  const audit = useQuery(
+    api.workspace.auditTrail,
+    canAudit ? { limit: 200 } : "skip",
+  ) as
+    | { _id: string; at: number; actorName: string; action: string; detail: string | null }[]
+    | undefined;
 
   if (data === undefined) {
     return (
@@ -390,6 +398,65 @@ export default function Reports() {
             </Card>
           );
         })}
+
+        {/* Organization-wide audit trail (audit.view capability) */}
+        {canAudit && (
+          <Card>
+            <CardContent className="py-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="flex items-center gap-2 font-serif text-base font-semibold">
+                  <ScrollText className="size-4 text-[#B68A45]" aria-hidden="true" />
+                  Audit trail
+                  <span className="type-label ink-faded">
+                    {audit === undefined
+                      ? "…"
+                      : `${audit.length} recent entr${audit.length === 1 ? "y" : "ies"}`}
+                  </span>
+                </h2>
+                <span className="type-label ink-faded">append-only</span>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Matter changes, document events, billing, permissions, exports and
+                downloads. Records are written once and cannot be altered from the
+                application.
+              </p>
+              {audit === undefined ? (
+                <p className="mt-3 text-sm text-muted-foreground">Loading the trail…</p>
+              ) : audit.length === 0 ? (
+                <p className="mt-3 text-sm text-muted-foreground">
+                  No audit entries recorded yet.
+                </p>
+              ) : (
+                <div className="mt-3 overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="whitespace-nowrap">When</TableHead>
+                        <TableHead className="whitespace-nowrap">Actor</TableHead>
+                        <TableHead className="whitespace-nowrap">Action</TableHead>
+                        <TableHead>Detail</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {audit.map((r) => (
+                        <TableRow key={r._id}>
+                          <TableCell className="whitespace-nowrap text-[13px]">
+                            {formatDateTimeIN(r.at)}
+                          </TableCell>
+                          <TableCell className="text-[13px]">{r.actorName}</TableCell>
+                          <TableCell className="text-[13px]">{r.action}</TableCell>
+                          <TableCell className="text-[13px]">
+                            {r.detail ?? "—"}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         <p className="type-label ink-faded">
           These reports describe chamber activity — they are not a prediction of the

@@ -25,6 +25,7 @@ import {
   canViewMatter,
   getAccessContext,
   requireAccess,
+  requireCapability,
   requireMatter,
 } from "./access";
 import type { AccessContext } from "./access";
@@ -644,5 +645,110 @@ export const notifyParticipantsByEmail = mutation({
       queued += 1;
     }
     return { queued };
+  },
+});
+
+// =====================================================================
+// Email capture (email integration)
+//
+// Records an email copied into Advokate (from a linked mailbox flow or
+// manual filing) as a thread message carrying the email's own metadata,
+// so it participates in every thread affordance: matter/client linking,
+// attachments, exports. Attachments are filed to the Document Vault by
+// the uploader via the normal upload flow and referenced by id here.
+// Nothing invents an email record — only staff may file one.
+// =====================================================================
+
+/** File an email into a thread (staff only, audited metadata on the row). */
+export const recordEmail = mutation({
+  args: {
+    conversationId: v.id("conversations"),
+    direction: v.union(v.literal("inbound"), v.literal("outbound")),
+    fromAddress: v.string(),
+    toAddress: v.string(),
+    subject: v.string(),
+    body: v.string(),
+    receivedAt: v.number(),
+    // Vault documents already uploaded for this email's attachments.
+    attachmentDocumentIds: v.optional(v.array(v.id("matterDocuments"))),
+  },
+  handler: async (ctx, args) => {
+    const ac = await getAccessContext(ctx);
+    if (!ac) throw new Error("You must be signed in.");
+    if (!can(ac, "note.write")) {
+      throw new Error("Your role is not permitted to file emails.");
+    }
+    const conversation = await ctx.db.get(args.conversationId);
+    if (!conversation || conversation.orgId !== ac.org._id || conversation.archivedAt) {
+      throw new Error("Conversation not found.");
+    }
+    if (conversation.matterId !== undefined) {
+      await requireMatter(ctx, ac, conversation.matterId);
+    }
+    const body = args.body.trim();
+    if (!body) throw new Error("Email body is required.");
+    if (body.length > MAX_BODY) throw new Error("Email body is too long.");
+
+    // Attachment integrity: same matter, visible to the filer.
+    for (const docId of args.attachmentDocumentIds ?? []) {
+      const doc = await ctx.db.get(docId);
+      if (!doc || doc.matterId !== conversation.matterId) {
+        throw new Error("Attachments must belong to the thread's matter.");
+      }
+      const matter = await ctx.db.get(doc.matterId);
+      if (!matter || !canViewDocument(ac, doc, matter)) {
+        throw new Error("You cannot attach a document you cannot see.");
+      }
+    }
+
+    const now = Date.now();
+    await ctx.db.insert("messages", {
+      conversationId: args.conversationId,
+      orgId: ac.org._id,
+      senderId: ac.user._id,
+      senderKind: "member",
+      body: [
+        `📧 ${args.direction === "inbound" ? "From" : "To"}: ${args.fromAddress} → ${args.toAddress}`,
+        `Subject: ${args.subject.trim()}`,
+        ``,
+        body,
+      ].join("\n"),
+      attachmentDocumentIds: args.attachmentDocumentIds,
+      kind: "message",
+      createdAt: now,
+    });
+    await ctx.db.patch(args.conversationId, { lastMessageAt: now });
+    return { ok: true as const };
+  },
+});
+
+/** Create a task from an email thread message (staff, task.manage). */
+export const createTaskFromEmail = mutation({
+  args: {
+    conversationId: v.id("conversations"),
+    title: v.string(),
+    priority: v.union(v.literal("normal"), v.literal("high"), v.literal("urgent")),
+    dueDate: v.optional(v.string()),
+    assigneeId: v.optional(v.id("users")),
+  },
+  handler: async (ctx, args): Promise<{ taskId: Id<"tasks"> }> => {
+    const ac = await requireAccess(ctx);
+    requireCapability(ac, "task.manage");
+    const conversation = await ctx.db.get(args.conversationId);
+    if (!conversation || conversation.orgId !== ac.org._id) {
+      throw new Error("Conversation not found.");
+    }
+    if (conversation.matterId === undefined) {
+      throw new Error("Link the thread to a matter before creating tasks from it.");
+    }
+    const { taskId } = await ctx.runMutation(api.tasks.createTask, {
+      matterId: conversation.matterId,
+      title: args.title.trim(),
+      kind: "general",
+      priority: args.priority,
+      dueDate: args.dueDate,
+      assigneeId: args.assigneeId,
+    });
+    return { taskId };
   },
 });

@@ -161,9 +161,14 @@ export default defineSchema({
     state: v.optional(v.string()),
     pincode: v.optional(v.string()),
     gstin: v.optional(v.string()),
+    // Firm PAN — printed on invoices beneath the GSTIN.
+    pan: v.optional(v.string()),
     phone: v.optional(v.string()),
     email: v.optional(v.string()),
     website: v.optional(v.string()),
+    // Payment instructions printed on invoices (bank / UPI).
+    bankDetails: v.optional(v.string()),
+    upiId: v.optional(v.string()),
     logoStorageId: v.optional(v.id("_storage")),
     // Financial settings.
     currency: v.string(),

@@ -312,6 +312,39 @@ export const overview = query({
   },
 });
 
+/**
+ * Organization-wide audit trail (audit.view capability). Append-only by
+ * convention: nothing here offers edit or delete paths, and the query
+ * itself is capability-gated so normal members cannot read or alter the
+ * history. Most recent 200 entries.
+ */
+export const auditTrail = query({
+  args: {
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const ac = await getAccessContext(ctx);
+    if (!ac) return [];
+    requireCapability(ac, "audit.view");
+    const limit = Math.min(Math.max(args.limit ?? 200, 1), 200);
+    const rows = await ctx.db
+      .query("auditLog")
+      .withIndex("by_org", (q) => q.eq("orgId", ac.org._id))
+      .collect();
+    return rows
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, limit)
+      .map((r) => ({
+        _id: r._id,
+        at: r.createdAt,
+        actorName: r.actorName,
+        action: r.action,
+        detail: r.detail ?? null,
+        matterId: r.matterId ?? null,
+      }));
+  },
+});
+
 /** Text search across the org's clients and visible matters. */
 export const search = query({
   args: { q: v.string() },

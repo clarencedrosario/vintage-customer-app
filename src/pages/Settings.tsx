@@ -207,6 +207,9 @@ function OrgProfileCard({
     state?: string | null;
     pincode?: string | null;
     gstin?: string | null;
+    pan?: string | null;
+    bankDetails?: string | null;
+    upiId?: string | null;
     phone?: string | null;
     email?: string | null;
     website?: string | null;
@@ -233,6 +236,9 @@ function OrgProfileCard({
     state: profile.state ?? "Maharashtra",
     pincode: profile.pincode ?? "",
     gstin: profile.gstin ?? "",
+    pan: profile.pan ?? "",
+    bankDetails: profile.bankDetails ?? "",
+    upiId: profile.upiId ?? "",
     phone: profile.phone ?? "",
     email: profile.email ?? "",
     website: profile.website ?? "",
@@ -277,6 +283,9 @@ function OrgProfileCard({
         state: form.state || undefined,
         pincode: form.pincode || undefined,
         gstin: form.gstin || undefined,
+        pan: form.pan || undefined,
+        bankDetails: form.bankDetails || undefined,
+        upiId: form.upiId || undefined,
         phone: form.phone || undefined,
         email: form.email || undefined,
         website: form.website || undefined,
@@ -446,6 +455,37 @@ function OrgProfileCard({
                 disabled={!canEdit}
               />
             </div>
+            <div className="space-y-2">
+              <Label htmlFor="org-pan">PAN</Label>
+              <Input
+                id="org-pan"
+                value={form.pan}
+                onChange={(e) => set("pan", e.target.value.toUpperCase())}
+                maxLength={10}
+                placeholder="AAAAA9999A"
+                disabled={!canEdit}
+              />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="org-bank">Bank details (printed on invoices)</Label>
+            <Input
+              id="org-bank"
+              value={form.bankDetails}
+              onChange={(e) => set("bankDetails", e.target.value)}
+              placeholder="Bank name, A/C no., IFSC"
+              disabled={!canEdit}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="org-upi">UPI ID (printed on invoices)</Label>
+            <Input
+              id="org-upi"
+              value={form.upiId}
+              onChange={(e) => set("upiId", e.target.value)}
+              placeholder="chamber@upi"
+              disabled={!canEdit}
+            />
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
