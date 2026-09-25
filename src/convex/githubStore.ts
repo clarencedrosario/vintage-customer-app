@@ -62,7 +62,7 @@ export const disconnectRepo = mutation({
   args: { repo: v.string() },
   handler: async (ctx, args) => {
     const ac = await requireAccess(ctx);
-    requireCapability(ac, "org.edit_profile");
+    requireCapability(ac, "integrations.manage");
     const existing = await ctx.db
       .query("githubConnections")
       .withIndex("by_org_repo", (q) =>
@@ -98,7 +98,7 @@ export const actorInternal = internalQuery({
   args: {},
   handler: async (ctx) => {
     const ac: AccessContext = await requireAccess(ctx);
-    requireCapability(ac, "org.edit_profile");
+    requireCapability(ac, "integrations.manage");
     return {
       orgId: ac.org._id,
       userId: ac.user._id,

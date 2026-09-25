@@ -180,6 +180,15 @@ describe("support-staff ceiling (editable permissions cannot escalate)", () => {
     expect(granted).toEqual(["task.manage", "note.write"]);
   });
 
+  it("never grants integrations.manage or conflict.override to support staff", () => {
+    const granted = normalizePermissions("support_staff", [
+      "integrations.manage",
+      "conflict.override",
+      "task.manage",
+    ]);
+    expect(granted).toEqual(["task.manage"]);
+  });
+
   it("drops unknown capability strings instead of throwing", () => {
     const granted = normalizePermissions("associate", [
       "task.manage",
@@ -194,6 +203,30 @@ describe("support-staff ceiling (editable permissions cannot escalate)", () => {
       "billing.invoice",
     ]);
     expect(granted).toEqual(["matter.view_all", "billing.invoice"]);
+  });
+
+  it("grants integrations.manage to owner/partner/administrator defaults only", () => {
+    expect(DEFAULT_PERMISSIONS.owner).toContain("integrations.manage");
+    expect(DEFAULT_PERMISSIONS.partner).toContain("integrations.manage");
+    expect(DEFAULT_PERMISSIONS.administrator).toContain("integrations.manage");
+    for (const role of [
+      "senior_associate",
+      "associate",
+      "junior",
+      "paralegal",
+      "accountant",
+      "support_staff",
+    ] as OrgRole[]) {
+      expect(DEFAULT_PERMISSIONS[role]).not.toContain("integrations.manage");
+    }
+  });
+
+  it("lets a non-support role be granted integrations.manage by override", () => {
+    const granted = normalizePermissions("senior_associate", [
+      "matter.view_all",
+      "integrations.manage",
+    ]);
+    expect(granted).toContain("integrations.manage");
   });
 });
 

@@ -230,6 +230,12 @@ function SignInCard({ inviteToken }: { inviteToken?: string | null }) {
           return;
         }
       }
+      // Login history (security feature): own rows only, best-effort.
+      try {
+        await recordLogin({ userAgent: navigator.userAgent });
+      } catch {
+        /* a dropped history row never blocks sign-in */
+      }
       // Role and portal are resolved server-side after sign-in; RequireAuth
       // routes each account to its own workspace.
       navigate(
@@ -245,6 +251,7 @@ function SignInCard({ inviteToken }: { inviteToken?: string | null }) {
   };
 
   const twoFactorVerify = useMutation(api.twofactor.verifyForSession);
+  const recordLogin = useMutation(api.sessions.recordLogin);
 
   const handleTwoFactor = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -252,6 +259,12 @@ function SignInCard({ inviteToken }: { inviteToken?: string | null }) {
     setError(null);
     try {
       await twoFactorVerify({ code });
+      try {
+        // Login history (security feature): own rows only.
+        await recordLogin({ userAgent: navigator.userAgent });
+      } catch {
+        /* history is best-effort; never blocks sign-in */
+      }
       navigate(0); // reload picks up the satisfied session guard
     } catch (err) {
       setError(err instanceof Error ? err.message : "Verification failed.");

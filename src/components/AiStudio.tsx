@@ -273,6 +273,12 @@ export function AiStudio({ matterId }: { matterId: Id<"matters"> }) {
               matters of record only after a lawyer confirms them. The assistant
               cannot file, send or commit anything on its own.
             </p>
+            <p className="mt-2 text-xs text-muted-foreground">
+              About your data: this application cannot verify whether the AI
+              provider trains its models on submitted content — that is governed
+              solely by the provider's own terms and configuration. Nothing here
+              claims your matter documents are excluded from model training.
+            </p>
           </div>
         </div>
       </div>

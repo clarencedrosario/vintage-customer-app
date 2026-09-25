@@ -1,3 +1,4 @@
+import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { getCurrentUser } from "./users";
 
@@ -34,6 +35,47 @@ export const activeSessions = query({
       .filter((q) => q.eq(q.field("userId"), user._id))
       .collect();
     return { count: sessions.length };
+  },
+});
+
+// ---------------------------------------------------------------
+// Login history (security feature)
+//
+// One append-only row per successful sign-in, written by the
+// authenticated caller right after verification succeeds (the server
+// session already exists at that point). Rows are readable ONLY by the
+// account that owns them — never by firm administrators — so the trail
+// cannot be used to surveil other members.
+// ---------------------------------------------------------------
+
+/** Record the current signed-in session as a successful login. */
+export const recordLogin = mutation({
+  args: { userAgent: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    if (!user || user.isAnonymous) return null;
+    const at = Date.now();
+    await ctx.db.insert("loginEvents", {
+      userId: user._id,
+      email: user.email,
+      at,
+      userAgent: args.userAgent?.slice(0, 300),
+    });
+    return at;
+  },
+});
+
+/** My last 20 sign-ins (own rows only — no cross-account access). */
+export const myLoginHistory = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await getCurrentUser(ctx);
+    if (!user || user.isAnonymous) return [];
+    return ctx.db
+      .query("loginEvents")
+      .withIndex("by_user_time", (q) => q.eq("userId", user._id))
+      .order("desc")
+      .take(20);
   },
 });
 

@@ -140,6 +140,16 @@ export default defineSchema({
   // Convex Auth manages authSessions/authAccounts/authVerificationCodes
   // authRateLimits/authRefreshTokens via the authTables spread above.
 
+  // Login history (security feature): one append-only row per successful
+  // sign-in. Only self-viewable (myLoginHistory); no cross-account reads.
+  loginEvents: defineTable({
+    userId: v.id("users"),
+    email: v.optional(v.string()),
+    at: v.number(),
+    // Coarse client hint — recorded from the browser, so indicative only.
+    userAgent: v.optional(v.string()),
+  }).index("by_user_time", ["userId", "at"]),
+
   organizations: defineTable({
     name: v.string(),
     slug: v.string(),

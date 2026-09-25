@@ -52,6 +52,9 @@ export const CAPABILITIES = [
   // override. Owner/partner/administrator by default; NOT grantable to
   // support staff (enforced in normalizePermissions below).
   "conflict.override",
+  // Connect/disconnect third-party services (GitHub, e-mail/SMS providers).
+  // Owner/partner/administrator by default; NOT grantable to support staff.
+  "integrations.manage",
 ] as const;
 export type Capability = (typeof CAPABILITIES)[number];
 
@@ -69,7 +72,7 @@ export const DEFAULT_PERMISSIONS: Record<OrgRole, Capability[]> = {
     "time.log", "expense.log", "billing.invoice", "billing.payment",
     "ai.use", "data.export", "audit.view",
     "team.invite",
-    "conflict.override",
+    "conflict.override", "integrations.manage",
   ],
   senior_associate: [
     "matter.view_all", "matter.create", "matter.edit",
@@ -119,7 +122,7 @@ export const DEFAULT_PERMISSIONS: Record<OrgRole, Capability[]> = {
     "matter.delete",
     "team.invite", "team.manage",
     "permissions.edit", "org.edit_profile",
-    "conflict.override",
+    "conflict.override", "integrations.manage",
   ],
   support_staff: [
     "task.manage", // their own assigned tasks only
@@ -161,6 +164,7 @@ export function normalizePermissions(
       "matter.delete",
       "matter.team_restrict",
       "conflict.override",
+      "integrations.manage",
       "data.export",
       "audit.view",
     ]);

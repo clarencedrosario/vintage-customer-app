@@ -30,7 +30,7 @@ import {
 } from "@/components/ui/select";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { INDIAN_STATES } from "@/lib/format";
+import { INDIAN_STATES, formatDateTimeIN } from "@/lib/format";
 import { useMutation, useQuery } from "convex/react";
 import { Check, Minus, Upload } from "lucide-react";
 import { useState } from "react";
@@ -71,6 +71,12 @@ const CAPABILITY_LABELS: Record<string, string> = {
   "team.manage": "Manage members",
   "permissions.edit": "Edit role permissions",
   "org.edit_profile": "Edit firm profile",
+  "ai.use": "Use AI assistance",
+  "data.export": "Export firm data",
+  "audit.view": "View audit log",
+  "matter.delete": "Delete matters (hard delete)",
+  "conflict.override": "Override confirmed conflicts",
+  "integrations.manage": "Manage integrations",
 };
 
 export default function Settings() {
@@ -736,6 +742,7 @@ function randomB64(n: number): string {
 function SecurityCard() {
   const status = useQuery(api.twofactor.status);
   const sessions = useQuery(api.sessions.activeSessions);
+  const logins = useQuery(api.sessions.myLoginHistory);
   const start = useMutation(api.twofactor.startEnrollment);
   const confirm = useMutation(api.twofactor.confirmEnrollment);
   const storeCodes = useMutation(api.twofactor.storeRecoveryCodes);
@@ -942,6 +949,53 @@ function SecurityCard() {
           >
             Sign out all devices
           </Button>
+        </div>
+
+        <hr className="engraving-rule" />
+
+        {/* Login history — own rows only; never visible to administrators */}
+        <div>
+          <p className="text-sm font-medium">Recent sign-ins</p>
+          <p className="text-xs text-muted-foreground">
+            Your last 20 successful sign-ins, visible only to you.
+          </p>
+          {logins === undefined ? (
+            <p className="mt-2 text-xs text-muted-foreground">—</p>
+          ) : logins.length === 0 ? (
+            <p className="mt-2 text-xs text-muted-foreground">
+              No recorded sign-ins yet — entries appear after your next
+              sign-in.
+            </p>
+          ) : (
+            <ul className="mt-2 space-y-1">
+              {logins.map((l) => (
+                <li
+                  key={l._id}
+                  className="flex flex-wrap items-baseline gap-x-3 text-xs"
+                >
+                  <span className="font-mono">{formatDateTimeIN(l.at)}</span>
+                  <span className="truncate text-muted-foreground">
+                    {l.userAgent ? l.userAgent.slice(0, 80) : "unknown device"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <hr className="engraving-rule" />
+
+        {/* Data export & deletion — stated plainly, no false promises */}
+        <div>
+          <p className="text-sm font-medium">Data export &amp; deletion</p>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            Full-organisation archive exports are available under the Backup
+            card above (data.export capability). Deletion of client and matter
+            records follows the chamber's retention policy — hard deletes are
+            deliberately scarce (matter.delete) and every audit entry is kept.
+            The platform's managed database performs its own backups; recovery
+            must be verified by a real restore test recorded there.
+          </p>
         </div>
       </CardContent>
     </Card>
