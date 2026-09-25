@@ -21,6 +21,7 @@ export const CAPABILITIES = [
   "matter.edit",
   "matter.close",
   "matter.team_restrict",
+  "matter.delete", // hard delete with cascade — deliberately scarce
   // Clients
   "client.view_all",
   "client.create",
@@ -33,11 +34,15 @@ export const CAPABILITIES = [
   // Documents
   "document.upload",
   "document.view_internal",
+  "document.share", // download files & issue secure share links
   // Time & billing
   "time.log",
   "expense.log",
   "billing.invoice",
   "billing.payment",
+  "ai.use", // spend org tokens on AI jobs (preparation gates too)
+  "data.export", // archive/backup export of organisation data
+  "audit.view", // read the organisation's audit log & login history
   // Team & organization administration
   "team.invite",
   "team.manage", // suspend / reactivate / remove / roles
@@ -57,11 +62,12 @@ export const DEFAULT_PERMISSIONS: Record<OrgRole, Capability[]> = {
   owner: [...CAPABILITIES],
   partner: [
     "matter.view_all", "matter.create", "matter.edit", "matter.close",
-    "matter.team_restrict",
+    "matter.team_restrict", "matter.delete",
     "client.view_all", "client.create", "client.edit",
     "hearing.manage", "order.record", "task.manage", "note.write",
-    "document.upload", "document.view_internal",
+    "document.upload", "document.view_internal", "document.share",
     "time.log", "expense.log", "billing.invoice", "billing.payment",
+    "ai.use", "data.export", "audit.view",
     "team.invite",
     "conflict.override",
   ],
@@ -69,42 +75,48 @@ export const DEFAULT_PERMISSIONS: Record<OrgRole, Capability[]> = {
     "matter.view_all", "matter.create", "matter.edit",
     "client.view_all", "client.edit",
     "hearing.manage", "order.record", "task.manage", "note.write",
-    "document.upload", "document.view_internal",
-    "time.log", "expense.log",
+    "document.upload", "document.view_internal", "document.share",
+    "time.log", "expense.log", "ai.use",
   ],
   associate: [
     "matter.view_all", "matter.create", "matter.edit",
     "client.view_all", "client.edit",
     "hearing.manage", "order.record", "task.manage", "note.write",
-    "document.upload", "document.view_internal",
-    "time.log", "expense.log",
+    "document.upload", "document.view_internal", "document.share",
+    "time.log", "expense.log", "ai.use",
   ],
   junior: [
     "matter.view_all", "matter.create",
     "client.view_all",
     "task.manage", "note.write",
-    "document.upload", "document.view_internal",
-    "time.log", "expense.log",
+    "document.upload", "document.view_internal", "document.share",
+    "time.log", "expense.log", "ai.use",
   ],
   paralegal: [
     "matter.view_all", "client.view_all",
     "task.manage", "note.write",
-    "document.upload", "document.view_internal",
+    "document.upload", "document.view_internal", "document.share",
     "expense.log",
     "time.log",
+    "ai.use",
   ],
   accountant: [
     "matter.view_all",
     "client.view_all",
     "billing.invoice", "billing.payment",
     "expense.log",
+    // Download-only document access: accountants may retrieve files
+    // (receipts, invoices) but never upload or refile them.
+    "document.share",
   ],
   administrator: [
     "matter.view_all", "matter.create", "matter.edit",
     "client.view_all", "client.create", "client.edit",
     "hearing.manage", "order.record", "task.manage", "note.write",
-    "document.upload", "document.view_internal",
+    "document.upload", "document.view_internal", "document.share",
     "time.log", "expense.log",
+    "ai.use", "data.export", "audit.view",
+    "matter.delete",
     "team.invite", "team.manage",
     "permissions.edit", "org.edit_profile",
     "conflict.override",
@@ -136,6 +148,7 @@ export function normalizePermissions(
       "client.view_all",
       "document.view_internal",
       "document.upload",
+      "document.share",
       "billing.invoice",
       "billing.payment",
       "team.invite",
@@ -145,8 +158,11 @@ export function normalizePermissions(
       "matter.create",
       "matter.edit",
       "matter.close",
+      "matter.delete",
       "matter.team_restrict",
       "conflict.override",
+      "data.export",
+      "audit.view",
     ]);
     return cleaned.filter((p) => !forbidden.has(p));
   }
