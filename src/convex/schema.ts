@@ -1,6 +1,8 @@
 import { defineSchema, defineTable } from "convex/server";
 import { authTables } from "@convex-dev/auth/server";
 import { v } from "convex/values";
+import { DEADLINE_CATEGORIES } from "./constants";
+import { featureFiveTables } from "./schemaExtras";
 
 // ---------------------------------------------------------------------
 // Shared constants (imported across the backend)
@@ -66,14 +68,7 @@ export const TASK_KINDS = [
 
 export const TASK_PRIORITIES = ["normal", "high", "urgent"] as const;
 
-/** Limitation and compliance deadline categories (legally significant). */
-export const DEADLINE_CATEGORIES = [
-  "limitation",
-  "filing",
-  "compliance",
-  "court_order",
-  "custom",
-] as const;
+export { DEADLINE_CATEGORIES } from "./constants";
 
 export type MatterStatus = (typeof MATTER_STATUSES)[keyof typeof MATTER_STATUSES];
 
@@ -112,6 +107,7 @@ export function portalForRole(
 
 export default defineSchema({
   ...authTables,
+  ...featureFiveTables,
 
   users: defineTable({
     name: v.optional(v.string()),
