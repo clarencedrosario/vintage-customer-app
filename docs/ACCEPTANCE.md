@@ -1,7 +1,7 @@
 # Acceptance report (section 30)
 
-Date: 25 September 2026 (updated after Feature 5 — Deadline Rules Engine;
-Features 1–4 verified earlier). This report states what was actually
+Date: 25 September 2026 (updated after Feature 9 — Undertakings Register;
+Features 1–5 verified earlier). This report states what was actually
 exercised and what was not. HTTP 200s and mocked tests are not treated as
 live proof.
 
@@ -10,9 +10,9 @@ live proof.
 | Check | Result |
 | --- | --- |
 | TypeScript (solution build, `tsc -b --noEmit`) | **0 errors** (app, node, tests projects) |
-| Unit & component tests (`bun run test`, vitest) | **222 passed / 0 failed** (15 files) |
+| Unit & component tests (`bun run test`, vitest) | **271 passed / 0 failed** (17 files) |
 | Production build (`bun run build`) | **Passes** — clean bundle, ~16s |
-| Convex functions push (`bun convex dev --once`) | **Success** — includes `commandCentre.matterOverview` |
+| Convex functions push (`bun convex dev --once`) | **Success** — includes `commandCentre.matterOverview` and the Feature 9 `undertakings` module + `by_status` index |
 | Dependency audit (`bun audit`) | **0 vulnerabilities** (as of the last full check) |
 
 ## Feature 1 — Case Command Centre (implemented this run)
@@ -60,7 +60,72 @@ environment, so the tab was **not** clicked through live; cross-tenant denial
 over a real two-tenant HTTP session is covered at the decision layer only
 (see item 8 below).
 
-## Feature 5 — Deadline Rules Engine (implemented this run)
+## Feature 9 — Undertakings Register (implemented this run)
+
+**Built:** `src/lib/undertakingsFlow.ts` (pure lifecycle engine),
+`src/lib/undertakingsFlow.test.ts` (30 tests), `src/convex/undertakings.ts`
+(server module), the `undertakings` table (added in `schemaExtras.ts` as
+`featureNineTables` with by_org / by_matter / by_org_status / by_status
+indexes), `src/pages/Undertakings.tsx` (`/undertakings` desk with
+summary strip, status tabs, search and full lifecycle dialogs), route +
+sidebar entry, escalation wiring in `reminders.runScan`, a real register
+section in the Command Centre (`commandCentre.matterOverview.undertakings.register`)
+and a confidential-safe firm report (`undertakings.firmReport`).
+
+- **Full capture:** matter, undertaking text, given/received direction,
+  involved party, date given, completion due date, responsible lawyer,
+  supervising lawyer, conditions, completion evidence (note or document
+  reference), notes and a confidentiality flag.
+- **Lifecycle enforced by the state machine on every mutation:**
+  draft → pending_approval → active → completed_pending_verification →
+  discharged; active rows may be breached or withdrawn; rejection
+  returns to draft WITH a mandatory reason; terminal states never move.
+- **Approval before activation:** only the SUPERVISING lawyer (or an
+  owner/partner/administrator) can activate, verify discharge or record
+  breach. The responsible lawyer can draft, submit, complete and correct.
+- **Reminders & escalation:** due-soon classification (≤7 days), overdue
+  stamps, and a tiered escalation ladder (weekly) surfaced on the desk
+  and pushed by the scheduled scan (`escalateScan`, deduped per day per
+  undertaking) to the responsible and supervising lawyers as a new
+  `undertaking_escalation` notification kind.
+- **Completion gate:** discharge requires completion evidence (a note or
+  document) recorded BEFORE verification; the server refuses otherwise.
+- **No silent deletion:** ACTIVE and completed undertakings cannot be
+  deleted at all — only unsent drafts may be removed. Corrections append
+  to a history array preserving the previous text verbatim, with a
+  mandatory reason; the desk renders the full history.
+- **Command Centre:** the undertakings card now leads with real register
+  rows (active/awaiting-verification, breached highlighted red) plus the
+  legacy court-order deadline and outstanding-direction derivations.
+- **Firm-level reporting:** `firmReport` lists every row's matter
+  reference, direction, status and due class; rows on matters the caller
+  cannot open are returned as **"Restricted"** with no client name, no
+  matter title and no undertaking text — a visible indicator with zero
+  leakage; the whole query is capability-gated.
+- **Access control:** every query is org-scoped by index and matter-gated
+  through the shared `canViewMatter` rule; `get`/`listForMatter` return
+  null/[] for cross-tenant ids (no existence leak); every mutation is
+  audit-logged, including breach explanations.
+
+**Tests added:** `src/lib/undertakingsFlow.test.ts` (30 tests) — the full
+transition matrix incl. terminal states, every permission rule
+(submit/activate/verify/breach/correct/withdraw/firm-register),
+due classification (overdue / due-soon boundary at 7 days / on-track /
+no-deadline), escalation ladder (tier rise, cap at 3, awaiting-
+verification rows still escalate, future rows don't), the completion-
+evidence gate, correction history construction (reason mandatory,
+no-op refused, trimmed entry) and firm-report redaction (confidential
+rows expose no text, client name or matter title). Tenant isolation and
+matter access reuse the shared policy layer covered by the two-tenant
+fixture in `src/convex/accessPolicy.test.ts`.
+
+**Not verified (stated honestly):** no browser-driver tooling exists in
+this environment, so the desk was **not** clicked through live; the
+cron escalation path is exercised at compile + logic level (the scan
+mutation pushes and the pure ladder is unit-tested) but not against a
+scheduled live run.
+
+## Feature 5 — Deadline Rules Engine (earlier run)
 
 **Built:** `src/lib/deadlineRules.ts` (pure calculation core),
 `src/lib/deadlineRules.test.ts` (20 tests), `src/convex/deadlineRules.ts`

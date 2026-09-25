@@ -69,6 +69,7 @@ export const matterOverview = query({
       issues,
       auditRows,
       conversations,
+      undertakings,
     ] = await Promise.all([
       ctx.db.get(matter.clientId),
       ctx.db
@@ -125,6 +126,10 @@ export const matterOverview = query({
         : Promise.resolve([] as Doc<"auditLog">[]),
       ctx.db
         .query("conversations")
+        .withIndex("by_matter", (q) => q.eq("matterId", matter._id))
+        .collect(),
+      ctx.db
+        .query("undertakings")
         .withIndex("by_matter", (q) => q.eq("matterId", matter._id))
         .collect(),
     ]);
@@ -249,7 +254,13 @@ export const matterOverview = query({
       .sort((a, b) => b.at - a.at)
       .slice(0, 2);
 
-    // ---- Undertakings: open court_order deadlines + outstanding order directions ----
+    // ---- Undertakings (Feature 9 register) + legacy derivations ----
+    // The dedicated register is the source of truth when rows exist;
+    // open court_order deadlines and outstanding order directions are
+    // still surfaced alongside so nothing is hidden behind migration.
+    const registerUndertakings = undertakings
+      .filter((u) => u.status === "active" || u.status === "completed_pending_verification")
+      .sort((a, b) => (a.dueAt ?? Infinity) - (b.dueAt ?? Infinity));
     const undertakingDeadlines = openDeadlines.filter(
       (d) => d.category === "court_order",
     );
@@ -391,6 +402,17 @@ export const matterOverview = query({
         latestActivityAt !== undefined &&
         (latestContact === null || latestActivityAt - latestContact.at > 30 * 60 * 1000),
       undertakings: {
+        register: registerUndertakings.slice(0, 4).map((u) => ({
+          id: u._id,
+          text: u.text,
+          direction: u.direction,
+          status: u.status,
+          dueAt: u.dueAt ?? null,
+          breached: u.status === "breached",
+        })),
+        overdueCount: registerUndertakings.filter(
+          (u) => u.dueAt !== undefined && u.dueAt < now,
+        ).length,
         deadlines: undertakingDeadlines.slice(0, 4).map((d) => ({
           id: d._id, title: d.title, dueAt: d.dueAt,
         })),

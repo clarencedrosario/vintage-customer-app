@@ -2,7 +2,11 @@ import { defineSchema, defineTable } from "convex/server";
 import { authTables } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { DEADLINE_CATEGORIES } from "./constants";
-import { featureFiveTables, featureSixTables } from "./schemaExtras";
+import {
+  featureFiveTables,
+  featureSixTables,
+  featureNineTables,
+} from "./schemaExtras";
 
 // ---------------------------------------------------------------------
 // Shared constants (imported across the backend)
@@ -109,6 +113,7 @@ export default defineSchema({
   ...authTables,
   ...featureFiveTables,
   ...featureSixTables,
+  ...featureNineTables,
 
   users: defineTable({
     name: v.optional(v.string()),

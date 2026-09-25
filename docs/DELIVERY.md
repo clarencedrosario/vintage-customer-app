@@ -5,7 +5,7 @@ Status legend:
 - **Awaiting external config** — implemented, but needs credentials/approvals you must supply (keys, merchant accounts, provider review).
 - **Incomplete** — not built yet.
 
-Last verified: 24 September 2026 — `tsc -b` 0 errors, 68/68 tests (17 in the multi-tenant denial fixture, 13 in the invitation-lifecycle suite), Convex push and production build succeed.
+Last verified: 25 September 2026 — `tsc -b` 0 errors, 271/271 tests, Convex push and production build succeed.
 
 ## The connected chamber (this milestone's focus)
 
@@ -44,6 +44,7 @@ the pack builder can be reopened with that next hearing already selected.
 | Chronology & docket | Events with precision, per-matter docket, audit log |
 | Tasks & deadlines | Desk with views, deadlines with IST day-end, playbooks (template + apply) |
 | Deadline rules engine | Versioned rules, court holidays, drafts from orders/hearings, lawyer approval, adjustments with reasons, escalation (Feature 5) |
+| Undertakings register | Given/received register, supervisory approval before activation, completion evidence + verification, breach records, correction history, escalation in the reminder scan, confidential-safe firm report (Feature 9) |
 | Documents | Upload/share/version metadata, request flow, review desk, comparison |
 | Drafts | Versions, comments, review/approval desk, client-update gate |
 | Billing | Time/expense, invoices from matter, payments, reconciliation, PDF |

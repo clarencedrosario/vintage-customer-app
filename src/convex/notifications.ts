@@ -17,6 +17,7 @@ const KINDS = [
   "draft_approval",
   "invoice_followup",
   "automation",
+  "undertaking_escalation",
 ] as const;
 
 /** Create a notification, deduping on (user, dedupeKey). */

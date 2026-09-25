@@ -505,11 +505,45 @@ export function CommandCentre({ matterId }: { matterId: Id<"matters"> }) {
               </p>
               {sectionLink("orders", "Orders & directions →")}
             </div>
-            {overview.undertakings.deadlines.length === 0 &&
+            {overview.undertakings.register.length === 0 &&
+            overview.undertakings.deadlines.length === 0 &&
             overview.undertakings.directions.length === 0 ? (
               <EmptyBlock id="undertakings" />
             ) : (
               <ul className="space-y-2">
+                {overview.undertakings.register.map((u) => {
+                  const urgency = classifyUrgency(
+                    u.dueAt === null ? undefined : u.dueAt,
+                    overview.now,
+                  );
+                  return (
+                    <li key={u.id} className="flex items-center justify-between gap-2 text-sm">
+                      <Link
+                        to={`/undertakings?focus=${u.id}`}
+                        className="min-w-0 truncate hover:underline"
+                      >
+                        {u.text}
+                      </Link>
+                      <span
+                        className={`type-label shrink-0 ${
+                          u.breached
+                            ? "text-red-700 font-medium"
+                            : urgencyClass(urgency)
+                        }`}
+                      >
+                        {u.breached
+                          ? "breached"
+                          : u.status === "completed_pending_verification"
+                            ? "awaiting verification"
+                            : u.dueAt === null
+                              ? "no due date"
+                              : formatDateIN(u.dueAt)}
+                        {" · "}
+                        {u.direction === "given" ? "given" : "received"}
+                      </span>
+                    </li>
+                  );
+                })}
                 {overview.undertakings.deadlines.map((d) => {
                   const u = classifyUrgency(d.dueAt, overview.now);
                   return (

@@ -137,6 +137,89 @@ export const COMM_CATEGORIES = [
   "secure_message",
 ] as const;
 
+// =====================================================================
+// FEATURE 9 — Undertakings Register. Rows are org-scoped; matter rows
+// are additionally gated by the shared canViewMatter rule.
+// =====================================================================
+
+export const featureNineTables = {
+  // One row per undertaking. Lifecycle: draft → pending_approval →
+  // active → completed_pending_verification → discharged; active rows
+  // may be breached; unfinished rows may be withdrawn. Nothing is ever
+  // silently deleted: active rows cannot be deleted at all, and every
+  // correction appends to `corrections` with the previous text kept.
+  undertakings: defineTable({
+    orgId: v.id("organizations"),
+    matterId: v.id("matters"),
+    text: v.string(), // the undertaking itself
+    direction: v.union(v.literal("given"), v.literal("received")),
+    party: v.optional(v.string()), // involved party
+    givenOn: v.optional(v.string()), // YYYY-MM-DD — when accepted
+    dueAt: v.optional(v.number()), // completion deadline (epoch ms)
+    responsibleId: v.id("users"),
+    supervisingId: v.id("users"),
+    conditions: v.optional(v.string()),
+    completionEvidence: v.optional(
+      v.object({
+        note: v.optional(v.string()),
+        documentId: v.optional(v.id("matterDocuments")),
+        recordedAt: v.number(),
+        recordedById: v.id("users"),
+        recordedByName: v.string(),
+      }),
+    ),
+    verificationNote: v.optional(v.string()), // supervisory verification
+    notes: v.optional(v.string()),
+    confidential: v.optional(v.boolean()), // excluded from firm reports
+    status: v.union(
+      v.literal("draft"),
+      v.literal("pending_approval"),
+      v.literal("active"),
+      v.literal("completed_pending_verification"),
+      v.literal("discharged"),
+      v.literal("withdrawn"),
+      v.literal("breached"),
+    ),
+    // Approval trail (activation requires the supervising lawyer).
+    submittedAt: v.optional(v.number()),
+    approvedAt: v.optional(v.number()),
+    approvedById: v.optional(v.id("users")),
+    approvedByName: v.optional(v.string()),
+    rejectedReason: v.optional(v.string()), // return-to-draft reason
+    withdrawnAt: v.optional(v.number()),
+    withdrawnById: v.optional(v.id("users")),
+    withdrawnReason: v.optional(v.string()),
+    dischargedAt: v.optional(v.number()),
+    dischargedById: v.optional(v.id("users")),
+    dischargedByName: v.optional(v.string()),
+    breachedAt: v.optional(v.number()),
+    breachedById: v.optional(v.id("users")),
+    breachExplanation: v.optional(v.string()),
+    // Every in-place edit appends here — previous values preserved.
+    corrections: v.optional(
+      v.array(
+        v.object({
+          at: v.number(),
+          byId: v.id("users"),
+          byName: v.string(),
+          reason: v.string(),
+          field: v.string(),
+          previous: v.string(),
+          next: v.string(),
+        }),
+      ),
+    ),
+    createdById: v.id("users"),
+    createdByName: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_matter", ["matterId"])
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_status", ["status"]), // org-agnostic scan for the escalation cron
+};
+
 export const featureSixTables = {
   // Per-org approval policy per category. Rows are created lazily when
   // a firm overrides the default; absent rows use the pure defaults in

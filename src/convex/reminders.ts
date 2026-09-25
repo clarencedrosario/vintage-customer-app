@@ -172,6 +172,18 @@ export const runScan = internalMutation({
       }
     }
 
+    // ---- 3b. Undertaking escalation (Feature 9) -------------------------
+    // Overdue ACTIVE undertakings escalate to the responsible and
+    // supervising lawyers once per day (deduped by day key).
+    try {
+      created += await ctx.runMutation(internal.undertakings.escalateScan, {
+        dayKey,
+      });
+    } catch {
+      // Undertakings escalation is additive; a failure here must never
+      // block the hearing/deadline/invoice reminders below.
+    }
+
     // ---- 4. Automation rules ------------------------------------------
     const rules = await ctx.db
       .query("automationRules")
