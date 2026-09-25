@@ -58,6 +58,7 @@ const NAV_GROUPS: { heading: string; items: NavItem[] }[] = [
       { to: "/matters", label: "Matters", icon: Landmark },
       { to: "/clients", label: "Clients", icon: Users },
       { to: "/conflicts", label: "Conflicts", icon: ShieldAlert },
+      { to: "/intake", label: "Intake", icon: ClipboardList },
     ],
   },
   {

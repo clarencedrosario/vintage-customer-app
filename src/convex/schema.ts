@@ -286,6 +286,7 @@ export default defineSchema({
     orgId: v.id("organizations"),
     clientId: v.optional(v.id("clients")),
     subject: v.string(),
+    // ---- Legacy columns (original desk) kept for compatibility ----
     matches: v.optional(v.array(v.any())),
     status: v.optional(v.string()),
     reviewedBy: v.optional(v.id("users")),
@@ -293,9 +294,65 @@ export default defineSchema({
     matchCount: v.optional(v.number()),
     note: v.optional(v.string()),
     reviewerId: v.optional(v.id("users")),
+    // ---- Feature 3: full conflict intake ----
+    proposedClientName: v.optional(v.string()),
+    adverseParties: v.optional(v.array(v.string())),
+    relatedCompanies: v.optional(v.array(v.string())),
+    directorsBeneficialOwners: v.optional(v.array(v.string())),
+    witnesses: v.optional(v.array(v.string())),
+    aliases: v.optional(v.array(v.string())),
+    relatedMatterRefs: v.optional(v.array(v.string())),
+    referringParty: v.optional(v.string()),
+    engagementDescription: v.optional(v.string()),
+    // Search evidence (results the reviewer actually saw, incl.
+    // restricted placeholders — stored so the report is reproducible).
+    searchResults: v.optional(v.array(v.any())),
+    matchSummary: v.optional(
+      v.object({
+        exact: v.number(),
+        normalized: v.number(),
+        possible: v.number(),
+        restricted: v.number(),
+      }),
+    ),
+    // Review lifecycle: pending -> classified -> (override) -> cleared /
+    // rejected. "cleared" means the matter may be opened.
+    reviewStatus: v.union(
+      v.literal("pending"),
+      v.literal("cleared"),
+      v.literal("rejected"),
+    ),
+    classification: v.optional(
+      v.union(
+        v.literal("no_conflict"),
+        v.literal("possible_conflict"),
+        v.literal("confirmed_conflict"),
+        v.literal("investigation_required"),
+      ),
+    ),
+    classificationReason: v.optional(v.string()),
+    decidedById: v.optional(v.id("users")),
+    decidedByName: v.optional(v.string()),
+    decidedAt: v.optional(v.number()),
+    // Elevated override (confirmed conflict cleared by owner/partner).
+    override: v.optional(
+      v.object({
+        byId: v.id("users"),
+        byName: v.string(),
+        reason: v.string(),
+        at: v.number(),
+      }),
+    ),
+    // Set when the engagement was ultimately opened as a matter.
+    matterId: v.optional(v.id("matters")),
     createdBy: v.optional(v.id("users")),
+    createdByName: v.optional(v.string()),
     createdAt: v.number(),
-  }).index("by_org", ["orgId"]),
+    updatedAt: v.optional(v.number()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_status", ["orgId", "reviewStatus"])
+    .index("by_matter", ["matterId"]),
 
   // ---------------- Client intake & matter opening (Feature 4) ----------------
   // One row per staged client intake. Draft saving is a plain patch;
@@ -401,6 +458,9 @@ export default defineSchema({
     archivedAt: v.optional(v.number()),
     archivedBy: v.optional(v.id("users")),
     clientSubmission: v.optional(v.boolean()),
+    // Conflict-of-interest provenance: the check that cleared (or was
+    // overridden to clear) this engagement before opening.
+    conflictCheckId: v.optional(v.id("conflictChecks")),
     createdBy: v.id("users"),
     createdAt: v.number(),
     updatedAt: v.number(),

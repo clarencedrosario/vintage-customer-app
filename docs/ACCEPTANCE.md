@@ -1,7 +1,7 @@
 # Acceptance report (section 30)
 
-Date: 24 September 2026 (updated after Feature 3 — Conflict-of-Interest
-Check; Features 1–2 verified earlier). This report states what was actually
+Date: 25 September 2026 (updated after Feature 4 — Client Intake & Matter
+Opening; Features 1–3 verified earlier). This report states what was actually
 exercised and what was not. HTTP 200s and mocked tests are not treated as
 live proof.
 
@@ -10,7 +10,7 @@ live proof.
 | Check | Result |
 | --- | --- |
 | TypeScript (solution build, `tsc -b --noEmit`) | **0 errors** (app, node, tests projects) |
-| Unit & component tests (`bun run test`, vitest) | **162 passed / 0 failed** (13 files) |
+| Unit & component tests (`bun run test`, vitest) | **202 passed / 0 failed** (14 files) |
 | Production build (`bun run build`) | **Passes** — clean bundle, ~16s |
 | Convex functions push (`bun convex dev --once`) | **Success** — includes `commandCentre.matterOverview` |
 | Dependency audit (`bun audit`) | **0 vulnerabilities** (as of the last full check) |
@@ -60,7 +60,82 @@ environment, so the tab was **not** clicked through live; cross-tenant denial
 over a real two-tenant HTTP session is covered at the decision layer only
 (see item 8 below).
 
-## Feature 3 — Conflict-of-Interest Check (implemented this run)
+## Feature 4 — Client Intake & Matter Opening (implemented this run)
+
+**Built:** `src/lib/intakeFlow.ts` (pure lifecycle/required-fields/KYC/duplicate/
+invitation/acceptance/approval-guard engine), `src/lib/intakeFlow.test.ts`
+(40 tests), `src/convex/intake.ts` (server module), `intakes` table in
+`schema.ts` (by_org, by_org_state indexes), `src/pages/Intake.tsx`
+(`/intake` desk with staged wizard), `src/pages/IntakeComplete.tsx`
+(`/intake/complete?token=…` public client-completion page), route + sidebar
+nav; `matters.nextMatterReference` exported for reuse.
+
+- **Staged intake:** identity/contact, individual-or-organization details,
+  matter description + urgency, adverse/related parties, conflict
+  disclosure, KYC checklist, referral source, fee arrangement, engagement
+  letter, risk assessment, responsible team, review — one wizard, draft
+  saving at every stage, per-stage required-field dots in the rail.
+- **Required fields per kind/matter type:** organizations (company/trust/
+  government) must supply organisation name, registration number and an
+  authorised representative; litigation matters require a court/forum;
+  court-deadline urgency requires the deadline date; individuals are never
+  asked for registration numbers.
+- **Lifecycle:** draft → submitted → returned_for_correction | rejected |
+  approved | cancelled, enforced by the pure state machine
+  (`canTransitionIntake`) on every server mutation — terminal states never
+  transition, editing only while draft/returned, reviewer notes mandatory
+  for return/reject. Corrections resubmit through the same machine.
+- **Duplicate-client prevention:** every draft save re-scores the
+  prospective client against the org's clients using normalized email,
+  last-10-digit phone, punctuation-insensitive registration number and the
+  **conflict module's name normalizers** (honorifics/initials/corporate
+  suffixes) — identity hits are "definite", name-only hits "possible";
+  definite duplicates block approval until a human acknowledges with an
+  audit trail.
+- **Secure client completion:** expiring (7-day) completion links with
+  per-link salt + salted-hash storage (raw token returned once, never
+  stored — same scheme as staff/client invitations); NEW clients complete
+  via the token; **EXISTING clients must authenticate** — the link alone
+  discloses nothing and the token redeems only against the invited email's
+  signed-in account; links can be revoked and reissued; single-use on
+  submit.
+- **Consent & engagement:** consent recorded by staff with audit;
+  engagement letters are the chamber's approved template; **unsigned ≠
+  accepted** — `engagementAccepted` is only ever set together with a
+  signature timestamp by the client's own acceptance (via link or
+  authenticated portal), never by a saved form flag; approval refuses an
+  unsigned engagement.
+- **Approval — exactly-once creation:** approver needs `matter.create`;
+  the Feature-3 conflict gate is enforced (cleared check must be attached
+  and re-validated against `openingGate` — rejected/downgraded checks
+  abort); missing required fields, unacknowledged definite duplicates or an
+  unsigned engagement abort **before any record is created**; client and
+  matter are then inserted once, guarded by `createdClientId`/
+  `createdMatterId` (re-approval is idempotent and returns the existing
+  ids); the matter carries the conflict check id as provenance.
+- **Access control:** firm-side register/detail gated by `matter.create` |
+  `client.view_all` with org-scoped index queries; client-side reads are
+  bound to the redeeming account (`getForClient` returns null otherwise);
+  token-authorized writes exist only for NEW-client intakes whose link is
+  live; cross-org ids are "not found"; every state change is audit-logged.
+
+**Tests added:** `src/lib/intakeFlow.test.ts` (40 tests) — full transition
+matrix incl. terminal states, edit-window rule, required-fields per client
+kind and matter type (org fields, litigation court, deadline date,
+whitespace-only), KYC checklist per kind, duplicate detection (email/
+phone/registration/normalized-name variants, definite vs possible,
+no-hits, garbage inputs), invitation expiry (7-day TTL, blocker matrix),
+engagement unsigned-≠-accepted rule, and the approval guard (state,
+capability, conflict check, missing fields, unsigned engagement, missing
+KYC, exactly-once detection).
+
+**Not verified (stated honestly):** no browser-driver tooling, so the
+wizard, completion link and portal round-trip were **not** clicked through
+live; invitation expiry is enforced by comparison against server time and
+is covered by unit tests only; the live two-tenant HTTP round-trip remains
+the standing open item (below).
+
+## Feature 3 — Conflict-of-Interest Check (earlier run)
 
 **Built:** `src/lib/conflictFlow.ts` (pure matching engine),
 `src/convex/conflicts.ts` (intake, search, classification, override, gate,

@@ -311,7 +311,7 @@ function ClientWizard({
           </div>
           <div className="space-y-2">
             <Label htmlFor="c-witness">Witnesses <span className="ink-faded">(comma-separated)</span></Label>
-            <Input id="c-witness" value={(form.witnesses ?? []).join(", ")} onChange={(e) => setArr("witnesses", e.target.value)} disabled={!email} disabled={!editable} />
+            <Input id="c-witness" value={(form.witnesses ?? []).join(", ")} onChange={(e) => setArr("witnesses", e.target.value)} disabled={!editable} />
           </div>
         </div>
       )}
@@ -335,7 +335,7 @@ function ClientWizard({
           {checklist.map((item) => (
             <label key={item.key} className="flex items-center gap-2 text-sm">
               <Checkbox
-                checked={(form.kycReceived ?? []).includes(item.kind ?? item.key)}
+                checked={(form.kycReceived ?? []).includes(item.key)}
                 onCheckedChange={(v) =>
                   set(
                     "kycReceived",

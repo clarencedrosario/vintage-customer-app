@@ -16,6 +16,8 @@ const FindALawyer = lazy(() => import("./pages/FindALawyer.tsx"));
 const Dashboard = lazy(() => import("./pages/Dashboard.tsx"));
 const Matters = lazy(() => import("./pages/Matters.tsx"));
 const Conflicts = lazy(() => import("./pages/Conflicts.tsx"));
+const Intake = lazy(() => import("./pages/Intake.tsx"));
+const IntakeComplete = lazy(() => import("./pages/IntakeComplete.tsx"));
 const CalendarPage = lazy(() => import("./pages/Calendar.tsx"));
 const CourtDay = lazy(() => import("./pages/CourtDay.tsx"));
 const Documents = lazy(() => import("./pages/Documents.tsx"));
@@ -147,11 +149,11 @@ createRoot(document.getElementById("root")!).render(
             <Routes>
               <Route path="/" element={<Landing />} />
               <Route path="/auth" element={<Navigate to="/login" replace />} />
-              <Route path="/login" element={<LoginPage />} />
-              <Route
-                path="/find-a-lawyer"
-                element={<FindALawyer />}
+              <Route path="/login" element={<LoginPage />} />              <Route
+                path="/intake/complete"
+                element={<IntakeComplete />}
               />
+              <Route path="/find-a-lawyer" element={<FindALawyer />} />
               <Route
                 path="/dashboard"
                 element={
@@ -229,6 +231,14 @@ createRoot(document.getElementById("root")!).render(
                 element={
                   <RequireAuth>
                     <Conflicts />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/intake"
+                element={
+                  <RequireAuth>
+                    <Intake />
                   </RequireAuth>
                 }
               />
