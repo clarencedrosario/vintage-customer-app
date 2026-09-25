@@ -160,6 +160,18 @@ export default function MatterDetail() {
   const setSubmission = useMutation(api.matters.setClientSubmission);
   const caps = useQuery(api.workspace.myCapabilities);
   const setTeamFn = useMutation(api.matters.setTeam);
+  // Contextual AI (Ask This Document): requires the same note-writing
+  // permission the AI studio itself enforces.
+  const prepareAIJob = useMutation(api.ai.prepareJob);
+  const addAISource = useMutation(api.ai.addSource);
+  const canNoteWrite = caps?.capabilities.includes("note.write") ?? false;
+  const [askDocBusy, setAskDocBusy] = useState<Id<"matterDocuments"> | null>(null);
+  // Extracted AI sources on this matter (to pin the viewed document's
+  // text for Ask This Document; undefined until loaded).
+  const aiSourcesForMatter = useQuery(
+    api.ai.listSources,
+    matterId ? { matterId } : "skip",
+  );
 
   const [partyName, setPartyName] = useState("");
   const [partySide, setPartySide] = useState("ours");
@@ -1033,6 +1045,56 @@ export default function MatterDetail() {
                             aria-hidden="true"
                           />
                           {d.requestedFromClient ? "Checklist ✓" : "Request"}
+                        </Button>
+                      )}
+                      {canNoteWrite && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="gap-1.5"
+                          disabled={askDocBusy === d._id}
+                          onClick={async () => {
+                            setAskDocBusy(d._id);
+                            try {
+                              // Ask This Document: analyse exactly the
+                              // Ask This Document: analyse exactly the
+                              // document being viewed. Its extracted AI
+                              // source (if any) is found and pinned as the
+                              // single source; without one, the assistant
+                              // says what is missing instead of guessing.
+                              const existing = (aiSourcesForMatter ?? []).find(
+                                (s) => s.documentId === d._id,
+                              );
+                              const jobId = await prepareAIJob({
+                                matterId: matterId!,
+                                kind: "ask_document",
+                                inputNote: `Analyse this document: ${d.name}`,
+                                sourceIds: existing
+                                  ? [existing._id as Id<"aiSources">]
+                                  : undefined,
+                              });
+                              toast.success(
+                                existing
+                                  ? "Ask This Document saved — grounded in the extracted text."
+                                  : "No extracted text for this document yet — the assistant will say exactly what is missing. Add it under Sources for a full analysis.",
+                              );
+                              setSearchParams(
+                                { tab: "ai", job: jobId },
+                                { replace: true },
+                              );
+                            } catch (err) {
+                              toast.error(
+                                err instanceof Error
+                                  ? err.message
+                                  : "Could not start the analysis.",
+                              );
+                            } finally {
+                              setAskDocBusy(null);
+                            }
+                          }}
+                        >
+                          <Bot className="size-4" aria-hidden="true" />
+                          Ask this document
                         </Button>
                       )}
                       {d.storageId && <DocumentLink documentId={d._id} />}

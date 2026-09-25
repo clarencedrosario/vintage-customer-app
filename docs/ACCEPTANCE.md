@@ -1,9 +1,59 @@
 # Acceptance report (section 30)
 
-Date: 25 September 2026 (updated after Feature 9 — Undertakings Register;
-Features 1–5 verified earlier). This report states what was actually
+Date: 25 September 2026 (updated after the Legal AI contextual modes;
+Features 1–5 and 9 verified earlier). This report states what was actually
 exercised and what was not. HTTP 200s and mocked tests are not treated as
 live proof.
+
+## Legal AI — contextual modes (implemented this run)
+
+**Built (backend):** five new AI kinds in `src/convex/ai.ts` —
+`ask_matter`, `ask_document`, `smart_timeline`, `compare`,
+`morning_briefing`, plus `legal_research` — all flowing through the
+existing job pipeline (saved requests, usage caps, idempotent claims,
+audit-visible history). `jobForRunner` assembles context server-side for
+the auto-context kinds: Ask My Matter / Smart Timeline read the matter's
+extracted sources (newest first, capped), Legal Research joins the
+chamber's APPROVED knowledge entries into one clearly-labelled
+"FIRM KNOWLEDGE" source. New prompts in `src/convex/aiRunner.ts` enforce
+source-anchored answers and, for research, the strict separation of
+retrieved authorities from AI-generated analysis with an explicit
+no-fabrication rule and an honest "no authority in the firm library"
+fallback. New `prepareMorningBriefing` and `prepareLegalResearch`
+mutations re-check access and the monthly token cap server-side; the
+briefing picks only matters the caller's role/team rule already allows.
+
+**Built (UI):** an "Ask My Matter" quick-bar at the top of the matter's
+AI tab (the open matter is understood — no picker); an "Ask this
+document" action on every document row in the Documents tab that pins
+that document's extracted source as the single context and deep-links to
+the result; an "AI briefing" button on the Morning Docket; and an "AI
+research" panel on the Legal Research page anchored to a matter. Kind
+labels added in both the studio and the AI page.
+
+**Safety properties (by construction):**
+- Access unchanged: every path still passes `requireAccess` /
+  `requireMatter`; sources only ever come from matters the caller can
+  open, and research reads only `approved` knowledge entries.
+- No fabricated authorities: the research prompt may cite only the
+  retrieved firm library, must mark anything else "AI-generated analysis
+  (verify before use)", and must say plainly when the library is silent.
+- Nothing consequential auto-acts: results remain reviewable drafts; no
+  deadlines, tasks, or messages are created without lawyer approval
+  (unchanged from the existing pipeline).
+- The restrained disclaimer is preserved: every output still carries the
+  "Draft — Professional Review Required" banner from the runner.
+- Honest failures: contextual requests with no extracted sources fail
+  with an explanatory message instead of an ungrounded answer.
+
+**Not verified (stated honestly):** no OpenAI key is configured in this
+environment, so no live model call was made — the prompts, access checks
+and pipeline compile and push, and the pre-existing safety tests still
+pass (271/271), but answer quality and citation behaviour require live
+verification by the operator. Contextual launchers were not clicked
+through live (no browser-driver tooling).
+
+## Feature 9 — Undertakings Register (earlier run)
 
 ## Automated verification performed
 

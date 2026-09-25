@@ -25,8 +25,9 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { toast } from "sonner";
+import { Sparkles } from "lucide-react";
 
 const KIND_META: Record<
   string,
@@ -63,6 +64,30 @@ export default function Attention() {
   const snooze = useMutation(api.attention.snooze);
   const restore = useMutation(api.attention.restore);
   const restoreAll = useMutation(api.attention.restoreAll);
+  const prepareBriefing = useMutation(api.ai.prepareMorningBriefing);
+  const navigate = useNavigate();
+
+  // AI Morning Briefing: one click → briefing job on the most recently
+  // active matter with extracted sources → straight to the AI result.
+  const [briefing, setBriefing] = useState(false);
+  const runBriefing = async () => {
+    setBriefing(true);
+    try {
+      const r = await prepareBriefing({});
+      if (!r) {
+        toast.error(
+          "No matter with extracted AI sources yet. Add documents to a matter's Sources tab first.",
+        );
+        return;
+      }
+      toast.success("Briefing requested — opening the result when it lands.");
+      navigate(`/matters/${r.matterId}?tab=ai&job=${r.jobId}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not start the briefing.");
+    } finally {
+      setBriefing(false);
+    }
+  };
 
   const [kindFilter, setKindFilter] = useState("all");
   const [personFilter, setPersonFilter] = useState("all");
@@ -121,15 +146,27 @@ export default function Attention() {
       subtitle="The Digital Chamber"
       title="Morning docket"
       actions={
-        <Button
-          size="sm"
-          variant="ghost"
-          className="gap-1.5"
-          onClick={() => setShowHidden((v) => !v)}
-        >
-          <Eye className="size-4" aria-hidden="true" />
-          {showHidden ? "Hide dismissed" : "Show dismissed"}
-        </Button>
+        <>
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1.5"
+            disabled={briefing}
+            onClick={runBriefing}
+          >
+            <Sparkles className="size-4" aria-hidden="true" />
+            {briefing ? "Preparing…" : "AI briefing"}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="gap-1.5"
+            onClick={() => setShowHidden((v) => !v)}
+          >
+            <Eye className="size-4" aria-hidden="true" />
+            {showHidden ? "Hide dismissed" : "Show dismissed"}
+          </Button>
+        </>
       }
     >
       <p className="text-sm text-muted-foreground">

@@ -120,6 +120,36 @@ function promptFor(kind: string, sources: Source[], note: string | null, transcr
         wantsJson: false,
         user: `Answer the lawyer's question using only the selected sources, with [source, p.N] anchors. If the sources do not answer it, say exactly what is missing.${noteLine}\n\n${ctx}`,
       };
+    case "ask_matter":
+      return {
+        wantsJson: false,
+        user: `This is "Ask My Matter": the lawyer is asking a question about THIS matter. Answer using only the matter sources below, with [source, p.N] anchors for every factual statement. If the sources do not contain the answer, say exactly what is missing and suggest which document would settle it. Never speculate about the court's view.${noteLine}\n\n${ctx}`,
+      };
+    case "ask_document":
+      return {
+        wantsJson: false,
+        user: `This is "Ask This Document": analyse the single document below. Provide: what the document is, its key contents with [source, p.N] anchors, dates and deadlines it creates, obligations it imposes and on whom, and anything ambiguous that needs the lawyer's read. Do not import knowledge about the wider case beyond this document unless the lawyer asks.${noteLine}\n\n${ctx}`,
+      };
+    case "smart_timeline":
+      return {
+        wantsJson: false,
+        user: `Produce a "Smart Timeline": a single chronological narrative of the matter built ONLY from the dated events in the sources below. For each entry: the date, a one-sentence description, and its [source, p.N] anchor. Mark dates the sources give only approximately as "(approx)". End with a short list of date gaps — periods the sources leave unexplained. Do not invent events to fill gaps.${noteLine}\n\n${ctx}`,
+      };
+    case "compare":
+      return {
+        wantsJson: false,
+        user: `Compare the two (or more) documents below. Report, with [source, p.N] anchors on both sides: substantive differences in obligations, dates, amounts and parties; clauses present in one but absent from the other; and any contradiction between them. Neutral, factual tone; no advice on which version is better unless the lawyer asks.${noteLine}\n\n${ctx}`,
+      };
+    case "morning_briefing":
+      return {
+        wantsJson: false,
+        user: `This is the "AI Morning Briefing". From the sources below (drawn from the chamber's matters), produce a restrained start-of-day note: (1) the dates and deadlines appearing in these materials that fall due within the next 14 days, each with its [source, p.N] anchor; (2) obligations or directions that appear outstanding; (3) open items the sources show as unresolved. Label every entry with its source. If a matter's sources are silent, say that matter had no dated material. No predictions, no strategy.${noteLine}\n\n${ctx}`,
+      };
+    case "legal_research":
+      return {
+        wantsJson: false,
+        user: `The lawyer is researching a legal question. Two source groups may appear below: "FIRM KNOWLEDGE" entries (the chamber's own approved precedents, research notes and saved authorities — real, verified material) and "MATTER SOURCES" (case documents).\n\nSTRICT RULES:\n- Treat only FIRM KNOWLEDGE entries marked as authorities/precedents as retrieved legal authority; name them exactly as recorded.\n- NEVER invent case names, citations, dates, courts or provisions. If no retrieved authority bears on the question, state plainly: "No authority in the firm library bears on this question" — do not fabricate.\n- Anything you produce that is analysis rather than retrieved material must be headed "AI-generated analysis (verify before use)".\n- For each retrieved authority cited, quote or summarise the passage it records and note its source reference.\n- Suggest, concretely, which court or official source the lawyer could check next — as a suggestion, never as a citation.${noteLine}\n\n${ctx}`,
+      };
     case "opposition":
       return {
         wantsJson: false,
@@ -303,6 +333,19 @@ export const runJob = internalAction({
 
     const payload = await ctx.runQuery(internal.ai.jobForRunner, { jobId: args.jobId });
     if (!payload) return;
+
+    // Contextual kinds with nothing extracted yet: fail honestly — never
+    // let the model answer "from memory".
+    if (payload.noSourcesAvailable) {
+      await ctx.runMutation(internal.ai.attachError, {
+        jobId: args.jobId,
+        error:
+          payload.kind === "morning_briefing"
+            ? "No extracted sources are available yet. Add documents to a matter's Sources tab, then request the briefing."
+            : "No extracted sources on this matter yet. Add documents to the Sources tab, then ask again.",
+      });
+      return;
+    }
 
     // Voice-to-workflow: pull the preserved recording out of storage and
     // transcribe it before building the prompt. The transcript is saved

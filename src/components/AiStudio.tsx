@@ -64,6 +64,12 @@ const KIND_LABELS: Record<string, string> = {
   evidence_map: "Evidence map suggestions",
   assertion_review: "Unsupported assertion review",
   voice_note: "Voice note (post-court)",
+  ask_matter: "Ask My Matter",
+  ask_document: "Ask This Document",
+  smart_timeline: "Smart Timeline",
+  compare: "Document comparison",
+  morning_briefing: "Morning briefing",
+  legal_research: "Legal research",
 };
 
 const NEEDS_SOURCES = new Set([
@@ -72,7 +78,11 @@ const NEEDS_SOURCES = new Set([
   "assertion_review",
   "opposition",
   "summary",
+  "ask_document",
 ]);
+
+/** Kinds that gather their own matter context server-side (no picking). */
+const AUTO_CONTEXT_KINDS = new Set(["ask_matter", "smart_timeline", "morning_briefing", "legal_research"]);
 
 type SourceRow = Doc<"aiSources">;
 
@@ -119,6 +129,9 @@ export function AiStudio({ matterId }: { matterId: Id<"matters"> }) {
   const [inputNote, setInputNote] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
   const [launching, setLaunching] = useState(false);
+  // Contextual Ask My Matter bar (this matter is already understood).
+  const [askMatter, setAskMatter] = useState("");
+  const [askBusy, setAskBusy] = useState(false);
 
   const [srcName, setSrcName] = useState("");
   const [srcRole, setSrcRole] = useState("our_client");
@@ -480,6 +493,63 @@ export function AiStudio({ matterId }: { matterId: Id<"matters"> }) {
                   </Badge>
                 )}
               </div>
+              {/* Contextual quick-ask: the assistant already understands
+                  which matter is open — no picker, no setup. */}
+              <div className="flex flex-col gap-2 rounded-md border border-[#B68A45]/40 bg-[#B68A45]/[0.04] p-3 sm:flex-row">
+                <Input
+                  aria-label="Ask My Matter"
+                  value={askMatter}
+                  onChange={(e) => setAskMatter(e.target.value)}
+                  placeholder="Ask My Matter — e.g. what deadlines does the record create this month?"
+                  onKeyDown={async (e) => {
+                    if (e.key === "Enter" && askMatter.trim() && !askBusy && !overCap) {
+                      setAskBusy(true);
+                      try {
+                        const jobId = await prepareJobFn({
+                          matterId,
+                          kind: "ask_matter",
+                          inputNote: askMatter,
+                        });
+                        setAskMatter("");
+                        setOpenJob(jobId);
+                        toast.success("Question saved — grounded in this matter's sources.");
+                      } catch (err) {
+                        toast.error(err instanceof Error ? err.message : "Failed.");
+                      } finally {
+                        setAskBusy(false);
+                      }
+                    }
+                  }}
+                />
+                <Button
+                  variant="outline"
+                  disabled={askBusy || !askMatter.trim() || overCap}
+                  onClick={async () => {
+                    setAskBusy(true);
+                    try {
+                      const jobId = await prepareJobFn({
+                        matterId,
+                        kind: "ask_matter",
+                        inputNote: askMatter,
+                      });
+                      setAskMatter("");
+                      setOpenJob(jobId);
+                      toast.success("Question saved — grounded in this matter's sources.");
+                    } catch (err) {
+                      toast.error(err instanceof Error ? err.message : "Failed.");
+                    } finally {
+                      setAskBusy(false);
+                    }
+                  }}
+                >
+                  {askBusy ? (
+                    <Loader2 className="mr-1.5 size-4 animate-spin" />
+                  ) : (
+                    <Sparkles className="mr-1.5 size-4" />
+                  )}
+                  Ask
+                </Button>
+              </div>
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="space-y-1.5">
                   <Label htmlFor="ai-kind">What should the assistant do?</Label>
@@ -512,8 +582,12 @@ export function AiStudio({ matterId }: { matterId: Id<"matters"> }) {
                 {selected.length} source{selected.length === 1 ? "" : "s"} will
                 be sent.{" "}
                 {NEEDS_SOURCES.has(kind) && selected.length === 0
-                  ? "This request requires at least one selected source."
-                  : "Select sources on the left to ground the answer."}
+                  ? kind === "ask_document"
+                    ? "Select exactly the one document you are viewing (add it under Sources first if missing)."
+                    : "This request requires at least one selected source."
+                  : AUTO_CONTEXT_KINDS.has(kind)
+                    ? "The assistant gathers this matter's extracted sources itself — you see only what your access already allows."
+                    : "Select sources on the left to ground the answer."}
               </p>
               <div className="flex flex-wrap gap-2">
                 <Button

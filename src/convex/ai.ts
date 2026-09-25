@@ -172,12 +172,14 @@ export const AI_KINDS = [
   "assertion_review",
   "voice_note",
   // Legal AI contextual modes (Ask My Matter / Ask This Document /
-  // Smart Timeline / Document Comparison / AI Morning Briefing).
+  // Smart Timeline / Document Comparison / AI Morning Briefing) and
+  // section 18 legal research over the chamber's own verified library.
   "ask_matter",
   "ask_document",
   "smart_timeline",
   "compare",
   "morning_briefing",
+  "legal_research",
 ] as const;
 
 /**
@@ -227,8 +229,6 @@ export const prepareJob = mutation({
     inputNote: v.optional(v.string()),
     transcript: v.optional(v.string()),
     storageId: v.optional(v.id("_storage")),
-    // Ask This Document: the document being viewed.
-    documentId: v.optional(v.id("matterDocuments")),
   },
   handler: async (ctx, args) => {
     const ac = await requireAccess(ctx);
@@ -267,19 +267,16 @@ export const prepareJob = mutation({
       }
     }
 
-    // Ask This Document: the question is anchored to ONE document. The
-    // caller must be able to open the matter; the source must belong to
-    // that matter. The runner receives exactly that source.
+    // Ask This Document: the question must be anchored to a document
+    // that already has an extracted AI source on this matter (extraction
+    // is the explicit act — the studio's Sources tab). The job simply
+    // pins THAT source, so the runner answers from exactly one document
+    // and the citations name it.
     if (args.kind === "ask_document") {
-      if (!args.documentId) {
-        throw new Error("Ask This Document needs the document you are viewing.");
-      }
-      if (sourceIds.length > 0) {
-        throw new Error("Ask This Document uses the document itself; do not select extra sources.");
-      }
-      const doc = await ctx.db.get(args.documentId);
-      if (!doc || doc.matterId !== args.matterId) {
-        throw new Error("That document is not on this matter.");
+      if (sourceIds.length !== 1) {
+        throw new Error(
+          "Ask This Document answers from one document. Add the document to Sources first (Sources tab), then ask.",
+        );
       }
     }
 
@@ -292,7 +289,6 @@ export const prepareJob = mutation({
       inputNote: args.inputNote?.trim().slice(0, 4000) || undefined,
       transcript: args.transcript?.slice(0, 40_000),
       storageId: args.storageId,
-      documentId: args.documentId,
       monthKey: key,
       requestedById: ac.user._id,
       createdAt: Date.now(),
@@ -369,7 +365,19 @@ export const claimPendingJob = internalMutation({
   },
 });
 
-/** Full job payload for the Node runner (internal, after a claim won). */
+/**
+ * Full job payload for the Node runner (internal, after a claim won).
+ *
+ * Contextual AI kinds assemble their sources here, server-side, from
+ * matter context the requesting lawyer already had access to:
+ *  - ask_matter / smart_timeline: the matter's extracted sources
+ *    (newest first, capped) — the caller could already open the matter,
+ *    and sources only exist where a member with document access made
+ *    them, so no new information is exposed.
+ *  - morning_briefing: the caller's own matters are resolved in
+ *    prepareMorningBriefing and stored as the job's source set.
+ * Explicit-selection kinds (studio) pass exactly the selected sources.
+ */
 export const jobForRunner = internalQuery({
   args: { jobId: v.id("aiJobs") },
   handler: async (ctx, args) => {
@@ -381,12 +389,73 @@ export const jobForRunner = internalQuery({
       text: string;
       pages?: Array<{ page: number; text: string }>;
     }> = [];
-    for (const sid of job.sourceIds ?? []) {
-      const s = await ctx.db.get(sid);
-      if (s) {
+
+    if (job.kind === "legal_research" && (job.sourceIds ?? []).length === 0) {
+      // FIRM KNOWLEDGE: approved entries only, joined into one clearly
+      // labelled source. The prompt forbids treating anything else as
+      // retrieved authority.
+      const entries = await ctx.db
+        .query("knowledgeEntries")
+        .withIndex("by_org", (q) => q.eq("orgId", job.orgId))
+        .collect();
+      const approved = entries
+        .filter((e) => e.state === "approved")
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .slice(0, 20);
+      const parts: string[] = [];
+      for (const e of approved) {
+        const versions = await ctx.db
+          .query("knowledgeVersions")
+          .withIndex("by_entry", (q) => q.eq("entryId", e._id))
+          .collect();
+        const latest = versions.sort((a, b) => b.version - a.version)[0];
+        if (!latest) continue;
+        const kindLabel =
+          e.kind === "authority" ? "Saved authority"
+          : e.kind === "precedent" ? "Precedent"
+          : e.kind === "template" ? "Template"
+          : "Research note";
+        parts.push(
+          `[${kindLabel}] ${e.title} (v${latest.version}${latest.sourceRef ? `; ref: ${latest.sourceRef}` : ""}${latest.sourceUrl ? `; url: ${latest.sourceUrl}` : ""})\n${(latest.body ?? "").slice(0, 6_000)}`,
+        );
+      }
+      sources.push({
+        name: "FIRM KNOWLEDGE (approved library)",
+        role: "other",
+        text: parts.join("\n\n---\n\n"),
+      });
+      // Matter documents add context; without knowledge entries the
+      // prompt's strict no-fabrication rules still hold.
+      const matterRows = await ctx.db
+        .query("aiSources")
+        .withIndex("by_matter", (q) => q.eq("matterId", job.matterId))
+        .collect();
+      matterRows.sort((a, b) => b.createdAt - a.createdAt);
+      for (const s of matterRows.slice(0, 6)) {
         sources.push({ name: s.name, role: s.role, text: s.text, pages: s.pages });
       }
+    } else if (AUTO_SOURCE_KINDS.has(job.kind) && (job.sourceIds ?? []).length === 0) {
+      const rows = await ctx.db
+        .query("aiSources")
+        .withIndex("by_matter", (q) => q.eq("matterId", job.matterId))
+        .collect();
+      rows.sort((a, b) => b.createdAt - a.createdAt);
+      const cap = job.kind === "morning_briefing" ? MORNING_BRIEFING_SOURCE_CAP : 8;
+      for (const s of rows.slice(0, cap)) {
+        sources.push({ name: s.name, role: s.role, text: s.text, pages: s.pages });
+      }
+    } else {
+      for (const sid of job.sourceIds ?? []) {
+        const s = await ctx.db.get(sid);
+        if (s) {
+          sources.push({ name: s.name, role: s.role, text: s.text, pages: s.pages });
+        }
+      }
     }
+
+    // A morning briefing across a chamber's matters is not meaningful if
+    // nothing has been extracted yet — the runner fails the job honestly
+    // instead of letting the model answer from nothing.
     return {
       kind: job.kind,
       matterId: job.matterId,
@@ -394,6 +463,8 @@ export const jobForRunner = internalQuery({
       inputNote: job.inputNote ?? null,
       transcript: job.transcript ?? null,
       storageId: job.storageId ?? null,
+      noSourcesAvailable:
+        AUTO_SOURCE_KINDS.has(job.kind) && sources.length === 0,
       sources,
     };
   },
@@ -556,6 +627,174 @@ export const listJobs = query({
         createdAt: r.createdAt,
         completedAt: r.completedAt ?? null,
       }));
+  },
+});
+
+/**
+ * Legal research (section 18 + the Legal AI spec): the lawyer states a
+ * question; the assistant receives the chamber's APPROVED knowledge
+ * entries (authorities, precedents, research notes) as "FIRM KNOWLEDGE"
+ * sources and matter sources, and is forbidden from inventing anything
+ * not retrieved. Anchored to a matter so access and the result live in
+ * the matter's AI tab. Knowledge text is joined into ONE synthetic
+ * source so the runner's prompt contract stays unchanged.
+ */
+export const prepareLegalResearch = mutation({
+  args: {
+    matterId: v.id("matters"),
+    question: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    if (!can(ac, "note.write")) {
+      throw new Error("You need note-writing permission to use AI assistance.");
+    }
+    await requireMatter(ctx, ac, args.matterId);
+    const question = args.question.trim();
+    if (!question) throw new Error("State the legal question to research.");
+
+    // Usage cap (same policy as prepareJob).
+    const key = monthKeyIST();
+    const month = await ctx.db
+      .query("aiJobs")
+      .withIndex("by_org_month", (q) => q.eq("orgId", ac.org._id).eq("monthKey", key))
+      .collect();
+    const used = month.reduce(
+      (s, r) => s + (r.promptTokens ?? 0) + (r.completionTokens ?? 0),
+      0,
+    );
+    if (used >= MONTHLY_TOKEN_LIMIT) {
+      throw new Error(
+        "The chamber's monthly AI usage allowance is exhausted. It resets next month; ask the firm owner to review usage.",
+      );
+    }
+
+    // Approved firm-knowledge entries only — drafts are never research.
+    const entries = await ctx.db
+      .query("knowledgeEntries")
+      .withIndex("by_org", (q) => q.eq("orgId", ac.org._id))
+      .collect();
+    const approved = entries
+      .filter((e) => e.state === "approved")
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, 20);
+
+    // Latest version body per entry.
+    const knowledgeParts: string[] = [];
+    for (const e of approved) {
+      const versions = await ctx.db
+        .query("knowledgeVersions")
+        .withIndex("by_entry", (q) => q.eq("entryId", e._id))
+        .collect();
+      const latest = versions.sort((a, b) => b.version - a.version)[0];
+      if (!latest) continue;
+      const kindLabel =
+        e.kind === "authority" ? "Saved authority"
+        : e.kind === "precedent" ? "Precedent"
+        : e.kind === "template" ? "Template"
+        : "Research note";
+      knowledgeParts.push(
+        `[${kindLabel}] ${e.title} (v${latest.version}${latest.sourceRef ? `; ref: ${latest.sourceRef}` : ""}${latest.sourceUrl ? `; url: ${latest.sourceUrl}` : ""})\n${(latest.body ?? "").slice(0, 6_000)}`,
+      );
+    }
+
+    const id = await ctx.db.insert("aiJobs", {
+      orgId: ac.org._id,
+      matterId: args.matterId,
+      kind: "legal_research",
+      status: "pending",
+      inputNote: question.slice(0, 4000),
+      monthKey: key,
+      requestedById: ac.user._id,
+      createdAt: Date.now(),
+    });
+
+    // The joined library is stored on the job via sourceIds-less path:
+    // the runner reads it from jobForRunner, which assembles the
+    // synthetic FIRM KNOWLEDGE source from approved entries.
+    await ctx.scheduler.runAfter(0, internal.aiRunner.runJob, {
+      jobId: id,
+      occurrenceKey: `ai:${id}`,
+    });
+    return id;
+  },
+});
+
+/**
+ * AI Morning Briefing (one click from the Morning Docket): creates a
+ * briefing job on the caller's most recently updated matter that HAS
+ * extracted sources. One job per matter keeps every answer grounded,
+ * cited and access-checked; the docket links straight to the result.
+ * Access: requireAccess first, then the matter is chosen only from
+ * matters whose team includes the caller (the shared view rule).
+ */
+export const prepareMorningBriefing = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const ac = await requireAccess(ctx);
+    if (!can(ac, "note.write")) {
+      throw new Error("You need note-writing permission to use AI assistance.");
+    }
+
+    // Usage cap first (same policy as prepareJob).
+    const key = monthKeyIST();
+    const month = await ctx.db
+      .query("aiJobs")
+      .withIndex("by_org_month", (q) => q.eq("orgId", ac.org._id).eq("monthKey", key))
+      .collect();
+    const used = month.reduce(
+      (s, r) => s + (r.promptTokens ?? 0) + (r.completionTokens ?? 0),
+      0,
+    );
+    if (used >= MONTHLY_TOKEN_LIMIT) {
+      throw new Error(
+        "The chamber's monthly AI usage allowance is exhausted. It resets next month; ask the firm owner to review usage.",
+      );
+    }
+
+    // The caller's visible matters, most recently active first.
+    const matters = await ctx.db
+      .query("matters")
+      .withIndex("by_org", (q) => q.eq("orgId", ac.org._id))
+      .collect();
+    matters.sort((a, b) => b.updatedAt - a.updatedAt);
+
+    for (const matter of matters.slice(0, MORNING_BRIEFING_MATTER_CAP)) {
+      // The same pure team/role rule every module uses (cross-tenant is
+      // impossible here — matters came from this org's index — but a
+      // team-restricted matter must not leak into the briefing).
+      const restricted = matter.restrictedToTeam === true;
+      const onTeam =
+        matter.leadLawyerId === ac.user._id ||
+        (matter.teamIds ?? []).includes(ac.user._id);
+      const privileged =
+        ac.membership.orgRole === "owner" ||
+        ac.membership.orgRole === "partner" ||
+        ac.membership.orgRole === "administrator";
+      if (restricted && !onTeam && !privileged) continue;
+
+      const src = await ctx.db
+        .query("aiSources")
+        .withIndex("by_matter", (q) => q.eq("matterId", matter._id))
+        .first();
+      if (!src) continue; // nothing extracted on this matter yet
+
+      const jobId = await ctx.db.insert("aiJobs", {
+        orgId: ac.org._id,
+        matterId: matter._id,
+        kind: "morning_briefing",
+        status: "pending",
+        monthKey: key,
+        requestedById: ac.user._id,
+        createdAt: Date.now(),
+      });
+      await ctx.scheduler.runAfter(0, internal.aiRunner.runJob, {
+        jobId,
+        occurrenceKey: `ai:${jobId}`,
+      });
+      return { jobId, matterId: matter._id };
+    }
+    return null;
   },
 });
 

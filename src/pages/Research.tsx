@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
 import { useMutation, useQuery } from "convex/react";
 import {
   BookOpen,
@@ -20,9 +21,10 @@ import {
   Landmark,
   Scale,
   Search,
+  Sparkles,
   StickyNote,
 } from "lucide-react";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -68,6 +70,48 @@ export default function Research() {
 
   const create = useMutation(api.knowledge.create);
 
+  // ---- AI research over the chamber's own verified library (section 18 + Legal AI) ----
+  // The assistant receives the chamber's APPROVED knowledge entries as
+  // "FIRM KNOWLEDGE" material. Retrieved authorities and AI-generated
+  // analysis are strictly separated in the prompt; the runner refuses to
+  // invent citations. The result opens on the matter's AI tab, and can
+  // be saved back to the matter as a research note.
+  const matters = useQuery(api.matters.list) as
+    | Array<{ _id: Id<"matters">; reference: string; title: string; status: string }>
+    | undefined;
+  const prepareResearch = useMutation(api.ai.prepareLegalResearch);
+  const navigate = useNavigate();
+  const [researchOpen, setResearchOpen] = useState(false);
+  const [researchQuestion, setResearchQuestion] = useState("");
+  const [researchMatter, setResearchMatter] = useState("");
+  const [researchBusy, setResearchBusy] = useState(false);
+
+  const runResearch = async () => {
+    if (!researchMatter) {
+      toast.error("Choose the matter to anchor this research to (it keeps access checks honest).");
+      return;
+    }
+    if (!researchQuestion.trim()) {
+      toast.error("State the legal question to research.");
+      return;
+    }
+    setResearchBusy(true);
+    try {
+      const jobId = await prepareResearch({
+        matterId: researchMatter as Id<"matters">,
+        question: researchQuestion,
+      });
+      toast.success("Research request saved — opening the result when it lands.");
+      setResearchOpen(false);
+      setResearchQuestion("");
+      navigate(`/matters/${researchMatter}?tab=ai&job=${jobId}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not start the research.");
+    } finally {
+      setResearchBusy(false);
+    }
+  };
+
   const submit = async () => {
     try {
       await create({
@@ -91,9 +135,19 @@ export default function Research() {
       subtitle="The Digital Chamber"
       title="Legal Research"
       actions={
-        <Button size="sm" variant="outline" onClick={() => setAuthoring((s) => !s)}>
-          {authoring ? "Close" : "New note or authority"}
-        </Button>
+        <>
+          <Button
+            size="sm"
+            className="gap-1.5"
+            onClick={() => setResearchOpen((s) => !s)}
+          >
+            <Sparkles className="size-4" aria-hidden="true" />
+            {researchOpen ? "Close" : "AI research"}
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => setAuthoring((s) => !s)}>
+            {authoring ? "Close" : "New note or authority"}
+          </Button>
+        </>
       }
     >
       <div className="space-y-5">
@@ -107,11 +161,64 @@ export default function Research() {
                 each with authors, versions and source links. Advokate does
                 not pretend to search live case-law databases: a genuine
                 research integration would be a separate, clearly-labelled
-                connection.
+                connection. AI research (below) works over the same
+                approved library and will never present an invented case as
+                an authority — retrieved material and AI analysis are
+                labelled separately.
               </span>
             </p>
           </CardContent>
         </Card>
+
+        {researchOpen && (
+          <Card className="rule-frame bg-card">
+            <CardContent className="space-y-3 p-4">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="res-ai-matter">Anchor matter</Label>
+                  <Select value={researchMatter} onValueChange={setResearchMatter}>
+                    <SelectTrigger id="res-ai-matter">
+                      <SelectValue placeholder="Choose a matter" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(matters ?? [])
+                        .filter((m) => m.status !== "closed" && m.status !== "archived")
+                        .map((m) => (
+                          <SelectItem key={m._id} value={m._id}>
+                            {m.reference} — {m.title}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex items-end">
+                  <p className="text-xs text-muted-foreground">
+                    Searches your approved knowledge entries only. The
+                    answer cites retrieved authorities by name and separates
+                    them from AI-generated analysis.
+                  </p>
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="res-ai-q">Legal question</Label>
+                <Input
+                  id="res-ai-q"
+                  value={researchQuestion}
+                  onChange={(e) => setResearchQuestion(e.target.value)}
+                  placeholder="e.g. What does the firm's library record on specific-performance notice requirements?"
+                />
+              </div>
+              <Button
+                size="sm"
+                disabled={researchBusy || !researchQuestion.trim() || !researchMatter}
+                onClick={runResearch}
+              >
+                <Sparkles className="mr-1.5 size-4" aria-hidden="true" />
+                {researchBusy ? "Saving request…" : "Save request & run"}
+              </Button>
+            </CardContent>
+          </Card>
+        )}
 
         {authoring && (
           <Card className="rule-frame bg-card">

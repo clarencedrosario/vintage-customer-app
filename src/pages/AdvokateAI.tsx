@@ -46,6 +46,12 @@ const KIND_LABELS: Record<string, string> = {
   evidence_map: "Evidence map",
   assertion_review: "Assertion review",
   voice_note: "Voice note",
+  ask_matter: "Ask My Matter",
+  ask_document: "Ask This Document",
+  smart_timeline: "Smart Timeline",
+  compare: "Document comparison",
+  morning_briefing: "Morning briefing",
+  legal_research: "Legal research",
 };
 
 export default function AdvokateAI() {

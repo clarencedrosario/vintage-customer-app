@@ -57,6 +57,7 @@ the pack builder can be reopened with that next hearing already selected.
 | Firm knowledge | Precedents/templates/notes/authorities, versions, approval states |
 | Court info | Cause-list import/link, court updates, source labels |
 | AI/OCR | Studio, sources with roles, 12 job kinds, usage caps, audit |
+| Legal AI (contextual) | Ask My Matter quick-ask, Ask This Document (pinned single-source), Smart Timeline, Document Comparison, AI Morning Briefing from the docket, Legal Research over the approved firm library with strict retrieved-vs-generated labelling |
 | Offline mode | Bundle prepare/sync, queued notes, conflicts, expiry |
 | Import | 5 entities, validation/preview/duplicates/error report, apply-once |
 | Backups | Archive export, restore-test register, documented procedure |
@@ -68,6 +69,7 @@ the pack builder can be reopened with that next hearing already selected.
 | Area | What is needed from you |
 | --- | --- |
 | AI/OCR live calls | OpenAI API key (server-side env); usage-based cost |
+| Legal-authority verification | AI research cites only the firm's own approved library; no external case-law provider is configured, so retrieved authorities are limited to that library by design |
 | Payments (SaaS, consultations, promotions) | Merchant account + webhook secret; per-transaction fees |
 | Email/SMS delivery | Provider credentials for outbound notifications |
 | Paid legal-service advertising | Professional-advertising rules review for your jurisdiction (policy obligation) |
