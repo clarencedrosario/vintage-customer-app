@@ -35,7 +35,7 @@ describe("calendar-day counting", () => {
     const r = calculateDeadline(rule({}), "2026-03-02", new Map());
     expect(r.dueDate).toBe("2026-04-01"); // Mar 2 + 30 = Apr 1
     expect(r.breakdown.some((b) => b.includes("calendar day"))).toBe(true);
-    expect(r.breakdown.at(-1)).toContain("2026-04-01");
+    expect(r.breakdown[r.breakdown.length - 1]).toContain("2026-04-01");
   });
 
   it("treats the trigger day as day 1 when included", () => {

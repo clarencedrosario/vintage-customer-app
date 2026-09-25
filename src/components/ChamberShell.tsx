@@ -33,6 +33,7 @@ import {
   FolderOpen,
   Gavel,
   Landmark,
+  ListChecks,
   LogOut,
   Menu,
   Receipt,
@@ -67,6 +68,7 @@ const NAV_GROUPS: { heading: string; items: NavItem[] }[] = [
       { to: "/calendar", label: "Calendar", icon: CalendarDays },
       { to: "/court-day", label: "Court Day", icon: Gavel },
       { to: "/tasks", label: "Tasks & Deadlines", icon: ClipboardList },
+      { to: "/deadline-rules", label: "Deadline Rules", icon: ListChecks },
     ],
   },
   {

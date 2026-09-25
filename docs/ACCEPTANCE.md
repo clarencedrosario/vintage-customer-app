@@ -1,7 +1,7 @@
 # Acceptance report (section 30)
 
-Date: 25 September 2026 (updated after Feature 4 — Client Intake & Matter
-Opening; Features 1–3 verified earlier). This report states what was actually
+Date: 25 September 2026 (updated after Feature 5 — Deadline Rules Engine;
+Features 1–4 verified earlier). This report states what was actually
 exercised and what was not. HTTP 200s and mocked tests are not treated as
 live proof.
 
@@ -10,7 +10,7 @@ live proof.
 | Check | Result |
 | --- | --- |
 | TypeScript (solution build, `tsc -b --noEmit`) | **0 errors** (app, node, tests projects) |
-| Unit & component tests (`bun run test`, vitest) | **202 passed / 0 failed** (14 files) |
+| Unit & component tests (`bun run test`, vitest) | **222 passed / 0 failed** (15 files) |
 | Production build (`bun run build`) | **Passes** — clean bundle, ~16s |
 | Convex functions push (`bun convex dev --once`) | **Success** — includes `commandCentre.matterOverview` |
 | Dependency audit (`bun audit`) | **0 vulnerabilities** (as of the last full check) |
@@ -60,7 +60,72 @@ environment, so the tab was **not** clicked through live; cross-tenant denial
 over a real two-tenant HTTP session is covered at the decision layer only
 (see item 8 below).
 
-## Feature 4 — Client Intake & Matter Opening (implemented this run)
+## Feature 5 — Deadline Rules Engine (implemented this run)
+
+**Built:** `src/lib/deadlineRules.ts` (pure calculation core),
+`src/lib/deadlineRules.test.ts` (20 tests), `src/convex/deadlineRules.ts`
+(server module), four new tables in `schemaExtras.ts` spread into the schema
+(`deadlineRules`, `deadlineRuleVersions`, `courtHolidays`, `ruleDeadlines`),
+and `src/pages/DeadlineRules.tsx` (`/deadline-rules` desk: Rule deadlines,
+Rules, Court holidays, Critical watch tabs) with route + sidebar entry.
+
+- **Versioned rules:** jurisdiction, authority/court, practice area,
+  trigger event, calendar-vs-working-day count, trigger-day treatment
+  (excluded / counts as day 1), weekend rule (Sat+Sun / Sun only), holiday
+  rule (skip / count), before/after direction, criticality, reminder days
+  and effective dates. Editing a rule creates a NEW immutable version row;
+  the exact version used is frozen onto every generated draft, so rule
+  changes never retroactively alter approved deadlines.
+- **Complete calculation breakdown:** every draft stores the human-readable
+  rule sentence (`calcRule`), a step-by-step `breakdown` array (trigger
+  treatment, skips with reasons, landing adjustment, final due date) and
+  the `sourceSentence` naming the source record and its date. The same
+  breakdown is shown live in the desk ("Calculation" dialog).
+- **Generation from hearings and orders:** `generateFromTrigger` runs every
+  active, effective rule matching the chosen trigger (order passed,
+  hearing adjourned/held, filing done, service completed, manual) against
+  the org's court holidays; `suggestTriggers` lists recent orders and held/
+  adjourned hearings of the matter as candidate sources.
+- **Duplicate prevention:** the `dedupeKey` is deterministic per
+  rule+version+trigger+source, enforced by a unique-style indexed lookup —
+  retries never double-generate, rejected drafts are kept and reported
+  ("already generated and rejected (kept for audit)"), never regenerated.
+- **Approval gate:** drafts sit in `draft` status until an authorized
+  lawyer (`matter.edit`) approves them individually or through the clear
+  bulk action ("Approve all for [matter]"); only approval creates the real
+  `deadlines` row (exactly-once guarded by `deadlineId`) and a chronology
+  event. Rejection requires a note and is preserved for audit.
+- **No silent overwrites:** post-approval `adjustDate` requires an explicit
+  reason, keeps the previous date in the draft's `adjustments` history and
+  appends a history entry on the underlying deadline row. `extend`,
+  `vacate`, `complete`, `markMissed` and `acknowledge` cover the full
+  lifecycle; every transition is audit-logged.
+- **Escalation:** the Critical watch tab lists approved critical deadlines
+  within 3 days of falling due (or past due) until acknowledged;
+  `escalationTier` (pure, unit-tested) encodes the ladder.
+- **Configurable court holidays:** org-scoped, optionally per court, used
+  by working-day counting and the landing adjustment.
+- **Access control:** every query is org-scoped by index and matter-gated
+  through the shared `canViewMatter` rule; rules/holidays management
+  requires `task.manage`, approvals/adjustments require `matter.edit`;
+  every mutation is audit-logged. Cross-tenant ids are "not found".
+
+**Tests added:** `src/lib/deadlineRules.test.ts` (20 tests) — calendar and
+working-day counting, weekend variants (Sat+Sun, Sun-only), court holidays
+(skip and count), trigger-day treatment (excluded / included), before
+(direction), landing adjustment with breakdown assertions, rule selection
+specificity (authority > practice area > jurisdiction), effective windows
+(no retroactive version change), dedupe key determinism per
+rule+version+trigger, source sentences, escalation tiers and input
+validation. Tenant isolation and matter access reuse the shared policy
+layer covered by `accessPolicy.test.ts`.
+
+**Not verified (stated honestly):** no browser-driver tooling, so the desk
+was not clicked through live; the escalation scan is query-driven ( surfaced
+on the Critical watch tab) and is not yet wired into the cron reminder
+email path.
+
+## Feature 4 — Client Intake & Matter Opening (earlier run)
 
 **Built:** `src/lib/intakeFlow.ts` (pure lifecycle/required-fields/KYC/duplicate/
 invitation/acceptance/approval-guard engine), `src/lib/intakeFlow.test.ts`

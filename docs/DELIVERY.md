@@ -43,6 +43,7 @@ the pack builder can be reopened with that next hearing already selected.
 | Hearings | Schedule/edit, outcome + next hearing (now wired to UI), authorities |
 | Chronology & docket | Events with precision, per-matter docket, audit log |
 | Tasks & deadlines | Desk with views, deadlines with IST day-end, playbooks (template + apply) |
+| Deadline rules engine | Versioned rules, court holidays, drafts from orders/hearings, lawyer approval, adjustments with reasons, escalation (Feature 5) |
 | Documents | Upload/share/version metadata, request flow, review desk, comparison |
 | Drafts | Versions, comments, review/approval desk, client-update gate |
 | Billing | Time/expense, invoices from matter, payments, reconciliation, PDF |

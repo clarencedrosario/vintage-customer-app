@@ -32,6 +32,7 @@ const Billing = lazy(() => import("./pages/Billing.tsx"));
 const Platform = lazy(() => import("./pages/Platform.tsx"));
 const Knowledge = lazy(() => import("./pages/Knowledge.tsx"));
 const Tasks = lazy(() => import("./pages/Tasks.tsx"));
+const DeadlineRules = lazy(() => import("./pages/DeadlineRules.tsx"));
 const Drafts = lazy(() => import("./pages/Drafts.tsx"));
 const Comms = lazy(() => import("./pages/Comms.tsx"));
 const OfflineCentre = lazy(() => import("./pages/OfflineCentre.tsx"));
@@ -271,6 +272,14 @@ createRoot(document.getElementById("root")!).render(
                 element={
                   <RequireAuth>
                     <Tasks />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/deadline-rules"
+                element={
+                  <RequireAuth>
+                    <DeadlineRules />
                   </RequireAuth>
                 }
               />

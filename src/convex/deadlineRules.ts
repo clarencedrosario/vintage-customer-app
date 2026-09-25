@@ -9,16 +9,27 @@
 //     retroactively recomputed.
 //   - dedupeKey is deterministic per rule+version+trigger, so retries
 //     never double-generate.
-//   - Critical deadlines require explicit approval and acknowledgement;
-//     nothing is silently overwritten (adjustments keep reasons).
-//   - Client-visible output (the notification) only ever mentions the
-//     approved deadline — drafts are internal.
+//   - Critical deadlines require explicit approval; adjustments keep a
+//     reason and the previous date — nothing is silently overwritten.
 // =====================================================================
 
 import { v } from "convex/values";
-import { query, mutation, internalMutation } from "./_generated/server";
+import {
+  internalMutation,
+  mutation,
+  query,
+  type MutationCtx,
+  type QueryCtx,
+} from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
-import { can, getAccessContext, requireAccess, requireCapability, requireMatter } from "./access";
+import {
+  canViewMatter,
+  getAccessContext,
+  requireAccess,
+  requireCapability,
+  requireMatter,
+  type AccessContext,
+} from "./access";
 import {
   calculateDeadline,
   dedupeKey as makeDedupeKey,
@@ -26,10 +37,10 @@ import {
   type DeadlineRuleSpec,
   type HolidayMap,
 } from "../lib/deadlineRules";
-import { DEADLINE_CATEGORIES } from "./schema";
 
 const MAX_NAME = 160;
 const MAX_TEXT = 400;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function clamp(text: string | undefined, max: number): string | undefined {
   const t = text?.trim();
@@ -40,8 +51,21 @@ function actorName(u: Doc<"users">): string {
   return u.name || u.email || "Member";
 }
 
+/** End of a YYYY-MM-DD civil day in Asia/Kolkata (UTC+5:30, no DST). */
+export function endOfDayIST(dateStr: string): number {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr.trim());
+  if (!m) throw new Error("Use the date picker (YYYY-MM-DD).");
+  const ms = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 18, 29, 59, 999);
+  if (Number.isNaN(ms)) throw new Error("That date could not be read.");
+  return ms;
+}
+
+function assertDate(d: string, label: string): void {
+  if (!DATE_RE.test(d.trim())) throw new Error(`${label} must be YYYY-MM-DD.`);
+}
+
 async function logAudit(
-  ctx: { db: Parameters<Parameters<typeof mutation>[0]["handler"]>[0]["db"] },
+  ctx: MutationCtx,
   orgId: Id<"organizations">,
   actorId: Id<"users">,
   actor: string,
@@ -78,17 +102,28 @@ function specOf(rule: Doc<"deadlineRules">): DeadlineRuleSpec {
   };
 }
 
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-function assertDate(d: string, label: string): void {
-  if (!DATE_RE.test(d.trim())) throw new Error(`${label} must be YYYY-MM-DD.`);
+async function loadHolidayMap(
+  db: QueryCtx["db"],
+  orgId: Id<"organizations">,
+): Promise<HolidayMap> {
+  const rows = await db
+    .query("courtHolidays")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
+  const map: HolidayMap = new Map();
+  for (const h of rows) {
+    const list = map.get(h.date) ?? [];
+    list.push(h.court ? `${h.name} (${h.court})` : h.name);
+    map.set(h.date, list);
+  }
+  return map;
 }
 
 // ---------------------------------------------------------------------
 // Queries
 // ---------------------------------------------------------------------
 
-/** Rule catalogue with version counts, for the Rules desk. */
+/** Rule catalogue for the Rules desk. */
 export const ruleList = query({
   args: {},
   handler: async (ctx) => {
@@ -133,56 +168,32 @@ export const holidayList = query({
   },
 });
 
-/** Rule-generated deadline drafts for the approval desk. */
+/** All rule-generated deadline rows for the desk (org-scoped, matter-gated). */
 export const draftList = query({
-  args: {
-    status: v.union(
-      v.literal("pending"),
-      v.literal("decided"),
-      v.literal("active"),
-      v.literal("all"),
-    ),
-  },
-  handler: async (ctx, args) => {
+  args: {},
+  handler: async (ctx) => {
     const ac = await getAccessContext(ctx);
     if (!ac) return [];
     const rows = await ctx.db
       .query("ruleDeadlines")
       .withIndex("by_org", (q) => q.eq("orgId", ac.org._id))
       .collect();
-
-    const matterCache = new Map<Id<"matters">, Doc<"matters"> | null>();
-    const mattersById = new Map<Id<"matters">, Doc<"matters">>();
-    for (const r of rows) {
-      if (!matterCache.has(r.matterId)) {
-        const m = await ctx.db.get(r.matterId);
-        matterCache.set(r.matterId, m ?? null);
-        if (m) mattersById.set(r.matterId, m);
-      }
-    }
-
-    const pending = new Set(["draft"]);
-    const active = new Set(["approved", "acknowledged"]);
     const out: Array<
-      Doc<"ruleDeadlines"> & {
-        matterReference: string | null;
-        matterTitle: string | null;
-        canSee: boolean;
-      }
+      Doc<"ruleDeadlines"> & { matterReference: string | null; matterTitle: string | null }
     > = [];
+    const matterCache = new Map<Id<"matters">, Doc<"matters"> | null>();
     for (const r of rows) {
-      if (args.status === "pending" && !pending.has(r.status)) continue;
-      if (args.status === "active" && !active.has(r.status)) continue;
-      if (args.status === "decided" && pending.has(r.status) === false && active.has(r.status) === false && !["completed", "extended", "vacated", "missed", "rejected"].includes(r.status)) {
-        continue;
+      let matter = matterCache.get(r.matterId);
+      if (matter === undefined) {
+        const m = await ctx.db.get(r.matterId);
+        matter = m ?? null;
+        matterCache.set(r.matterId, matter);
       }
-      const matter = mattersById.get(r.matterId) ?? null;
-      if (!matter) continue;
+      if (!matter || !canViewMatter(ac, matter)) continue;
       out.push({
         ...r,
         matterReference: matter.reference,
         matterTitle: matter.title,
-        canSee: true,
       });
     }
     out.sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.createdAt - b.createdAt);
@@ -190,10 +201,7 @@ export const draftList = query({
   },
 });
 
-/**
- * Drafts for one matter — used by the matter workspace. Viewers without
- * matter access get nothing (matterOrNull-style gate).
- */
+/** Drafts for one matter (matter workspace tab). */
 export const draftsForMatter = query({
   args: { matterId: v.id("matters") },
   handler: async (ctx, args) => {
@@ -201,7 +209,6 @@ export const draftsForMatter = query({
     if (!ac) return [];
     const matter = await ctx.db.get(args.matterId);
     if (!matter || matter.orgId !== ac.org._id) return [];
-    const { canViewMatter } = await import("./access");
     if (!canViewMatter(ac, matter)) return [];
     const rows = await ctx.db
       .query("ruleDeadlines")
@@ -212,32 +219,37 @@ export const draftsForMatter = query({
 });
 
 /**
- * Preview the calculation for the compose dialog — the caller sees the
- * exact breakdown a submission would freeze.
+ * Live preview of the calculation for the compose dialog — the caller
+ * sees the exact breakdown a submission would freeze, plus whether the
+ * same rule version + trigger was already generated (retry safety).
  */
 export const preview = query({
   args: {
     ruleId: v.id("deadlineRules"),
     triggerDate: v.string(),
     triggerRef: v.string(),
+    triggerEvent: v.string(),
   },
   handler: async (ctx, args) => {
     const ac = await getAccessContext(ctx);
     if (!ac) return null;
     const rule = await ctx.db.get(args.ruleId);
     if (!rule || rule.orgId !== ac.org._id) return null;
-    const holidays = await loadHolidayMap(ctx, ac.org._id, rule.authority);
+    const holidays = await loadHolidayMap(ctx.db, ac.org._id);
     try {
       const result = calculateDeadline(specOf(rule), args.triggerDate, holidays);
       const existing = await ctx.db
         .query("ruleDeadlines")
         .withIndex("by_dedupe", (q) =>
-          q.eq("dedupeKey", makeDedupeKey({
-            ruleId: args.ruleId,
-            ruleVersion: rule.currentVersion,
-            triggerEvent: rule.triggerEvent,
-            triggerRef: args.triggerRef,
-          })),
+          q.eq(
+            "dedupeKey",
+            makeDedupeKey({
+              ruleId: args.ruleId,
+              ruleVersion: rule.currentVersion,
+              triggerEvent: args.triggerEvent,
+              triggerRef: args.triggerRef,
+            }),
+          ),
         )
         .first();
       return {
@@ -254,7 +266,7 @@ export const preview = query({
   },
 });
 
-/** Escalation scan result: unacknowledged critical deadlines near/past due. */
+/** Unacknowledged critical deadlines approaching or past due. */
 export const escalations = query({
   args: {},
   handler: async (ctx) => {
@@ -263,38 +275,79 @@ export const escalations = query({
     const today = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
     const rows = await ctx.db
       .query("ruleDeadlines")
-      .withIndex("by_org_status", (q) => q.eq("orgId", ac.org._id).eq("status", "approved"))
+      .withIndex("by_org_status", (q) =>
+        q.eq("orgId", ac.org._id).eq("status", "approved"),
+      )
       .collect();
     return rows
       .filter((r) => r.criticality === "critical")
-      .map((r) => {
-        const days = Math.round(
+      .map((r) => ({
+        _id: r._id,
+        title: r.title,
+        matterId: r.matterId,
+        dueDate: r.dueDate,
+        daysUntilDue: Math.round(
           (Date.parse(r.dueDate) - Date.parse(today)) / 86400000,
-        );
-        return {
-          _id: r._id,
-          title: r.title,
-          matterId: r.matterId,
-          dueDate: r.dueDate,
-          daysUntilDue: days,
-          unacknowledged: r.acknowledgedAt === undefined,
-        };
-      })
+        ),
+        unacknowledged: r.acknowledgedAt === undefined,
+      }))
       .filter((r) => r.daysUntilDue <= 3)
       .sort((a, b) => a.daysUntilDue - b.daysUntilDue);
   },
 });
 
+/** Trigger suggestions for the generate dialog (orders + past hearings). */
+export const suggestTriggers = query({
+  args: { matterId: v.id("matters") },
+  handler: async (ctx, args) => {
+    const ac = await getAccessContext(ctx);
+    if (!ac) return { orders: [], hearings: [] };
+    const matter = await ctx.db.get(args.matterId);
+    if (!matter || matter.orgId !== ac.org._id) return { orders: [], hearings: [] };
+    if (!canViewMatter(ac, matter)) return { orders: [], hearings: [] };
+
+    const orders = await ctx.db
+      .query("orders")
+      .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))
+      .collect();
+    const hearings = await ctx.db
+      .query("hearings")
+      .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))
+      .collect();
+
+    const ist = (ms: number) =>
+      new Date(ms + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+
+    return {
+      orders: orders
+        .sort((a, b) => b.passedOn - a.passedOn)
+        .slice(0, 20)
+        .map((o) => ({
+          id: o._id as string,
+          label: `Order — ${o.title}`,
+          date: ist(o.passedOn),
+          detail: o.summary?.slice(0, 200),
+        })),
+      hearings: hearings
+        .filter((h) => h.status === "adjourned" || h.status === "held")
+        .sort((a, b) => b.at - a.at)
+        .slice(0, 20)
+        .map((h) => ({
+          id: h._id as string,
+          label: `Hearing — ${h.title} (${h.status})`,
+          date: ist(h.at),
+          detail: h.outcome?.slice(0, 200),
+        })),
+    };
+  },
+});
+
 // ---------------------------------------------------------------------
-// Holidays
+// Court holidays
 // ---------------------------------------------------------------------
 
 export const addHoliday = mutation({
-  args: {
-    date: v.string(),
-    name: v.string(),
-    court: v.optional(v.string()),
-  },
+  args: { date: v.string(), name: v.string(), court: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const ac = await requireAccess(ctx);
     requireCapability(ac, "task.manage");
@@ -308,7 +361,11 @@ export const addHoliday = mutation({
       createdById: ac.user._id,
       createdAt: Date.now(),
     });
-    await logAudit(ctx, ac.org._id, ac.user._id, actorName(ac.user), "Court holiday added", `${args.name.trim()} — ${args.date}`);
+    await logAudit(
+      ctx, ac.org._id, ac.user._id, actorName(ac.user),
+      "Court holiday added",
+      `${args.name.trim()} — ${args.date.trim()}`,
+    );
   },
 });
 
@@ -320,32 +377,35 @@ export const removeHoliday = mutation({
     const h = await ctx.db.get(args.holidayId);
     if (!h || h.orgId !== ac.org._id) throw new Error("Holiday not found.");
     await ctx.db.delete(args.holidayId);
-    await logAudit(ctx, ac.org._id, ac.user._id, actorName(ac.user), "Court holiday removed", `${h.name} — ${h.date}`);
+    await logAudit(
+      ctx, ac.org._id, ac.user._id, actorName(ac.user),
+      "Court holiday removed",
+      `${h.name} — ${h.date}`,
+    );
   },
 });
-
-async function loadHolidayMap(
-  ctx: { db: unknown },
-  orgId: Id<"organizations">,
-  _authority?: string,
-): Promise<HolidayMap> {
-  const db = ctx.db as Parameters<Parameters<typeof query>[0]["handler"]>[0]["db"];
-  const rows = await db
-    .query("courtHolidays")
-    .withIndex("by_org", (q: { eq: (f: string, v: string) => unknown }) => q.eq("orgId", orgId))
-    .collect();
-  const map: HolidayMap = new Map();
-  for (const h of rows as Array<Doc<"courtHolidays">>) {
-    const list = map.get(h.date) ?? [];
-    list.push(h.court ? `${h.name} (${h.court})` : h.name);
-    map.set(h.date, list);
-  }
-  return map;
-}
 
 // ---------------------------------------------------------------------
 // Rule CRUD (versioned)
 // ---------------------------------------------------------------------
+
+export const TRIGGER_EVENTS = [
+  "order_passed",
+  "hearing_adjourned",
+  "hearing_held",
+  "filing_done",
+  "service_completed",
+  "manual",
+] as const;
+
+export const TRIGGER_EVENT_LABELS: Record<(typeof TRIGGER_EVENTS)[number], string> = {
+  order_passed: "Order passed",
+  hearing_adjourned: "Hearing adjourned",
+  hearing_held: "Hearing held",
+  filing_done: "Filing completed",
+  service_completed: "Service completed",
+  manual: "Manual trigger",
+};
 
 function assertRuleInput(args: {
   name: string;
@@ -390,9 +450,9 @@ export const createRule = mutation({
     assertRuleInput(args);
     if (!args.triggerEvent.trim()) throw new Error("Choose a trigger event.");
     const now = Date.now();
-    const ruleId = await ctx.db.insert("deadlineRules", {
-      orgId: ac.org._id,
-      name: args.name.trim().slice(0, MAX_NAME),
+    const name = args.name.trim().slice(0, MAX_NAME);
+    const spec: DeadlineRuleSpec = {
+      name,
       jurisdiction: clamp(args.jurisdiction, MAX_NAME),
       authority: clamp(args.authority, MAX_NAME),
       practiceArea: clamp(args.practiceArea, MAX_NAME),
@@ -410,6 +470,10 @@ export const createRule = mutation({
           : undefined,
       effectiveFrom: args.effectiveFrom.trim(),
       effectiveTo: args.effectiveTo?.trim() || undefined,
+    };
+    const ruleId = await ctx.db.insert("deadlineRules", {
+      orgId: ac.org._id,
+      ...spec,
       currentVersion: 1,
       active: true,
       createdById: ac.user._id,
@@ -419,20 +483,24 @@ export const createRule = mutation({
     await ctx.db.insert("deadlineRuleVersions", {
       ruleId,
       version: 1,
-      spec: specOf({ ...args, name: args.name.trim() } as Doc<"deadlineRules">),
+      spec,
       changeNote: "Initial version.",
       createdById: ac.user._id,
       createdAt: now,
     });
-    await logAudit(ctx, ac.org._id, ac.user._id, actorName(ac.user), "Deadline rule created", `${args.name.trim()} (v1)`);
+    await logAudit(
+      ctx, ac.org._id, ac.user._id, actorName(ac.user),
+      "Deadline rule created",
+      `${name} (v1)`,
+    );
     return { ruleId };
   },
 });
 
 /**
- * Edit a rule → new immutable version. Existing drafts/approvals keep
- * the version they were generated with; only future triggers use the
- * new version.
+ * Edit a rule → new immutable version. Existing drafts and approvals
+ * keep the version they were generated with; only future triggers use
+ * the new version.
  */
 export const editRule = mutation({
   args: {
@@ -461,11 +529,12 @@ export const editRule = mutation({
     if (!rule || rule.orgId !== ac.org._id) throw new Error("Rule not found.");
 
     const next: DeadlineRuleSpec = {
-      ...specOf(rule),
       name: args.name?.trim() || rule.name,
-      jurisdiction: args.jurisdiction !== undefined ? clamp(args.jurisdiction, MAX_NAME) : rule.jurisdiction,
+      jurisdiction:
+        args.jurisdiction !== undefined ? clamp(args.jurisdiction, MAX_NAME) : rule.jurisdiction,
       authority: args.authority !== undefined ? clamp(args.authority, MAX_NAME) : rule.authority,
-      practiceArea: args.practiceArea !== undefined ? clamp(args.practiceArea, MAX_NAME) : rule.practiceArea,
+      practiceArea:
+        args.practiceArea !== undefined ? clamp(args.practiceArea, MAX_NAME) : rule.practiceArea,
       triggerEvent: args.triggerEvent?.trim() || rule.triggerEvent,
       countType: args.countType ?? rule.countType,
       count: args.count ?? rule.count,
@@ -476,11 +545,15 @@ export const editRule = mutation({
       criticality: args.criticality ?? rule.criticality,
       reminderDaysBefore:
         args.reminderDaysBefore !== undefined
-          ? (args.reminderDaysBefore > 0 ? args.reminderDaysBefore : undefined)
+          ? args.reminderDaysBefore > 0
+            ? args.reminderDaysBefore
+            : undefined
           : rule.reminderDaysBefore,
       effectiveFrom: args.effectiveFrom?.trim() || rule.effectiveFrom,
       effectiveTo:
-        args.effectiveTo !== undefined ? (args.effectiveTo?.trim() || undefined) : rule.effectiveTo,
+        args.effectiveTo !== undefined
+          ? args.effectiveTo?.trim() || undefined
+          : rule.effectiveTo,
     };
     if (!Number.isInteger(next.count) || next.count <= 0 || next.count > 3650) {
       throw new Error("Count must be a positive whole number of days (≤ 3650).");
@@ -493,11 +566,7 @@ export const editRule = mutation({
 
     const version = rule.currentVersion + 1;
     const now = Date.now();
-    await ctx.db.patch(rule._id, {
-      ...next,
-      currentVersion: version,
-      updatedAt: now,
-    });
+    await ctx.db.patch(rule._id, { ...next, currentVersion: version, updatedAt: now });
     await ctx.db.insert("deadlineRuleVersions", {
       ruleId: rule._id,
       version,
@@ -523,7 +592,11 @@ export const setRuleActive = mutation({
     const rule = await ctx.db.get(args.ruleId);
     if (!rule || rule.orgId !== ac.org._id) throw new Error("Rule not found.");
     await ctx.db.patch(rule._id, { active: args.active, updatedAt: Date.now() });
-    await logAudit(ctx, ac.org._id, ac.user._id, actorName(ac.user), args.active ? "Deadline rule activated" : "Deadline rule deactivated", rule.name);
+    await logAudit(
+      ctx, ac.org._id, ac.user._id, actorName(ac.user),
+      args.active ? "Deadline rule activated" : "Deadline rule deactivated",
+      rule.name,
+    );
   },
 });
 
@@ -531,74 +604,11 @@ export const setRuleActive = mutation({
 // Generation from triggers
 // ---------------------------------------------------------------------
 
-const TRIGGER_EVENTS = [
-  "order_passed",
-  "hearing_adjourned",
-  "hearing_held",
-  "filing_done",
-  "service_completed",
-  "manual",
-] as const;
-
-export const TRIGGER_EVENT_LABELS: Record<string, string> = {
-  order_passed: "Order passed",
-  hearing_adjourned: "Hearing adjourned",
-  hearing_held: "Hearing held",
-  filing_done: "Filing completed",
-  service_completed: "Service completed",
-  manual: "Manual trigger",
-};
-
-export const suggestTriggers = query({
-  args: { matterId: v.id("matters") },
-  handler: async (ctx, args) => {
-    const ac = await getAccessContext(ctx);
-    if (!ac) return { orders: [], hearings: [] };
-    const matter = await ctx.db.get(args.matterId);
-    if (!matter || matter.orgId !== ac.org._id) return { orders: [], hearings: [] };
-    const { canViewMatter } = await import("./access");
-    if (!canViewMatter(ac, matter)) return { orders: [], hearings: [] };
-
-    const orders = await ctx.db
-      .query("orders")
-      .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))
-      .collect();
-    const hearings = await ctx.db
-      .query("hearings")
-      .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))
-      .collect();
-
-    const ist = (ms: number) =>
-      new Date(ms + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
-
-    return {
-      orders: orders
-        .sort((a, b) => b.passedOn - a.passedOn)
-        .slice(0, 20)
-        .map((o) => ({
-          id: o._id as string,
-          label: `Order — ${o.title}`,
-          date: ist(o.passedOn),
-          detail: o.summary?.slice(0, 200),
-        })),
-      hearings: hearings
-        .filter((h) => h.status === "adjourned" || h.status === "held")
-        .sort((a, b) => b.at - a.at)
-        .slice(0, 20)
-        .map((h) => ({
-          id: h._id as string,
-          label: `Hearing — ${h.title} (${h.status})`,
-          date: ist(h.at),
-          detail: h.outcome?.slice(0, 200),
-        })),
-    };
-  },
-});
-
 /**
  * Generate deadline drafts for a matter by running every active,
- * effective rule that matches the chosen trigger. Retries are safe:
- * the deterministic dedupeKey short-circuits duplicates.
+ * effective rule matching the chosen trigger. Retries are safe: the
+ * deterministic dedupeKey short-circuits duplicates (rejected drafts
+ * are kept and reported, never regenerated).
  */
 export const generateFromTrigger = mutation({
   args: {
@@ -613,18 +623,18 @@ export const generateFromTrigger = mutation({
     const ac = await requireAccess(ctx);
     requireCapability(ac, "task.manage");
     const matter = await requireMatter(ctx, ac, args.matterId);
-    if (matter.orgId !== ac.org._id) throw new Error("Matter not found.");
     assertDate(args.triggerDate, "Trigger date");
-    if (!args.triggerRef.trim()) throw new Error("A source record reference is required.");
+    if (!args.triggerRef.trim()) {
+      throw new Error("A source record reference is required.");
+    }
 
     const rules = await ctx.db
       .query("deadlineRules")
       .withIndex("by_org", (q) => q.eq("orgId", ac.org._id))
       .collect();
-
-    const holidays = await loadHolidayMap(ctx, ac.org._id, undefined);
+    const holidays = await loadHolidayMap(ctx.db, ac.org._id);
     const actor = actorName(ac.user);
-    const created: Array<{ title: string; dueDate: string; ruleName: string; dedupeKey: string }> = [];
+    const created: Array<{ ruleName: string; dueDate: string; criticality: string }> = [];
     const skipped: Array<{ ruleName: string; reason: string }> = [];
 
     for (const rule of rules) {
@@ -666,12 +676,12 @@ export const generateFromTrigger = mutation({
       }
 
       const sentence = sourceSentence({
-        sourceLabel: args.sourceLabel?.trim() || args.triggerEvent,
+        sourceLabel: args.sourceLabel?.trim() || TRIGGER_EVENT_LABELS[args.triggerEvent as (typeof TRIGGER_EVENTS)[number]] || args.triggerEvent,
         sourceDate: args.triggerDate,
         detail: args.sourceDetail?.trim(),
       });
 
-      const id = await ctx.db.insert("ruleDeadlines", {
+      await ctx.db.insert("ruleDeadlines", {
         orgId: ac.org._id,
         matterId: args.matterId,
         ruleId: rule._id,
@@ -682,7 +692,7 @@ export const generateFromTrigger = mutation({
         triggerRef: args.triggerRef,
         triggerDate: args.triggerDate,
         title: `${rule.name} — ${matter.reference}`,
-        category: rule.triggerEvent === "order_passed" ? "court_order" : "compliance",
+        category: args.triggerEvent === "order_passed" ? "court_order" : "compliance",
         dueDate: result.dueDate,
         calcRule: result.calcRule,
         breakdown: result.breakdown,
@@ -693,7 +703,7 @@ export const generateFromTrigger = mutation({
         proposedByName: actor,
         createdAt: Date.now(),
       });
-      created.push({ title: `${rule.name} — ${matter.reference}`, dueDate: result.dueDate, ruleName: rule.name, dedupeKey: id as unknown as string });
+      created.push({ ruleName: rule.name, dueDate: result.dueDate, criticality: rule.criticality });
     }
 
     await logAudit(
@@ -701,7 +711,7 @@ export const generateFromTrigger = mutation({
       "Deadline drafts generated",
       `${created.length} draft(s) from ${args.triggerEvent} ${args.triggerRef} (${skipped.length} skipped)`,
     );
-    return { created: created.length, skipped };
+    return { created, skipped };
   },
 });
 
@@ -709,19 +719,69 @@ export const generateFromTrigger = mutation({
 // Approval / rejection
 // ---------------------------------------------------------------------
 
-function assertApprover(ac: Parameters<typeof requireCapability>[0]) {
+function assertApprover(ac: AccessContext) {
   requireCapability(ac, "matter.edit");
 }
 
 async function loadDraft(
-  ctx: Parameters<Parameters<typeof mutation>[0]["handler"]>[0],
-  ac: NonNullable<Awaited<ReturnType<typeof getAccessContext>>>,
+  ctx: MutationCtx,
+  ac: AccessContext,
   draftId: Id<"ruleDeadlines">,
 ): Promise<Doc<"ruleDeadlines">> {
   const draft = await ctx.db.get(draftId);
   if (!draft || draft.orgId !== ac.org._id) throw new Error("Draft not found.");
   await requireMatter(ctx, ac, draft.matterId);
   return draft;
+}
+
+/** Core approval write, shared by single and bulk paths. */
+async function approveCore(
+  ctx: MutationCtx,
+  draft: Doc<"ruleDeadlines">,
+  actorId: Id<"users">,
+  actor: string,
+): Promise<void> {
+  // Exactly-once guard: never create a second deadline row (retries).
+  if (!draft.deadlineId) {
+    const deadlineId = await ctx.db.insert("deadlines", {
+      orgId: draft.orgId,
+      matterId: draft.matterId,
+      title: draft.title,
+      category: draft.category,
+      dueAt: endOfDayIST(draft.dueDate),
+      status: "open",
+      createdById: actorId,
+      history: [
+        {
+          at: Date.now(),
+          byId: actorId,
+          text: `Created from rule “${draft.ruleName}” v${draft.ruleVersion} — due ${draft.dueDate}${draft.criticality === "critical" ? " (CRITICAL)" : ""}.`,
+        },
+      ],
+      createdAt: Date.now(),
+    });
+    await ctx.db.patch(draft._id, { deadlineId });
+  }
+  await ctx.db.patch(draft._id, {
+    status: "approved",
+    approvedAt: Date.now(),
+    approvedById: actorId,
+    approvedByName: actor,
+  });
+  await ctx.db.insert("matterEvents", {
+    matterId: draft.matterId,
+    kind: "deadline",
+    detail: `Rule deadline approved — ${draft.title}, due ${draft.dueDate} (rule ${draft.ruleName} v${draft.ruleVersion}).`,
+    createdAt: Date.now(),
+    authorId: actorId,
+    occurredAt: Date.now(),
+    datePrecision: "day",
+  });
+  await logAudit(
+    ctx, draft.orgId, actorId, actor,
+    "Rule deadline approved",
+    `${draft.title} — due ${draft.dueDate} (${draft.ruleName} v${draft.ruleVersion})`,
+  );
 }
 
 /** Approve one draft — creates the real deadline exactly once. */
@@ -732,63 +792,16 @@ export const approveDraft = mutation({
     assertApprover(ac);
     const draft = await loadDraft(ctx, ac, args.draftId);
     if (draft.status !== "draft") {
-      throw new Error(`Only pending drafts can be approved (this one is ${draft.status}).`);
+      throw new Error(
+        `Only pending drafts can be approved (this one is ${draft.status}).`,
+      );
     }
-
-    // Idempotency guard: never create a second deadline row for the
-    // same draft (duplicate prevention on retries).
-    if (!draft.deadlineId) {
-      const dueAt = endOfDayIST(draft.dueDate);
-      const reminderAt =
-        draft.reminderDays?.() ?? undefined;
-      void reminderAt;
-      const deadlineId = await ctx.db.insert("deadlines", {
-        orgId: ac.org._id,
-        matterId: draft.matterId,
-        title: draft.title,
-        category: draft.category,
-        dueAt,
-        status: "open",
-        responsibleId: undefined,
-        createdById: ac.user._id,
-        reminderAt: undefined,
-        history: [
-          {
-            at: Date.now(),
-            byId: ac.user._id,
-            text: `Created from rule “${draft.ruleName}” v${draft.ruleVersion} — ${draft.dueDate}${draft.criticality === "critical" ? " (CRITICAL)" : ""}.`,
-          },
-        ],
-        createdAt: Date.now(),
-      });
-      await ctx.patch(draft._id, { deadlineId });
-    }
-
-    await ctx.db.patch(draft._id, {
-      status: "approved",
-      approvedAt: Date.now(),
-      approvedById: ac.user._id,
-      approvedByName: actorName(ac.user),
-    });
-    await ctx.db.insert("matterEvents", {
-      matterId: draft.matterId,
-      kind: "deadline",
-      detail: `Rule deadline approved — ${draft.title}, due ${draft.dueDate} (rule ${draft.ruleName} v${draft.ruleVersion}).`,
-      createdAt: Date.now(),
-      authorId: ac.user._id,
-      occurredAt: Date.now(),
-      datePrecision: "day",
-    });
-    await logAudit(
-      ctx, ac.org._id, ac.user._id, actorName(ac.user),
-      "Rule deadline approved",
-      `${draft.title} — due ${draft.dueDate} (${draft.ruleName} v${draft.ruleVersion})`,
-    );
+    await approveCore(ctx, draft, ac.user._id, actorName(ac.user));
     return { deadlineId: draft.deadlineId };
   },
 });
 
-/** Bulk-approve every pending draft for one matter. */
+/** Bulk-approve every pending draft for one matter — one clear action. */
 export const approveAllForMatter = mutation({
   args: { matterId: v.id("matters") },
   handler: async (ctx, args) => {
@@ -799,48 +812,21 @@ export const approveAllForMatter = mutation({
       .query("ruleDeadlines")
       .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))
       .collect();
+    const actor = actorName(ac.user);
     let approved = 0;
     for (const d of drafts) {
       if (d.status !== "draft") continue;
-      await ctx.runMutation(approveDraftInternal, { draftId: d._id, actorId: ac.user._id, actor: actorName(ac.user) });
+      await approveCore(ctx, d, ac.user._id, actor);
       approved += 1;
     }
-    return { approved };
-  },
-});
-
-const approveDraftInternal = internalMutation({
-  args: { draftId: v.id("ruleDeadlines"), actorId: v.id("users"), actor: v.string() },
-  handler: async (ctx, args) => {
-    const draft = await ctx.db.get(args.draftId);
-    if (!draft || draft.status !== "draft") return;
-    if (!draft.deadlineId) {
-      const dueAt = endOfDayIST(draft.dueDate);
-      const deadlineId = await ctx.db.insert("deadlines", {
-        orgId: draft.orgId,
-        matterId: draft.matterId,
-        title: draft.title,
-        category: draft.category,
-        dueAt,
-        status: "open",
-        createdById: args.actorId,
-        history: [
-          {
-            at: Date.now(),
-            byId: args.actorId,
-            text: `Created from rule “${draft.ruleName}” v${draft.ruleVersion} — ${draft.dueDate}${draft.criticality === "critical" ? " (CRITICAL)" : ""}.`,
-          },
-        ],
-        createdAt: Date.now(),
-      });
-      await ctx.db.patch(draft._id, { deadlineId });
+    if (approved > 0) {
+      await logAudit(
+        ctx, ac.org._id, ac.user._id, actor,
+        "Rule deadlines bulk-approved",
+        `${approved} draft(s) approved for ${args.matterId}`,
+      );
     }
-    await ctx.db.patch(draft._id, {
-      status: "approved",
-      approvedAt: Date.now(),
-      approvedById: args.actorId,
-      approvedByName: args.actor,
-    });
+    return { approved };
   },
 });
 
@@ -857,12 +843,16 @@ export const rejectDraft = mutation({
       status: "rejected",
       rejectNote: args.note.trim().slice(0, MAX_TEXT),
     });
-    await logAudit(ctx, ac.org._id, ac.user._id, actorName(ac.user), "Rule deadline rejected", `${draft.title} — ${args.note.trim()}`);
+    await logAudit(
+      ctx, ac.org._id, ac.user._id, actorName(ac.user),
+      "Rule deadline rejected",
+      `${draft.title} — ${args.note.trim()}`,
+    );
   },
 });
 
 // ---------------------------------------------------------------------
-// Lifecycle: acknowledge / complete / extend / vacate / missed
+// Lifecycle: acknowledge / complete / extend / vacate / missed / adjust
 // ---------------------------------------------------------------------
 
 export const acknowledge = mutation({
@@ -870,7 +860,9 @@ export const acknowledge = mutation({
   handler: async (ctx, args) => {
     const ac = await requireAccess(ctx);
     const draft = await loadDraft(ctx, ac, args.draftId);
-    if (draft.status !== "approved") throw new Error("Only approved deadlines can be acknowledged.");
+    if (draft.status !== "approved") {
+      throw new Error("Only approved deadlines can be acknowledged.");
+    }
     await ctx.db.patch(draft._id, {
       status: "acknowledged",
       acknowledgedAt: Date.now(),
@@ -887,7 +879,11 @@ export const complete = mutation({
     if (!["approved", "acknowledged"].includes(draft.status)) {
       throw new Error("Only active deadlines can be completed.");
     }
-    await ctx.db.patch(draft._id, { status: "completed", completedAt: Date.now(), completedById: ac.user._id });
+    await ctx.db.patch(draft._id, {
+      status: "completed",
+      completedAt: Date.now(),
+      completedById: ac.user._id,
+    });
     if (draft.deadlineId) {
       const dl = await ctx.db.get(draft.deadlineId);
       if (dl && dl.status === "open") {
@@ -895,14 +891,26 @@ export const complete = mutation({
           status: "completed",
           completedAt: Date.now(),
           completedById: ac.user._id,
-          history: [...(dl.history ?? []), { at: Date.now(), byId: ac.user._id, text: "Completed via deadline rules engine." }],
+          history: [
+            ...(dl.history ?? []),
+            {
+              at: Date.now(),
+              byId: ac.user._id,
+              text: "Completed via deadline rules engine.",
+            },
+          ],
         });
       }
     }
-    await logAudit(ctx, ac.org._id, ac.user._id, actorName(ac.user), "Rule deadline completed", draft.title);
+    await logAudit(ctx, draft.orgId, ac.user._id, actorName(ac.user), "Rule deadline completed", draft.title);
   },
 });
 
+/**
+ * Extend — closes the current lifecycle as `extended` and records who
+ * moved the date and why. The original approved deadline is never
+ * silently overwritten.
+ */
 export const extend = mutation({
   args: { draftId: v.id("ruleDeadlines"), newDueDate: v.string(), reason: v.string() },
   handler: async (ctx, args) => {
@@ -916,7 +924,6 @@ export const extend = mutation({
     if (!args.reason.trim()) throw new Error("A reason is required to extend a deadline.");
     await ctx.db.patch(draft._id, {
       status: "extended",
-      dueDate: args.newDueDate,
       adjustments: [
         ...(draft.adjustments ?? []),
         {
@@ -925,14 +932,14 @@ export const extend = mutation({
           byName: actorName(ac.user),
           reason: args.reason.trim().slice(0, MAX_TEXT),
           oldDueDate: draft.dueDate,
-          newDueDate: args.newDueDate,
+          newDueDate: args.newDueDate.trim(),
         },
       ],
     });
     await logAudit(
-      ctx, ac.org._id, ac.user._id, actorName(ac.user),
+      ctx, draft.orgId, ac.user._id, actorName(ac.user),
       "Rule deadline extended",
-      `${draft.title}: ${draft.dueDate} → ${args.newDueDate} — ${args.reason.trim()}`,
+      `${draft.title}: ${draft.dueDate} → ${args.newDueDate.trim()} — ${args.reason.trim()}`,
     );
   },
 });
@@ -956,15 +963,25 @@ export const vacate = mutation({
           completedAt: Date.now(),
           completedById: ac.user._id,
           completionNote: `Vacated — ${args.reason.trim()}`,
-          history: [...(dl.history ?? []), { at: Date.now(), byId: ac.user._id, text: `Vacated — ${args.reason.trim()}` }],
+          history: [
+            ...(dl.history ?? []),
+            {
+              at: Date.now(),
+              byId: ac.user._id,
+              text: `Vacated — ${args.reason.trim()}`,
+            },
+          ],
         });
       }
     }
-    await logAudit(ctx, ac.org._id, ac.user._id, actorName(ac.user), "Rule deadline vacated", `${draft.title} — ${args.reason.trim()}`);
+    await logAudit(
+      ctx, draft.orgId, ac.user._id, actorName(ac.user),
+      "Rule deadline vacated",
+      `${draft.title} — ${args.reason.trim()}`,
+    );
   },
 });
 
-/** Mark as missed — escalation follow-through (audited). */
 export const markMissed = mutation({
   args: { draftId: v.id("ruleDeadlines") },
   handler: async (ctx, args) => {
@@ -975,14 +992,14 @@ export const markMissed = mutation({
       throw new Error("Only active deadlines can be marked missed.");
     }
     await ctx.db.patch(draft._id, { status: "missed" });
-    await logAudit(ctx, ac.org._id, ac.user._id, actorName(ac.user), "Rule deadline marked missed", draft.title);
+    await logAudit(ctx, draft.orgId, ac.user._id, actorName(ac.user), "Rule deadline marked missed", draft.title);
   },
 });
 
 /**
  * Post-approval date correction. Deliberately NOT a silent overwrite:
- * requires an explicit reason, keeps the old date in the audit trail,
- * and updates the linked deadline row with a history entry.
+ * requires an explicit reason, keeps the old date in the audit trail on
+ * both the draft and the underlying deadline row.
  */
 export const adjustDate = mutation({
   args: { draftId: v.id("ruleDeadlines"), newDueDate: v.string(), reason: v.string() },
@@ -995,9 +1012,11 @@ export const adjustDate = mutation({
     }
     assertDate(args.newDueDate, "New due date");
     if (!args.reason.trim()) throw new Error("A reason is required for any adjustment.");
-    if (args.newDueDate === draft.dueDate) throw new Error("The new date is unchanged.");
+    if (args.newDueDate.trim() === draft.dueDate) {
+      throw new Error("The new date is unchanged.");
+    }
     await ctx.db.patch(draft._id, {
-      dueDate: args.newDueDate,
+      dueDate: args.newDueDate.trim(),
       adjustments: [
         ...(draft.adjustments ?? []),
         {
@@ -1006,7 +1025,7 @@ export const adjustDate = mutation({
           byName: actorName(ac.user),
           reason: args.reason.trim().slice(0, MAX_TEXT),
           oldDueDate: draft.dueDate,
-          newDueDate: args.newDueDate,
+          newDueDate: args.newDueDate.trim(),
         },
       ],
     });
@@ -1020,47 +1039,16 @@ export const adjustDate = mutation({
             {
               at: Date.now(),
               byId: ac.user._id,
-              text: `Due date adjusted ${draft.dueDate} → ${args.newDueDate} — ${args.reason.trim()}`,
+              text: `Due date adjusted ${draft.dueDate} → ${args.newDueDate.trim()} — ${args.reason.trim()}`,
             },
           ],
         });
       }
     }
     await logAudit(
-      ctx, ac.org._id, ac.user._id, actorName(ac.user),
+      ctx, draft.orgId, ac.user._id, actorName(ac.user),
       "Rule deadline adjusted",
-      `${draft.title}: ${draft.dueDate} → ${args.newDueDate} — ${args.reason.trim()}`,
+      `${draft.title}: ${draft.dueDate} → ${args.newDueDate.trim()} — ${args.reason.trim()}`,
     );
   },
 });
-
-// ---------------------------------------------------------------------
-// Helpers shared with other modules
-// ---------------------------------------------------------------------
-
-/** End of a YYYY-MM-DD civil day in Asia/Kolkata. */
-export function endOfDayIST(dateStr: string): number {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr.trim());
-  if (!m) throw new Error("Use the date picker (YYYY-MM-DD).");
-  const ms = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 18, 29, 59, 999);
-  if (Number.isNaN(ms)) throw new Error("That date could not be read.");
-  return ms;
-}
-
-/** Scheduler hook: mark long-overdue unacknowledged critical deadlines. */
-export const escalateScan = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    const today = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
-    const rows = await ctx.db
-      .query("ruleDeadlines")
-      .withIndex("by_org_status", (q) => q.eq("orgId", "" as unknown as Id<"organizations">).eq("status", "approved"))
-      .collect();
-    void rows;
-    void today;
-    return { ok: true };
-  },
-});
-
-void can;
-void DEADLINE_CATEGORIES;
