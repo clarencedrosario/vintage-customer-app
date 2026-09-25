@@ -79,7 +79,7 @@ async function audit(
 }
 
 /** Org-scoped matter reference like ADV/2026/0007 for a new matter. */
-async function nextMatterReference(ctx: MutationCtx, orgId: Id<"organizations">, prefix: string) {
+export async function nextMatterReference(ctx: MutationCtx, orgId: Id<"organizations">, prefix: string) {
   const year = new Date().getFullYear();
   const matters = await ctx.db
     .query("matters")

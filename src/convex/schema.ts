@@ -361,6 +361,80 @@ export default defineSchema({
     .index("by_org_status", ["orgId", "reviewStatus"])
     .index("by_matter", ["matterId"]),
 
+  // ---------------- Client intake & matter opening (Feature 4) ----------------
+  // One row per staged client intake. Draft saving is a plain patch;
+  // the lifecycle state machine lives in lib/intakeFlow.ts and is
+  // enforced server-side in convex/intake.ts. Client and matter records
+  // are created EXACTLY ONCE at approval, guarded by createdClientId /
+  // createdMatterId.
+  intakes: defineTable({
+    orgId: v.id("organizations"),
+    // draft -> submitted -> returned_for_correction / rejected /
+    // approved / cancelled (enforced by canTransitionIntake).
+    state: v.union(
+      v.literal("draft"),
+      v.literal("submitted"),
+      v.literal("returned_for_correction"),
+      v.literal("rejected"),
+      v.literal("approved"),
+      v.literal("cancelled"),
+    ),
+    // The staged form: identity/contact, party details, matter, parties
+    // involved, conflict confirmation, KYC, referral, fees, engagement,
+    // risk and team — shape defined by IntakeFormData.
+    form: v.any(),
+    // Prospective-client identity used for duplicate prevention.
+    prospectiveName: v.string(),
+    prospectiveEmail: v.optional(v.string()),
+    prospectivePhone: v.optional(v.string()),
+    prospectiveIdentityNo: v.optional(v.string()),
+    duplicateHits: v.optional(v.array(v.any())),
+    duplicatesAcknowledged: v.optional(v.boolean()),
+    duplicatesAcknowledgeById: v.optional(v.id("users")),
+    duplicatesAcknowledgeByName: v.optional(v.string()),
+    duplicatesAcknowledgeAt: v.optional(v.number()),
+    // Existing client portal: invitation-binding + authentication.
+    clientMode: v.union(
+      v.literal("new_client"),
+      v.literal("existing_client"),
+    ),
+    invite: v.optional(
+      v.object({
+        email: v.string(),
+        salt: v.string(),
+        tokenHash: v.string(),
+        expiresAt: v.number(),
+        createdAt: v.number(),
+        usedAt: v.optional(v.number()),
+        revokedAt: v.optional(v.number()),
+      }),
+    ),
+    clientUserId: v.optional(v.id("users")),
+    clientCompletedAt: v.optional(v.number()),
+    // Review trail.
+    reviewNote: v.optional(v.string()),
+    reviewedById: v.optional(v.id("users")),
+    reviewedByName: v.optional(v.string()),
+    reviewedAt: v.optional(v.number()),
+    // Feature-3 tie-in: approval requires a cleared check.
+    conflictCheckId: v.optional(v.id("conflictChecks")),
+    // Exactly-once creation of the client and matter records.
+    createdClientId: v.optional(v.id("clients")),
+    createdMatterId: v.optional(v.id("matters")),
+    approvedById: v.optional(v.id("users")),
+    approvedByName: v.optional(v.string()),
+    approvedAt: v.optional(v.number()),
+    // Who started this intake (firm staff) — null for client-created.
+    createdById: v.optional(v.id("users")),
+    createdByName: v.optional(v.string()),
+    lastEditedById: v.optional(v.id("users")),
+    lastEditedByName: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_state", ["orgId", "state"]),
+
   matters: defineTable({
     orgId: v.id("organizations"),
     clientId: v.id("clients"),
