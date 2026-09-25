@@ -733,9 +733,46 @@ export default defineSchema({
           storageId: v.id("_storage"),
           name: v.string(),
           uploadedAt: v.number(),
+          // Feature 7 — provenance + integrity metadata per version.
+          sizeBytes: v.optional(v.number()),
+          // Declared-by-uploader checksum (SHA-256 hex, hashed in the
+          // browser before upload). Honest provenance: recorded as
+          // declared, never presented as server-verified.
+          checksum: v.optional(v.string()),
+          uploadedByUserId: v.optional(v.id("users")),
+          uploadedByName: v.optional(v.string()),
+          scanStatus: v.optional(
+            v.union(
+              v.literal("awaiting_configuration"),
+              v.literal("pending"),
+              v.literal("clean"),
+              v.literal("infected"),
+            ),
+          ),
         }),
       ),
     ),
+    // Feature 7 — accepted file formats (lowercase extensions without
+    // the dot, e.g. ["pdf","jpg"]; empty = any format accepted).
+    acceptedFormats: v.optional(v.array(v.string())),
+    // Feature 7 — checklist items the client must tick at upload
+    // ("signed original", "notarised copy", …).
+    checklistItems: v.optional(v.array(v.string())),
+    // Feature 7 — per-request upload size cap in MB (absent = default).
+    maxFileMb: v.optional(v.number()),
+    // Feature 7 — malware scan status of the CURRENT submission.
+    // `pending` = file held in quarantine until a scan clears it;
+    // `awaiting_configuration` = no scanner configured — the chamber
+    // says so honestly and never claims a scan occurred.
+    scanStatus: v.optional(
+      v.union(
+        v.literal("awaiting_configuration"),
+        v.literal("pending"),
+        v.literal("clean"),
+        v.literal("infected"),
+      ),
+    ),
+    scanNote: v.optional(v.string()),
     reviewNote: v.optional(v.string()),
     reviewedAt: v.optional(v.number()),
     reviewedById: v.optional(v.id("users")),
@@ -757,6 +794,23 @@ export default defineSchema({
   })
     .index("by_matter", ["matterId"])
     .index("by_status", ["status"]),
+
+  // Feature 7 — audited download register. One immutable row per
+  // authorised file access (who, which file, which submission version).
+  // Never stores file content and is never deleted — it is the record
+  // that a download happened.
+  fileAccessLog: defineTable({
+    orgId: v.id("organizations"),
+    requestId: v.id("documentRequests"),
+    matterId: v.id("matters"),
+    storageId: v.id("_storage"),
+    viewerId: v.optional(v.id("users")),
+    viewerEmail: v.optional(v.string()),
+    asClient: v.boolean(),
+    // -1 = the current submission; otherwise the index in `submissions`.
+    submissionIndex: v.optional(v.number()),
+    createdAt: v.number(),
+  }).index("by_request", ["requestId"]),
 
   matterNotes: defineTable({
     matterId: v.id("matters"),
