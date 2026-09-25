@@ -220,6 +220,62 @@ export const featureNineTables = {
     .index("by_status", ["status"]), // org-agnostic scan for the escalation cron
 };
 
+// =====================================================================
+// DOCUMENT VAULT — extensions. Existing tables stay untouched; vault
+// metadata lives in two new org-scoped tables that reference documents.
+// =====================================================================
+
+export const VAULT_FOLDERS = [
+  "01 Pleadings",
+  "02 Applications",
+  "03 Orders",
+  "04 Evidence",
+  "05 Contracts",
+  "06 Correspondence",
+  "07 Client Documents",
+  "08 Court Documents",
+  "09 Financial",
+  "10 Miscellaneous",
+] as const;
+
+export const vaultTables = {
+  // One metadata row per filed document that has been vaulted. Absent
+  // row = unclassified (still visible in the vault under "Unclassified").
+  vaultMeta: defineTable({
+    orgId: v.id("organizations"),
+    matterId: v.id("matters"),
+    documentId: v.id("matterDocuments"),
+    folder: v.union(...VAULT_FOLDERS.map((f) => v.literal(f))),
+    tags: v.optional(v.array(v.string())),
+    classification: v.optional(v.string()), // free-text classification note
+    archivedAt: v.optional(v.number()),
+    archivedById: v.optional(v.id("users")),
+    updatedById: v.id("users"),
+    updatedAt: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_org_folder", ["orgId", "folder"])
+    .index("by_document", ["documentId"])
+    .index("by_matter", ["matterId"]),
+
+  // Version register for vaulted documents. Uploads keep every prior
+  // storageId — restore switches the document's live pointer without
+  // destroying anything.
+  vaultVersions: defineTable({
+    orgId: v.id("organizations"),
+    documentId: v.id("matterDocuments"),
+    matterId: v.id("matters"),
+    version: v.number(),
+    storageId: v.optional(v.id("_storage")),
+    name: v.string(),
+    note: v.optional(v.string()),
+    sizeBytes: v.optional(v.number()),
+    uploadedById: v.id("users"),
+    uploadedByName: v.optional(v.string()),
+    createdAt: v.number(),
+  }).index("by_document", ["documentId"]),
+};
+
 export const featureSixTables = {
   // Per-org approval policy per category. Rows are created lazily when
   // a firm overrides the default; absent rows use the pure defaults in

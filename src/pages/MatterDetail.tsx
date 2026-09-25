@@ -193,10 +193,17 @@ export default function MatterDetail() {
   const [taskTitle, setTaskTitle] = useState("");
   const [taskDue, setTaskDue] = useState("");
   const [timeDesc, setTimeDesc] = useState("");
+  const [timeBillable, setTimeBillable] = useState(true);
+  const [timerStart, setTimerStart] = useState<number | null>(null);
+  const [timerEndedAt, setTimerEndedAt] = useState<number | null>(null);
   const [timeMinutes, setTimeMinutes] = useState("");
   const [timeRate, setTimeRate] = useState("");
   const [timeDate, setTimeDate] = useState(todayIN());
   const [expenseDesc, setExpenseDesc] = useState("");
+  const [expenseCategory, setExpenseCategory] = useState("misc");
+  const [expenseBillable, setExpenseBillable] = useState(true);
+  const [receiptFile, setReceiptFile] = useState<File | null>(null);
+  const receiptInput = useRef<HTMLInputElement>(null);
   const [expenseAmount, setExpenseAmount] = useState("");
   const [expenseDate, setExpenseDate] = useState(todayIN());
   const [noteBody, setNoteBody] = useState("");
@@ -1197,6 +1204,50 @@ export default function MatterDetail() {
                 <h3 className="font-serif text-lg font-semibold">
                   Record time
                 </h3>
+                {/* Timer: measure, then save the measured window. */}
+                <div className="rounded-md border border-[#B68A45]/40 bg-[#B68A45]/[0.04] p-3">
+                  <div className="flex items-center justify-between">
+                    <span className="type-label ink-faded">Timer</span>
+                    <span className="font-mono text-sm">
+                      {timerStart
+                        ? `${Math.floor((Date.now() - timerStart) / 60000)}m ${Math.floor(((Date.now() - timerStart) % 60000) / 1000)}s`
+                        : "—"}
+                    </span>
+                  </div>
+                  <div className="mt-2 flex gap-2">
+                    {!timerStart ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="flex-1"
+                        onClick={() => setTimerStart(Date.now())}
+                      >
+                        Start
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="flex-1"
+                        onClick={() => {
+                          const elapsed = Math.round((Date.now() - timerStart) / 60000);
+                          if (elapsed >= 1) {
+                            setTimeMinutes(String(elapsed));
+                            setTimerEndedAt(timerStart);
+                            toast.success(
+                              `Timer stopped at ${elapsed} min — review and save below.`,
+                            );
+                          } else {
+                            toast.error("Less than a minute recorded; timer discarded.");
+                          }
+                          setTimerStart(null);
+                        }}
+                      >
+                        Stop &amp; use
+                      </Button>
+                    )}
+                  </div>
+                </div>
                 <div className="space-y-2">
                   <Label htmlFor="tm-desc">Description</Label>
                   <Input
@@ -1239,6 +1290,14 @@ export default function MatterDetail() {
                     onChange={(e) => setTimeDate(e.target.value)}
                   />
                 </div>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={timeBillable}
+                    onChange={(e) => setTimeBillable(e.target.checked)}
+                  />
+                  Billable (untick for non-billable internal work)
+                </label>
                 <Button
                   className="w-full"
                   disabled={busy}
@@ -1255,10 +1314,16 @@ export default function MatterDetail() {
                         minutes: parseInt(timeMinutes, 10),
                         ratePerHourMinor: Math.round(parseFloat(timeRate) * 100),
                         date: timeDate,
+                        startedAt: timerEndedAt ?? undefined,
+                        endedAt: timerEndedAt
+                          ? timerEndedAt + parseInt(timeMinutes, 10) * 60_000
+                          : undefined,
+                        billable: timeBillable,
                       });
                       toast.success("Time recorded.");
                       setTimeDesc("");
                       setTimeMinutes("");
+                      setTimerEndedAt(null);
                     } catch (err) {
                       toast.error(err instanceof Error ? err.message : "Failed.");
                     } finally {
@@ -1339,6 +1404,61 @@ export default function MatterDetail() {
                     />
                   </div>
                 </div>
+                <div className="space-y-2">
+                  <Label>Category</Label>
+                  <Select value={expenseCategory} onValueChange={setExpenseCategory}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="court_fee">Court fee</SelectItem>
+                      <SelectItem value="filing">Filing</SelectItem>
+                      <SelectItem value="travel">Travel</SelectItem>
+                      <SelectItem value="printing">Printing</SelectItem>
+                      <SelectItem value="courier">Courier</SelectItem>
+                      <SelectItem value="misc">Miscellaneous</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Receipt (optional)</Label>
+                  <input
+                    ref={receiptInput}
+                    type="file"
+                    className="hidden"
+                    onChange={(e) => setReceiptFile(e.target.files?.[0] ?? null)}
+                  />
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => receiptInput.current?.click()}
+                    >
+                      <Paperclip className="mr-1.5 size-4" />
+                      {receiptFile ? receiptFile.name : "Attach receipt"}
+                    </Button>
+                    {receiptFile && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => {
+                          setReceiptFile(null);
+                          if (receiptInput.current) receiptInput.current.value = "";
+                        }}
+                      >
+                        Clear
+                      </Button>
+                    )}
+                  </div>
+                </div>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={expenseBillable}
+                    onChange={(e) => setExpenseBillable(e.target.checked)}
+                  />
+                  Billable to the client (reimbursable)
+                </label>
                 <Button
                   className="w-full"
                   disabled={busy}
@@ -1349,15 +1469,36 @@ export default function MatterDetail() {
                     }
                     setBusy(true);
                     try {
+                      let receiptStorageId: Id<"_storage"> | undefined;
+                      if (receiptFile) {
+                        const url = await generateUploadUrl({ matterId: matterId! });
+                        const res = await fetch(url, {
+                          method: "POST",
+                          headers: { "Content-Type": receiptFile.type || "application/octet-stream" },
+                          body: receiptFile,
+                        });
+                        receiptStorageId = ((await res.json()) as { storageId: string }).storageId as Id<"_storage">;
+                      }
                       await addExpense({
                         matterId: matterId!,
                         description: expenseDesc,
                         amountMinor: Math.round(parseFloat(expenseAmount) * 100),
                         date: expenseDate,
+                        category: expenseCategory as
+                          | "court_fee"
+                          | "filing"
+                          | "travel"
+                          | "printing"
+                          | "courier"
+                          | "misc",
+                        receiptStorageId,
+                        billable: expenseBillable,
                       });
                       toast.success("Expense recorded.");
                       setExpenseDesc("");
                       setExpenseAmount("");
+                      setReceiptFile(null);
+                      if (receiptInput.current) receiptInput.current.value = "";
                     } catch (err) {
                       toast.error(err instanceof Error ? err.message : "Failed.");
                     } finally {

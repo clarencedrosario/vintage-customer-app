@@ -273,12 +273,18 @@ export const billable = query({
         ratePerHourMinor: Math.round(t.ratePerHour * 100),
         amountMinor: Math.round((t.minutes / 60) * t.ratePerHour * 100),
         date: t.date,
+        billable: t.billable ?? true,
+        startedAt: t.startedAt ?? null,
+        endedAt: t.endedAt ?? null,
       })),
       expenses: exps.map((e) => ({
         _id: e._id,
         description: e.description,
         amountMinor: Math.round(e.amount * 100),
         date: e.date,
+        category: e.category ?? null,
+        receiptStorageId: e.receiptStorageId ?? null,
+        billable: e.billable ?? true,
       })),
     };
   },
@@ -716,6 +722,10 @@ export const addTime = mutation({
     minutes: v.number(),
     ratePerHourMinor: v.number(),
     date: v.string(),
+    // Timer-based entry: the measured window is preserved for the record.
+    startedAt: v.optional(v.number()),
+    endedAt: v.optional(v.number()),
+    billable: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const ac = await requireAccess(ctx);
@@ -728,6 +738,9 @@ export const addTime = mutation({
     if (!Number.isInteger(args.ratePerHourMinor) || args.ratePerHourMinor < 0) {
       throw new Error("Rate must be whole paise per hour.");
     }
+    if (args.startedAt !== undefined && args.endedAt !== undefined && args.endedAt < args.startedAt) {
+      throw new Error("The timer end is before its start.");
+    }
     await ctx.db.insert("timeEntries", {
       matterId: args.matterId,
       userId: ac.user._id,
@@ -735,6 +748,9 @@ export const addTime = mutation({
       minutes: args.minutes,
       ratePerHour: args.ratePerHourMinor / 100, // legacy rupees field
       date: args.date,
+      startedAt: args.startedAt,
+      endedAt: args.endedAt,
+      billable: args.billable ?? true,
       createdAt: Date.now(),
     });
   },
@@ -746,6 +762,19 @@ export const addExpense = mutation({
     description: v.string(),
     amountMinor: v.number(),
     date: v.string(),
+    // Vault-era fields: receipt image and classification.
+    category: v.optional(
+      v.union(
+        v.literal("court_fee"),
+        v.literal("filing"),
+        v.literal("travel"),
+        v.literal("printing"),
+        v.literal("courier"),
+        v.literal("misc"),
+      ),
+    ),
+    receiptStorageId: v.optional(v.id("_storage")),
+    billable: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const ac = await requireAccess(ctx);
@@ -760,6 +789,9 @@ export const addExpense = mutation({
       description: args.description.trim().slice(0, 300),
       amount: args.amountMinor / 100, // legacy rupees field
       date: args.date,
+      category: args.category,
+      receiptStorageId: args.receiptStorageId,
+      billable: args.billable ?? true,
       createdAt: Date.now(),
     });
   },

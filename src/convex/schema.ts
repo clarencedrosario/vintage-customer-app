@@ -6,6 +6,7 @@ import {
   featureFiveTables,
   featureSixTables,
   featureNineTables,
+  vaultTables,
 } from "./schemaExtras";
 
 // ---------------------------------------------------------------------
@@ -114,6 +115,7 @@ export default defineSchema({
   ...featureFiveTables,
   ...featureSixTables,
   ...featureNineTables,
+  ...vaultTables,
 
   users: defineTable({
     name: v.optional(v.string()),
@@ -971,6 +973,10 @@ export default defineSchema({
     ratePerHour: v.number(),
     date: v.string(),
     invoiceId: v.optional(v.id("invoices")),
+    // Vault-era additions (all optional — legacy rows read fine).
+    billable: v.optional(v.boolean()),
+    startedAt: v.optional(v.number()), // timer-originated entries
+    endedAt: v.optional(v.number()),
     createdAt: v.number(),
   })
     .index("by_matter", ["matterId"])
@@ -982,6 +988,19 @@ export default defineSchema({
     amount: v.number(),
     date: v.string(),
     invoiceId: v.optional(v.id("invoices")),
+    // Vault-era additions (all optional — legacy rows read fine).
+    category: v.optional(
+      v.union(
+        v.literal("court_fee"),
+        v.literal("filing"),
+        v.literal("travel"),
+        v.literal("printing"),
+        v.literal("courier"),
+        v.literal("misc"),
+      ),
+    ),
+    receiptStorageId: v.optional(v.id("_storage")),
+    billable: v.optional(v.boolean()),
     createdAt: v.number(),
   })
     .index("by_matter", ["matterId"])
