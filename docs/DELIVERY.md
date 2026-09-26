@@ -5,7 +5,7 @@ Status legend:
 - **Awaiting external config** — implemented, but needs credentials/approvals you must supply (keys, merchant accounts, provider review).
 - **Incomplete** — not built yet.
 
-Last verified: 25 September 2026 — `tsc -b` 0 errors, 271/271 tests, Convex push and production build succeed.
+Last verified: 25 September 2026 — `tsc -b` 0 errors, 274/274 tests, Convex push and production build succeed.
 
 ## The connected chamber (this milestone's focus)
 
@@ -91,7 +91,18 @@ the pack builder can be reopened with that next hearing already selected.
 - **Billing & Time**: timer and manual time entries, billable/non-billable on time and expenses, expense categories (court fee / filing / travel / printing / courier / misc), receipt attachments, and the existing rates / fixed-fee / retainer / GST / payment-tracking engine now surfacing the new fields.
 - Verified: `tsc -b --noEmit` clean, 271/271 tests, `bun convex dev --once` push (new `vaultMeta`/`vaultVersions` tables + extended `timeEntries`/`expenses` fields), production build. Not verified live: browser click-through of the Vault and new billing forms, real-file version/receipt uploads, OCR on scans, live AI calls (no OPENAI_API_KEY in this environment).
 
-## Milestone status (section 31 list)
+## Email Integration — thread filing & AI email work (added 25 Sep 2026)
+
+Feature §2 of the current spec, built as an extension of the existing thread system (no parallel email store):
+
+- **File an email** (`conversations.recordEmail` extended): an email is filed into a matter/client thread with structured metadata (`messages.emailMeta` — direction, from, to, subject, email date, filed-by) plus optional attachments that must already exist as vault documents on the same matter. Every filing is audit-logged. The Comms thread view renders filed emails with their own header strip.
+- **Create tasks from emails**: the existing `conversations.createTaskFromEmail` is now reachable from every filed email (task.manage holders only); the task lands on the thread's matter.
+- **AI email summarisation & reply drafting**: two new AI kinds — `email_summary` and `email_reply` — flowing through the existing job pipeline (saved requests, usage caps, idempotent claims, professional-review banner). `ai.prepareJob` pins the filed email at request time (snapshot stored on the job, so the runner never re-reads a message); the runner adds it as a single labelled "FILED EMAIL" source with the matter's extracted sources as supporting context. The reply prompt forbids invented commitments/dates, requires `[NEEDS LAWYER'S INPUT: …]` and `[AUTHORITY NEEDED]` placeholders, and never predicts outcomes.
+- **UI**: "File an email" button on matter threads; "AI summary" and "AI reply draft" actions on each filed email (note.write holders); results deep-link to the matter's AI tab. Kind labels added in the studio and AI page.
+
+Verified: `tsc -b --noEmit` clean, 274/274 tests, `bun convex dev --once` push (messages.emailMeta + aiJobs.emailMessageId/emailBody). Not verified live: no OPENAI_API_KEY in this environment, so no live model call — prompts, access checks and pipeline compile and push; mailbox auto-sync (Gmail/Outlook OAuth) remains unimplemented, stated as such rather than faked.
+
+
 
 1. **Source reconciliation, opening screen, account lifecycle** — done (landing, login/OTP, portals, invitations). Verified 24 Sep 2026: invitation lifecycle logic extracted to `src/lib/invitationFlow.ts` (pure, 13 unit tests: status register, SHA-256 salted token hashing, blocker precedence, invited-email match, seat gating) and one defect fixed — accepting a client invitation no longer overwrites an existing user's legacy `role` (which mis-routed firm members' fallback portal).
 2. **Clients, matters, teams, support-staff workflows** — done.

@@ -30,7 +30,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Bell,
+  Bot,
   CheckCheck,
+  ClipboardList,
   Download,
   ImagePlus,
   Inbox,
@@ -44,8 +46,9 @@ import {
   Send,
   ShieldAlert,
   ShieldCheck,
+  Sparkles,
 } from "lucide-react";
-import { formatDateTimeIN } from "@/lib/format";
+import { formatDateTimeIN, todayIN } from "@/lib/format";
 
 type ThreadSummary = {
   _id: Id<"conversations">;
@@ -77,6 +80,14 @@ type MessageRow = {
   invoiceRef: string | null;
   invoiceAmountMinor: number | null;
   kind: string;
+  emailMeta: {
+    direction: "inbound" | "outbound";
+    fromAddress: string;
+    toAddress: string;
+    subject: string;
+    receivedAt: number;
+    filedByName?: string;
+  } | null;
 };
 
 /** One uploaded-but-not-yet-sent chat attachment. */
@@ -97,6 +108,10 @@ export default function Comms() {
   const [openId, setOpenId] = useState<Id<"conversations"> | null>(null);
   const [newOpen, setNewOpen] = useState(false);
   const [updateOpen, setUpdateOpen] = useState(false);
+  // Email integration: filing an email into the open matter thread and
+  // turning a filed email into a task.
+  const [fileEmailOpen, setFileEmailOpen] = useState(false);
+  const [emailTaskMessage, setEmailTaskMessage] = useState<MessageRow | null>(null);
 
   const detail = useQuery(
     api.conversations.detail,
@@ -177,6 +192,8 @@ export default function Comms() {
                 <ThreadDetail
                   detail={detail}
                   onUpdate={() => setUpdateOpen(true)}
+                  onFileEmail={() => setFileEmailOpen(true)}
+                  onEmailTask={setEmailTaskMessage}
                 />
               )}
             </div>
@@ -279,6 +296,21 @@ export default function Comms() {
         matterId={detail?.matterId ?? null}
         onSent={(conversationId) => setOpenId(conversationId)}
       />
+      {openId && detail?.matterId && (
+        <FileEmailDialog
+          conversationId={openId}
+          matterId={detail.matterId}
+          open={fileEmailOpen}
+          onOpenChange={setFileEmailOpen}
+        />
+      )}
+      {openId && detail?.matterId && emailTaskMessage && (
+        <EmailTaskDialog
+          conversationId={openId}
+          message={emailTaskMessage}
+          onClose={() => setEmailTaskMessage(null)}
+        />
+      )}
     </ChamberShell>
   );
 }
@@ -306,6 +338,8 @@ function StatusBadge({ status, reason }: { status: string; reason?: string }) {
 function ThreadDetail({
   detail,
   onUpdate,
+  onFileEmail,
+  onEmailTask,
 }: {
   detail: {
     _id: Id<"conversations">;
@@ -317,6 +351,8 @@ function ThreadDetail({
     myUnread: number;
   };
   onUpdate: () => void;
+  onFileEmail: () => void;
+  onEmailTask: (m: MessageRow) => void;
 }) {
   const markRead = useMutation(api.conversations.markRead);
   const generateUploadUrl = useMutation(api.conversations.generateAttachmentUploadUrl);
@@ -415,6 +451,11 @@ function ThreadDetail({
                 <Send className="size-3.5" /> Client update
               </Button>
             )}
+            {detail.matterId && (
+              <Button size="sm" variant="outline" onClick={onFileEmail}>
+                <Mail className="size-3.5" /> File an email
+              </Button>
+            )}
             {detail.myUnread > 0 && (
               <Button
                 size="sm"
@@ -459,7 +500,39 @@ function ThreadDetail({
                   {m.kind === "client_update" ? "Client update" : "Reminder"}
                 </p>
               )}
+              {/* Filed email: header strip with its own metadata. */}
+              {m.emailMeta && (
+                <div className="mb-2 rounded border border-[#B68A45]/30 bg-[#F7F5EF]/60 px-3 py-2">
+                  <p className="flex flex-wrap items-center gap-x-2 text-xs font-medium">
+                    <Mail
+                      className="size-3.5 text-[#8a6a33]"
+                      aria-hidden="true"
+                    />
+                    {m.emailMeta.direction === "inbound" ? "Received email" : "Sent email"}
+                    <span className="ink-faded">·</span>
+                    <span className="ink-faded">{m.emailMeta.subject}</span>
+                  </p>
+                  <p className="type-label mt-0.5 ink-faded">
+                    {m.emailMeta.fromAddress} → {m.emailMeta.toAddress}
+                    {m.emailMeta.filedByName ? ` · filed by ${m.emailMeta.filedByName}` : ""}
+                  </p>
+                </div>
+              )}
               <p className="text-sm whitespace-pre-wrap">{m.body}</p>
+              {/* Email actions — matter threads only; AI needs note-write. */}
+              {m.emailMeta && detail.matterId && (
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                  <EmailAIButtons
+                    matterId={detail.matterId}
+                    messageId={m._id}
+                  />
+                  <EmailTaskButton
+                    matterId={detail.matterId}
+                    disabled={false}
+                    onClick={() => onEmailTask(m)}
+                  />
+                </div>
+              )}
               {m.attachments.length > 0 && (
                 <ul className="mt-2 space-y-1">
                   {m.attachments.map((a) => (
@@ -1474,6 +1547,386 @@ function ComposeDialog({
             }}
           >
             Prepare
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Email integration — file an email into a matter thread, then work it:
+// create a task from it, or run AI summarisation / reply drafting.
+// ---------------------------------------------------------------------
+
+/** File an email into the open matter thread (staff, note.write). */
+function FileEmailDialog({
+  conversationId,
+  matterId,
+  open,
+  onOpenChange,
+}: {
+  conversationId: Id<"conversations">;
+  matterId: Id<"matters">;
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+}) {
+  const recordEmail = useMutation(api.conversations.recordEmail);
+  const documents = useQuery(api.matters.listDocuments, { matterId }) ?? [];
+  const [direction, setDirection] = useState<"inbound" | "outbound">("inbound");
+  const [fromAddress, setFromAddress] = useState("");
+  const [toAddress, setToAddress] = useState("");
+  const [subject, setSubject] = useState("");
+  const [body, setBody] = useState("");
+  const [receivedOn, setReceivedOn] = useState(todayIN());
+  const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    setBusy(true);
+    try {
+      await recordEmail({
+        conversationId,
+        direction,
+        fromAddress: fromAddress.trim(),
+        toAddress: toAddress.trim(),
+        subject: subject.trim(),
+        body: body.trim(),
+        receivedAt: new Date(`${receivedOn}T12:00:00+05:30`).getTime(),
+        attachmentDocumentIds:
+          attachmentIds.length > 0
+            ? (attachmentIds as Id<"matterDocuments">[])
+            : undefined,
+      });
+      toast.success("Email filed to the thread.");
+      onOpenChange(false);
+      setFromAddress("");
+      setToAddress("");
+      setSubject("");
+      setBody("");
+      setAttachmentIds([]);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not file the email.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="font-serif">File an email to this thread</DialogTitle>
+          <DialogDescription>
+            The email is recorded with its metadata and stays linked to this
+            matter. Attachments must already be in the Document Vault.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-2">
+              <Label>Direction</Label>
+              <Select
+                value={direction}
+                onValueChange={(v) => setDirection(v as typeof direction)}
+              >
+                <SelectTrigger className="cursor-pointer">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="inbound">Received (inbound)</SelectItem>
+                  <SelectItem value="outbound">Sent (outbound)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="fe-date">Email date</Label>
+              <Input
+                id="fe-date"
+                type="date"
+                value={receivedOn}
+                onChange={(e) => setReceivedOn(e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="fe-from">From</Label>
+            <Input
+              id="fe-from"
+              value={fromAddress}
+              onChange={(e) => setFromAddress(e.target.value)}
+              placeholder={direction === "inbound" ? "client@example.com" : "chamber@example.com"}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="fe-to">To</Label>
+            <Input
+              id="fe-to"
+              value={toAddress}
+              onChange={(e) => setToAddress(e.target.value)}
+              placeholder={direction === "inbound" ? "chamber@example.com" : "client@example.com"}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="fe-subject">Subject</Label>
+            <Input
+              id="fe-subject"
+              value={subject}
+              onChange={(e) => setSubject(e.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="fe-body">Email body</Label>
+            <Textarea
+              id="fe-body"
+              rows={6}
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              placeholder="Paste the email content…"
+            />
+          </div>
+          {documents.length > 0 && (
+            <div className="space-y-2">
+              <Label>Attachments already in the vault</Label>
+              <div className="max-h-28 space-y-1 overflow-y-auto rounded border p-2">
+                {documents.map((d) => {
+                  const on = attachmentIds.includes(d._id);
+                  return (
+                    <label
+                      key={d._id}
+                      className="flex cursor-pointer items-center gap-2 text-xs"
+                    >
+                      <Checkbox
+                        checked={on}
+                        onCheckedChange={(v) =>
+                          setAttachmentIds((prev) =>
+                            v === true
+                              ? [...prev, d._id]
+                              : prev.filter((x) => x !== d._id),
+                          )
+                        }
+                      />
+                      <span className="truncate">{d.name}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button
+            disabled={
+              busy ||
+              !fromAddress.trim() ||
+              !toAddress.trim() ||
+              !subject.trim() ||
+              !body.trim()
+            }
+            onClick={submit}
+          >
+            File email
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** AI actions on a filed email: summarise, or draft a reply. */
+function EmailAIButtons({
+  matterId,
+  messageId,
+}: {
+  matterId: Id<"matters">;
+  messageId: Id<"messages">;
+}) {
+  const caps = useQuery(api.workspace.myCapabilities);
+  const prepareJob = useMutation(api.ai.prepareJob);
+  const [busy, setBusy] = useState<"summary" | "reply" | null>(null);
+
+  if (caps !== undefined && !caps.capabilities.includes("note.write")) {
+    return null;
+  }
+
+  const run = async (kind: "email_summary" | "email_reply") => {
+    setBusy(kind === "email_summary" ? "summary" : "reply");
+    try {
+      const jobId = await prepareJob({
+        matterId,
+        kind,
+        emailMessageId: messageId,
+        inputNote:
+          kind === "email_summary"
+            ? "Summarise this filed email"
+            : "Draft a reply to this filed email",
+      });
+      toast.success(
+        kind === "email_summary"
+          ? "Email summary requested — the result appears in the matter's AI tab."
+          : "Reply draft requested — the result appears in the matter's AI tab.",
+      );
+      window.location.assign(`/matters/${matterId}?tab=ai&job=${jobId}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not start the AI job.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="h-7 text-xs"
+        disabled={busy !== null}
+        onClick={() => void run("email_summary")}
+      >
+        {busy === "summary" ? (
+          <Loader2 className="size-3.5 animate-spin" />
+        ) : (
+          <Sparkles className="size-3.5" />
+        )}
+        AI summary
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="h-7 text-xs"
+        disabled={busy !== null}
+        onClick={() => void run("email_reply")}
+      >
+        {busy === "reply" ? (
+          <Loader2 className="size-3.5 animate-spin" />
+        ) : (
+          <Bot className="size-3.5" />
+        )}
+        AI reply draft
+      </Button>
+    </>
+  );
+}
+
+/** A filed email can become a task (task.manage). */
+function EmailTaskButton({
+  onClick,
+}: {
+  matterId: Id<"matters">;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  const caps = useQuery(api.workspace.myCapabilities);
+  if (caps !== undefined && !caps.capabilities.includes("task.manage")) {
+    return null;
+  }
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      className="h-7 text-xs"
+      onClick={onClick}
+    >
+      <ClipboardList className="size-3.5" />
+      Create task
+    </Button>
+  );
+}
+
+/** Small dialog to turn a filed email into a matter task. */
+function EmailTaskDialog({
+  conversationId,
+  message,
+  onClose,
+}: {
+  conversationId: Id<"conversations">;
+  message: MessageRow;
+  onClose: () => void;
+}) {
+  const createTask = useMutation(api.conversations.createTaskFromEmail);
+  const [title, setTitle] = useState(
+    message.emailMeta ? `Follow up: ${message.emailMeta.subject}` : "",
+  );
+  const [priority, setPriority] = useState<"normal" | "high" | "urgent">("normal");
+  const [dueDate, setDueDate] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    setBusy(true);
+    try {
+      await createTask({
+        conversationId,
+        title: title.trim(),
+        priority,
+        dueDate: dueDate || undefined,
+      });
+      toast.success("Task created on the matter.");
+      onClose();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not create the task.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="font-serif">Create a task from this email</DialogTitle>
+          <DialogDescription>
+            The task is created on the thread's matter with an audit trail.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-2">
+            <Label htmlFor="et-title">Task title</Label>
+            <Input
+              id="et-title"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-2">
+              <Label>Priority</Label>
+              <Select
+                value={priority}
+                onValueChange={(v) => setPriority(v as typeof priority)}
+              >
+                <SelectTrigger className="cursor-pointer">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="normal">Normal</SelectItem>
+                  <SelectItem value="high">High</SelectItem>
+                  <SelectItem value="urgent">Urgent</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="et-due">Due date</Label>
+              <Input
+                id="et-due"
+                type="date"
+                value={dueDate}
+                onChange={(e) => setDueDate(e.target.value)}
+              />
+            </div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button disabled={busy || !title.trim()} onClick={submit}>
+            Create task
           </Button>
         </DialogFooter>
       </DialogContent>

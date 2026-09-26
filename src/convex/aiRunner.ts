@@ -160,6 +160,16 @@ Rules: never predict the outcome; never import facts not in the sources; anchor 
         wantsJson: false,
         user: `The lawyer is researching a legal question. Two source groups may appear below: "FIRM KNOWLEDGE" entries (the chamber's own approved precedents, research notes and saved authorities — real, verified material) and "MATTER SOURCES" (case documents).\n\nSTRICT RULES:\n- Treat only FIRM KNOWLEDGE entries marked as authorities/precedents as retrieved legal authority; name them exactly as recorded.\n- NEVER invent case names, citations, dates, courts or provisions. If no retrieved authority bears on the question, state plainly: "No authority in the firm library bears on this question" — do not fabricate.\n- Anything you produce that is analysis rather than retrieved material must be headed "AI-generated analysis (verify before use)".\n- For each retrieved authority cited, quote or summarise the passage it records and note its source reference.\n- Suggest, concretely, which court or official source the lawyer could check next — as a suggestion, never as a citation.${noteLine}\n\n${ctx}`,
       };
+    case "email_summary":
+      return {
+        wantsJson: false,
+        user: `This is "Summarise Email": analyse the filed email below (labelled "FILED EMAIL"; supporting matter sources follow). Provide:\n1. What the email asks, states or demands — quoting only from the email itself.\n2. Deadlines or dates it sets, each anchored [FILED EMAIL].\n3. Actions it requires from the chamber, if any.\n4. Anything the email asserts that the matter's sources do not corroborate — labelled as the sender's claim.\nNever import facts the email does not contain; never predict outcomes.${noteLine}\n\n${ctx}`,
+      };
+    case "email_reply":
+      return {
+        wantsJson: false,
+        user: `This is "Draft Reply": draft a professional reply to the filed email below (labelled "FILED EMAIL"; supporting matter sources follow). Rules:\n- Address the points actually raised in the email; do not invent commitments, dates or promises.\n- Where the record does not yet support an answer, write [NEEDS LAWYER'S INPUT: what].\n- Keep it concise, courteous and suitable for a lawyer to edit before sending; use "the next step is" rather than outcome predictions.\n- If legal authority would be needed, write [AUTHORITY NEEDED] — never cite what is not in the sources.${noteLine}\n\n${ctx}`,
+      };
     case "opposition":
       return {
         wantsJson: false,
@@ -343,6 +353,27 @@ export const runJob = internalAction({
 
     const payload = await ctx.runQuery(internal.ai.jobForRunner, { jobId: args.jobId });
     if (!payload) return;
+
+    // Email jobs: pin the filed email as the single labelled source and
+    // the matter's extracted sources as supporting context. The snapshot
+    // was taken at request time — nothing is re-read from the thread here.
+    if (payload.kind === "email_summary" || payload.kind === "email_reply") {
+      if (!payload.emailBody) {
+        await ctx.runMutation(internal.ai.attachError, {
+          jobId: args.jobId,
+          error: "The filed email is missing from this request. File the email again.",
+        });
+        return;
+      }
+      payload.sources = [
+        {
+          name: "FILED EMAIL",
+          role: "other",
+          text: payload.emailBody,
+        },
+        ...payload.sources,
+      ];
+    }
 
     // Contextual kinds with nothing extracted yet: fail honestly — never
     // let the model answer "from memory".

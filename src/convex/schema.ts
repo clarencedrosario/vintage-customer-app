@@ -1446,6 +1446,21 @@ export default defineSchema({
         v.literal("note"),
       ),
     ),
+    // Email integration: metadata for emails filed into a thread via
+    // conversations.recordEmail. null for ordinary chat messages. Kept
+    // structured (not only embedded in body text) so the email desk can
+    // render From/To/Subject properly and the AI email jobs can quote it.
+    emailMeta: v.optional(
+      v.object({
+        direction: v.union(v.literal("inbound"), v.literal("outbound")),
+        fromAddress: v.string(),
+        toAddress: v.string(),
+        subject: v.string(),
+        receivedAt: v.number(),
+        filedById: v.optional(v.id("users")),
+        filedByName: v.optional(v.string()),
+      }),
+    ),
     createdAt: v.number(),
   })
     .index("by_conversation", ["conversationId"])
@@ -2006,6 +2021,11 @@ export default defineSchema({
     // For voice jobs: the preserved recording + transcript.
     transcript: v.optional(v.string()),
     storageId: v.optional(v.id("_storage")),
+    // For email jobs (email_summary / email_reply): the filed email the
+    // job works from, with its full text snapshot so the runner never
+    // reads a message the caller could not see at request time.
+    emailMessageId: v.optional(v.id("messages")),
+    emailBody: v.optional(v.string()),
     requestedById: v.id("users"),
     createdAt: v.number(),
     completedAt: v.optional(v.number()),

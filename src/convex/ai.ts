@@ -180,6 +180,10 @@ export const AI_KINDS = [
   "compare",
   "morning_briefing",
   "legal_research",
+  // Email integration: summarise or draft a reply to an email filed to
+  // a matter thread. The filed email is pinned as the single source.
+  "email_summary",
+  "email_reply",
 ] as const;
 
 /**
@@ -232,6 +236,8 @@ export const prepareJob = mutation({
     inputNote: v.optional(v.string()),
     transcript: v.optional(v.string()),
     storageId: v.optional(v.id("_storage")),
+    // Email integration: the filed email the job works from.
+    emailMessageId: v.optional(v.id("messages")),
   },
   handler: async (ctx, args) => {
     const ac = await requireAccess(ctx);
@@ -270,6 +276,39 @@ export const prepareJob = mutation({
       }
     }
 
+    // Email AI jobs answer from the exact filed email: the caller passes
+    // the email's messageId; the runner pins it as a single labelled
+    // source. Access is the thread's matter rule — no separate path.
+    let emailBody: string | null = null;
+    if (args.kind === "email_summary" || args.kind === "email_reply") {
+      if (!args.emailMessageId) {
+        throw new Error("This email request needs the filed email to work from.");
+      }
+      const msg = await ctx.db.get(args.emailMessageId);
+      const meta = msg?.emailMeta;
+      if (
+        !msg ||
+        !meta ||
+        msg.orgId !== ac.org._id ||
+        (msg.conversationId
+          ? (
+              await ctx.db.get(msg.conversationId)
+            )?.matterId !== args.matterId
+          : true)
+      ) {
+        throw new Error("That email is not available on this matter.");
+      }
+      emailBody = [
+        `DIRECTION: ${meta.direction === "inbound" ? "received by the chamber" : "sent by the chamber"}`,
+        `FROM: ${meta.fromAddress}`,
+        `TO: ${meta.toAddress}`,
+        `SUBJECT: ${meta.subject}`,
+        `FILED ON: ${new Date(meta.receivedAt).toISOString().slice(0, 10)}`,
+        ``,
+        msg.body,
+      ].join("\n");
+    }
+
     // Ask This Document: the question must be anchored to a document
     // that already has an extracted AI source on this matter (extraction
     // is the explicit act — the studio's Sources tab). The job simply
@@ -292,6 +331,9 @@ export const prepareJob = mutation({
       inputNote: args.inputNote?.trim().slice(0, 4000) || undefined,
       transcript: args.transcript?.slice(0, 40_000),
       storageId: args.storageId,
+      // Email jobs: the runner reads the filed email from this id.
+      emailMessageId: args.emailMessageId,
+      emailBody: emailBody ?? undefined,
       monthKey: key,
       requestedById: ac.user._id,
       createdAt: Date.now(),
@@ -466,6 +508,8 @@ export const jobForRunner = internalQuery({
       inputNote: job.inputNote ?? null,
       transcript: job.transcript ?? null,
       storageId: job.storageId ?? null,
+      // Email jobs: the exact filed email, snapshotted at request time.
+      emailBody: job.emailBody ?? null,
       noSourcesAvailable:
         AUTO_SOURCE_KINDS.has(job.kind) && sources.length === 0,
       sources,

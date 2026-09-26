@@ -70,6 +70,8 @@ const KIND_LABELS: Record<string, string> = {
   compare: "Document comparison",
   morning_briefing: "Morning briefing",
   legal_research: "Legal research",
+  email_summary: "Email summary",
+  email_reply: "Email reply draft",
 };
 
 const NEEDS_SOURCES = new Set([

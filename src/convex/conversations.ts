@@ -273,6 +273,7 @@ export const detail = query({
         invoiceRef,
         invoiceAmountMinor,
         kind: m.kind ?? "message",
+        emailMeta: m.emailMeta ?? null,
       });
     }
 
@@ -770,6 +771,7 @@ export const recordEmail = mutation({
     }
 
     const now = Date.now();
+    const filedByName = ac.user.name || ac.user.email || "Member";
     await ctx.db.insert("messages", {
       conversationId: args.conversationId,
       orgId: ac.org._id,
@@ -783,9 +785,26 @@ export const recordEmail = mutation({
       ].join("\n"),
       attachmentDocumentIds: args.attachmentDocumentIds,
       kind: "message",
+      emailMeta: {
+        direction: args.direction,
+        fromAddress: args.fromAddress.trim().slice(0, 300),
+        toAddress: args.toAddress.trim().slice(0, 300),
+        subject: args.subject.trim().slice(0, MAX_SUBJECT),
+        receivedAt: args.receivedAt,
+        filedById: ac.user._id,
+        filedByName,
+      },
       createdAt: now,
     });
     await ctx.db.patch(args.conversationId, { lastMessageAt: now });
+    await ctx.db.insert("auditLog", {
+      orgId: ac.org._id,
+      actorId: ac.user._id,
+      actorName: filedByName,
+      action: "Email filed to thread",
+      detail: `${args.direction} — “${args.subject.trim().slice(0, 100)}” (${args.fromAddress} → ${args.toAddress})${(args.attachmentDocumentIds ?? []).length ? `, ${(args.attachmentDocumentIds ?? []).length} vault attachment(s)` : ""}`,
+      createdAt: now,
+    });
     return { ok: true as const };
   },
 });
