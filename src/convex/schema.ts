@@ -2026,6 +2026,9 @@ export default defineSchema({
     // reads a message the caller could not see at request time.
     emailMessageId: v.optional(v.id("messages")),
     emailBody: v.optional(v.string()),
+    // For morning briefings: the access-checked digest of yesterday's
+    // filed inbound emails, built at request time over the IST day.
+    emailDigest: v.optional(v.string()),
     requestedById: v.id("users"),
     createdAt: v.number(),
     completedAt: v.optional(v.number()),

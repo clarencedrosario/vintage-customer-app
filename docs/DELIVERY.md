@@ -5,7 +5,7 @@ Status legend:
 - **Awaiting external config** — implemented, but needs credentials/approvals you must supply (keys, merchant accounts, provider review).
 - **Incomplete** — not built yet.
 
-Last verified: 25 September 2026 — `tsc -b` 0 errors, 274/274 tests, Convex push and production build succeed.
+Last verified: 26 September 2026 — `tsc -b` 0 errors, 285/285 tests, Convex push and production build succeed.
 
 ## The connected chamber (this milestone's focus)
 
@@ -100,7 +100,18 @@ Feature §2 of the current spec, built as an extension of the existing thread sy
 - **AI email summarisation & reply drafting**: two new AI kinds — `email_summary` and `email_reply` — flowing through the existing job pipeline (saved requests, usage caps, idempotent claims, professional-review banner). `ai.prepareJob` pins the filed email at request time (snapshot stored on the job, so the runner never re-reads a message); the runner adds it as a single labelled "FILED EMAIL" source with the matter's extracted sources as supporting context. The reply prompt forbids invented commitments/dates, requires `[NEEDS LAWYER'S INPUT: …]` and `[AUTHORITY NEEDED]` placeholders, and never predicts outcomes.
 - **UI**: "File an email" button on matter threads; "AI summary" and "AI reply draft" actions on each filed email (note.write holders); results deep-link to the matter's AI tab. Kind labels added in the studio and AI page.
 
-Verified: `tsc -b --noEmit` clean, 274/274 tests, `bun convex dev --once` push (messages.emailMeta + aiJobs.emailMessageId/emailBody). Not verified live: no OPENAI_API_KEY in this environment, so no live model call — prompts, access checks and pipeline compile and push; mailbox auto-sync (Gmail/Outlook OAuth) remains unimplemented, stated as such rather than faked.
+Verified: `tsc -b --noEmit` clean, 285/285 tests, `bun convex dev --once` push (messages.emailMeta + aiJobs.emailMessageId/emailBody/emailDigest). Not verified live: no OPENAI_API_KEY in this environment, so no live model call — prompts, access checks and pipeline compile and push; mailbox auto-sync (Gmail/Outlook OAuth) remains unimplemented, stated as such rather than faked.
+
+## Morning Briefing × filed emails (added 26 Sep 2026)
+
+The AI Morning Briefing now includes **yesterday's filed inbound emails** alongside the matter sources:
+
+- `prepareMorningBriefing` collects emails filed via `conversations.recordEmail` whose `emailMeta.receivedAt` falls in the previous **IST calendar day** (fixed UTC+5:30 — same day model as the reminder engine), builds a capped digest (`emailDigestForBriefing`, newest first, 8 emails max, bodies truncated with an explicit marker) and snapshots it onto the job at request time.
+- **Access discipline:** the digest is built only over the caller's *visible* matters — the exact same team/role rule that filters the briefing's matter sources. A team-restricted matter's emails cannot leak into a briefing just because the requester holds `note.write`. Only `inbound` direction is included; filed emails on threads without a matter are excluded by construction.
+- The runner prompt adds a final "Emails received yesterday" section, cites each as `[EMAIL n]` with its matter reference, folds email-set dates into the 14-day deadline section, and keeps the no-inference / no-prediction rules. Briefings without any filed emails are byte-identical to the previous behaviour (no empty-section noise).
+- Pure logic (`istDayWindow`, `emailDigestForBriefing`) lives in `src/convex/ai.ts` and is unit-tested in `src/convex/briefingEmails.test.ts` (11 tests: day-window boundaries across midnight/month/year, window classification, ordering, cap, truncation, citation format).
+
+Verified: `tsc -b --noEmit` clean, 285/285 tests, `bun convex dev --once` push (aiJobs.emailDigest). Not verified live: still no OPENAI_API_KEY in this environment — prompt behaviour needs live verification by the operator.
 
 
 

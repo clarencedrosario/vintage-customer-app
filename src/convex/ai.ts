@@ -45,6 +45,77 @@ export function monthKeyIST(at = Date.now()): string {
 }
 
 // ---------------------------------------------------------------------
+// Morning briefing — yesterday's filed inbound emails
+//
+// Pure helpers so the day-window and digest construction are unit-
+// testable without a database. "Yesterday" is the previous IST calendar
+// day (the chamber works on IST days, matching the reminder engine).
+// ---------------------------------------------------------------------
+
+/**
+ * [start, end) epoch-ms window of the IST calendar day `offsetDays`
+ * before the day containing `at`. offset 0 = today, 1 = yesterday.
+ */
+export function istDayWindow(
+  at: number,
+  offsetDays: number,
+): { start: number; end: number } {
+  const shifted = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(at - offsetDays * 86_400_000);
+  // IST is a fixed UTC+5:30 offset — no DST — so the day starts at
+  // 00:00 IST == 18:30 UTC of the previous UTC day.
+  const start = Date.parse(`${shifted}T00:00:00+05:30`);
+  return { start, end: start + 86_400_000 };
+}
+
+export const BRIEFING_EMAIL_CAP = 8;
+const EMAIL_BODY_CHAR_CAP = 1_500;
+
+/**
+ * Build the briefing's email digest from filed-email rows the caller
+ * can already see. Rows are given pre-filtered (access decided by the
+ * caller's visible matters); this function only formats. Digest is
+ * capped: newest first, fixed per-email body cap, so the prompt stays
+ * bounded no matter how chatty the inbox was.
+ */
+export function emailDigestForBriefing(
+  rows: Array<{
+    messageId: string;
+    matterId: string;
+    matterReference: string;
+    fromAddress: string;
+    subject: string;
+    receivedAt: number;
+    body: string;
+  }>,
+): string | null {
+  if (rows.length === 0) return null;
+  const sorted = [...rows].sort((a, b) => b.receivedAt - a.receivedAt).slice(0, BRIEFING_EMAIL_CAP);
+  return sorted
+    .map((r, i) => {
+      const date = new Intl.DateTimeFormat("en-GB", {
+        timeZone: "Asia/Kolkata",
+        day: "2-digit",
+        month: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+      }).format(r.receivedAt);
+      return [
+        `[${i + 1}] EMAIL — matter ${r.matterReference}`,
+        `From: ${r.fromAddress}`,
+        `Received: ${date} IST`,
+        `Subject: ${r.subject}`,
+        `Body: ${r.body.slice(0, EMAIL_BODY_CHAR_CAP)}${r.body.length > EMAIL_BODY_CHAR_CAP ? "… [truncated]" : ""}`,
+      ].join("\n");
+    })
+    .join("\n\n---\n\n");
+}
+
+// ---------------------------------------------------------------------
 // Sources — explicit, authorized, reviewable extraction
 // ---------------------------------------------------------------------
 
@@ -510,6 +581,8 @@ export const jobForRunner = internalQuery({
       storageId: job.storageId ?? null,
       // Email jobs: the exact filed email, snapshotted at request time.
       emailBody: job.emailBody ?? null,
+      // Morning briefings: yesterday's filed inbound emails, digested.
+      emailDigest: job.emailDigest ?? null,
       noSourcesAvailable:
         AUTO_SOURCE_KINDS.has(job.kind) && sources.length === 0,
       sources,
@@ -810,7 +883,68 @@ export const prepareMorningBriefing = mutation({
       .collect();
     matters.sort((a, b) => b.updatedAt - a.updatedAt);
 
-    for (const matter of matters.slice(0, MORNING_BRIEFING_MATTER_CAP)) {
+    // The same visibility rule decides both the matter sources and the
+    // email digest: a team-restricted matter's emails must not leak into
+    // a briefing just because the requester has note.write.
+    const visibleMatters = matters.filter((matter) => {
+      const restricted = matter.restrictedToTeam === true;
+      const onTeam =
+        matter.leadLawyerId === ac.user._id ||
+        (matter.teamIds ?? []).includes(ac.user._id);
+      const privileged =
+        ac.membership.orgRole === "owner" ||
+        ac.membership.orgRole === "partner" ||
+        ac.membership.orgRole === "administrator";
+      return !restricted || onTeam || privileged;
+    });
+
+    // Yesterday's filed inbound emails across those matters (IST day).
+    const window = istDayWindow(Date.now(), 1);
+    const matterRefById = new Map(
+      visibleMatters.map((m) => [m._id as string, m.reference as string]),
+    );
+    const emailRows: Array<{
+      messageId: string;
+      matterId: string;
+      matterReference: string;
+      fromAddress: string;
+      subject: string;
+      receivedAt: number;
+      body: string;
+    }> = [];
+    const orgConversations = await ctx.db
+      .query("conversations")
+      .withIndex("by_org", (q) => q.eq("orgId", ac.org._id))
+      .collect();
+    const convMatter = new Map(
+      orgConversations
+        .filter((c) => c.matterId !== undefined)
+        .map((c) => [c._id as string, c.matterId as string]),
+    );
+    for (const msg of await ctx.db
+      .query("messages")
+      .withIndex("by_org", (q) => q.eq("orgId", ac.org._id))
+      .collect()) {
+      const meta = msg.emailMeta;
+      if (!meta || meta.direction !== "inbound") continue;
+      if (meta.receivedAt < window.start || meta.receivedAt >= window.end) continue;
+      const matterId = convMatter.get(msg.conversationId as string);
+      if (!matterId) continue;
+      const matterReference = matterRefById.get(matterId);
+      if (!matterReference) continue; // matter not visible to the caller
+      emailRows.push({
+        messageId: msg._id as string,
+        matterId,
+        matterReference,
+        fromAddress: meta.fromAddress,
+        subject: meta.subject,
+        receivedAt: meta.receivedAt,
+        body: msg.body,
+      });
+    }
+    const emailDigest = emailDigestForBriefing(emailRows);
+
+    for (const matter of visibleMatters.slice(0, MORNING_BRIEFING_MATTER_CAP)) {
       // The same pure team/role rule every module uses (cross-tenant is
       // impossible here — matters came from this org's index — but a
       // team-restricted matter must not leak into the briefing).
@@ -835,6 +969,9 @@ export const prepareMorningBriefing = mutation({
         matterId: matter._id,
         kind: "morning_briefing",
         status: "pending",
+        // Yesterday's filed inbound emails across the caller's visible
+        // matters, snapshotted at request time (IST day window).
+        emailDigest: emailDigest ?? undefined,
         monthKey: key,
         requestedById: ac.user._id,
         createdAt: Date.now(),

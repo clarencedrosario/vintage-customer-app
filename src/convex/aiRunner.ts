@@ -72,7 +72,13 @@ function contextBlock(sources: Source[]): string {
 }
 
 /** Per-kind user prompt. Kinds with structure return a JSON schema hint. */
-function promptFor(kind: string, sources: Source[], note: string | null, transcript: string | null): {
+function promptFor(
+  kind: string,
+  sources: Source[],
+  note: string | null,
+  transcript: string | null,
+  briefingEmailDigest: string | null,
+): {
   user: string;
   wantsJson: boolean;
 } {
@@ -150,11 +156,16 @@ Rules: never predict the outcome; never import facts not in the sources; anchor 
         wantsJson: false,
         user: `Compare the two (or more) documents below. Report, with [source, p.N] anchors on both sides: substantive differences in obligations, dates, amounts and parties; clauses present in one but absent from the other; and any contradiction between them. Neutral, factual tone; no advice on which version is better unless the lawyer asks.${noteLine}\n\n${ctx}`,
       };
-    case "morning_briefing":
-      return {
-        wantsJson: false,
-        user: `This is the "AI Morning Briefing". From the sources below (drawn from the chamber's matters), produce a restrained start-of-day note: (1) the dates and deadlines appearing in these materials that fall due within the next 14 days, each with its [source, p.N] anchor; (2) obligations or directions that appear outstanding; (3) open items the sources show as unresolved. Label every entry with its source. If a matter's sources are silent, say that matter had no dated material. No predictions, no strategy.${noteLine}\n\n${ctx}`,
-      };
+    case "morning_briefing": {
+      const briefingBase = `This is the "AI Morning Briefing". From the sources below (drawn from the chamber's matters), produce a restrained start-of-day note: (1) the dates and deadlines appearing in these materials that fall due within the next 14 days, each with its [source, p.N] anchor; (2) obligations or directions that appear outstanding; (3) open items the sources show as unresolved. Label every entry with its source. If a matter's sources are silent, say that matter had no dated material. No predictions, no strategy.${noteLine}\n\n${ctx}`;
+      if (briefingEmailDigest) {
+        return {
+          wantsJson: false,
+          user: `${briefingBase}\n\n---\n\nYESTERDAY'S FILED INBOUND EMAILS (per the chamber's record; each is quoted matter material, cite as [EMAIL n] and name the matter):\n\n${briefingEmailDigest}\n\nAfter the sections above, add a final section "Emails received yesterday": for each email, one line — sender, subject, the matter it is filed on, and what it asks or requires. If an email sets a date, include it in the 14-day deadline section too, citing [EMAIL n]. Summarise only what the emails say; do not infer beyond their text.`,
+        };
+      }
+      return { wantsJson: false, user: briefingBase };
+    }
     case "legal_research":
       return {
         wantsJson: false,
@@ -458,6 +469,7 @@ export const runJob = internalAction({
       payload.sources,
       payload.inputNote,
       transcript,
+      payload.emailDigest ?? null,
     );
 
     const result = await callOpenAI(apiKey, SYSTEM, user, wantsJson);
