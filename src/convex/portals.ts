@@ -842,6 +842,8 @@ export const clientUploadDocument = mutation({
     matterId: v.id("matters"),
     name: v.string(),
     storageId: v.id("_storage"),
+    // Declared-by-uploader SHA-256 (hex), computed in the browser.
+    checksum: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
@@ -862,6 +864,12 @@ export const clientUploadDocument = mutation({
     const name = args.name.trim().slice(0, 200);
     if (!name) throw new Error("Document name is required.");
 
+    if (
+      args.checksum !== undefined &&
+      !/^[a-f0-9]{64}$/.test(args.checksum)
+    ) {
+      throw new Error("Invalid checksum format.");
+    }
     await ctx.db.insert("matterDocuments", {
       matterId: args.matterId,
       uploaderId: user._id,
@@ -870,6 +878,7 @@ export const clientUploadDocument = mutation({
       visibility: "shared_with_client",
       storageId: args.storageId,
       submittedByClient: true,
+      integritySha256: args.checksum,
       custody: [
         {
           at: Date.now(),

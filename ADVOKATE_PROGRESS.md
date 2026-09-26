@@ -25,6 +25,130 @@ Notes:
   project; restore data via Convex dashboard snapshot import. This remains a
   launch-checklist item — **not** claimed as a verified restore.
 
+## Implementation turn — 26 Sep 2026, 20:35 UTC (turn 4, continued)
+
+### Completed: document integrity hashes + chain of custody (workflow-5 audit gap, §6)
+
+- **Pure logic** `src/lib/evidenceIntegrity.ts` + 15 tests — SHA-256 via
+  WebCrypto (browser at upload, Node at verification), hash-format
+  validation, custody-action vocabulary, human-readable event descriptions,
+  capped append (200 events, oldest drop; org audit log stays complete).
+- **Schema** (additive, optional): `matterDocuments.integritySha256`,
+  `matterDocuments.custody[]`. Reused the EXISTING `documentRequests`
+  per-version `checksum` metadata rather than inventing a parallel field.
+- **Writers wired** (every document-creation path): `matters.attachDocument`
+  (hash + "filed" custody), `portals.clientUploadDocument` (checksum +
+  "submitted_by_client"), `documentRequests.clientSubmit` (checksum on the
+  submission row) and its accept flow (hash carried to the matter row +
+  "accepted_from_request"), `imports.ts` ("imported"),
+  `documents.issueSecureDownloadLink` ("downloaded" — no token material).
+- **Server-side verification** `evidenceVerify.verifyDocumentIntegrity`
+  ("use node" action — crypto.subtle guaranteed) + internal bridges in
+  `evidence.ts` (V8: Convex allows only actions in Node modules). Re-hashes
+  stored bytes, compares to the recorded hash, appends
+  integrity_verified/integrity_mismatch custody + audit row. Honest failure
+  reasons: no_file / no_recorded_hash / bad_recorded_hash / file_missing /
+  crypto_unavailable / unauthorized — nothing fabricated. Authorization
+  re-checked inside the bridge (capability + matter + document level).
+- **UI** `src/components/DocumentIntegrity.tsx` — chip on each MatterDetail
+  document row: short hash (or honest "no hash"), Verify button, custody-trail
+  dialog with manual note entry (capability-gated server-side).
+- Constraint honestly noted: the hash is computed by the uploader's browser
+  over the exact bytes uploaded; server verification re-hashes independently,
+  so tampering AFTER upload is detectable. What this is NOT: custody of paper
+  originals, or proof the browser hash was taken before any pre-upload
+  modification.
+
+### Verification (actual results)
+
+- `bun run test` → **21 files, 344/344 passed** (329 + 15 new).
+- `bunx tsc -b --noEmit` → **0 errors**.
+- `bunx convex dev --once` → **push OK 20:07, 20:21, 20:29 UTC (dev deployment,
+  moonlit-elk-307)** — iterative pushes during the Node/V8 module split; final
+  state pushed. Additive schema only. No git push, no production deployment.
+- En-route fixes: webcrypto type mismatch in schema validator (replaced inline
+  literal array with the imported CUSTODY_ACTIONS tuple), Node/V8 runtime
+  split for action-vs-query/mutation, useAction vs useMutation for actions.
+
+## Implementation turn — 26 Sep 2026, 20:56 UTC (turn 4, continued)
+
+### Completed: accounting foundation integrated with billing (master sequence: accounting before HR)
+
+- **Pure math** `src/lib/accounting.ts` + 19 tests — balance validation
+  (whole paise, both sides, no zero/float lines), normal balances & signed
+  movement, per-account aggregation, two-column trial balance (asserts
+  debits===credits; omits zero-balance accounts; still balances when an
+  account ends in an unusual position), P&L, inclusive fiscal-year bounds,
+  deterministic dedupe keys (`source:sourceId:slot`). One real bug caught by
+  TDD: the first TB draft leaked raw credits onto credit-normal rows and
+  failed to balance — rewritten to net-balance presentation.
+- **Server** `src/convex/finance.ts`:
+  - `seedChartOfAccounts` — 23-account standard Indian law-practice chart
+    (bank/cash, client-fund pair 1020/2100 flagged `clientFund`, AR, retainers,
+    GST payables CGST/SGST/IGST + TDS, capital/retained earnings, fees,
+    recoveries, opex). Idempotent: refuses when a chart exists. NO tax rates
+    configured — tax amounts arrive already computed from billing.
+  - `addAccount`/`listAccounts` (3–6 digit unique codes, client-fund flag).
+  - `postJournal` — `finance.manage` capability; server-side balance
+    validation (exact error strings from the pure lib); optional dedupeKey
+    idempotency (retry returns the original entry, `posted:false`); posting
+    into a CLOSED fiscal year is rejected; all accounts must belong to the org.
+  - `reverseJournal` — audited: creates a balanced opposite entry with
+    `reversalOfId`, marks the original `reversed`; never edits/deletes.
+  - `ledgerForAccount` (running balance), `trialBalanceReport` (with a
+    `reconciles` flag computed server-side), `profitAndLossReport` (optional
+    fiscal-year filter), `listJournals`.
+  - `postInvoiceJournalInternal` / `postPaymentJournalInternal` — billing →
+    ledger: AR Dr / fees+recoveries+GST Cr on send; Bank Dr / AR Cr on payment
+    (manual AND Razorpay webhook paths). Deterministic dedupe keys per
+    invoice/payment row make retries idempotent. If the chart is not seeded
+    the hook reports `chart_not_seeded` and skips — nothing is fabricated.
+- **Billing integration** (`src/convex/billing.ts`): `send` posts the invoice
+  journal; `recordPayment` and the webhook capture path post payment journals.
+- **UI** `src/pages/Accounting.tsx` (`/accounting`, Practice nav group,
+  capability-gated server-side by `finance.view`/`finance.manage`): seed CTA,
+  journal dialog with live balance badge, add-account dialog (client-fund
+  checkbox), trial balance with reconciliation banner, journals list with
+  audited reversal flow.
+- **Deliberately deferred in this slice** (next accounting steps): balance
+  sheet & cash-flow, statement import/reconciliation, vendor bills/AP,
+  fixed-asset depreciation, budgets/cost centres, opening-balance equity entry
+  helper, credit/debit notes posting to ledger.
+
+### Verification (actual results)
+
+- `bun run test` → **22 files, 363/363 passed** (344 + 19 accounting).
+- `bunx tsc -b --noEmit` → **0 errors** (after fixing a `tb possibly null` UI
+  narrowing error and a payments-index misuse caught by the push gate).
+- `bunx convex dev --once` → **push OK 20:42, 20:46, 20:48, 20:54 UTC (dev
+  deployment moonlit-elk-307)** — iterative pushes; final state live. Additive
+  schema only (no schema change in this slice; finance uses Phase-1 tables).
+
+### What to test in the preview
+
+1. Sign in as owner/partner/accountant → **Practice → Accounting**.
+2. Seed the standard chart (idempotent — second click reports it exists).
+3. Post a journal: unbalanced drafts show "Does not balance" and cannot post;
+   balanced ones post and appear under Journals.
+4. Send an invoice from Billing (chart must be seeded) → trial balance shows
+   AR Dr / Professional Fees + GST Cr; journal source = `billing`.
+5. Record a payment → Bank Dr / AR Cr journal appears automatically.
+6. Reverse a posted journal with a reason → opposite entry + original marked
+   `reversed`; trial balance nets back to zero for that pair.
+7. Add a fiscal year row (via future UI/import) and close it → posting into
+   its range is refused.
+8. Accountant role sees Accounting; support staff/juniors do not (capability
+   gate is server-side).
+
+### Next
+
+Payroll build-out on the Phase-1 schema (statutory settings CRUD with the
+anti-invented-rates guard, salary structures, run preview → approve → finalize
+posting balanced payroll journals, payslips), then HR module UI, then the
+remaining accounting reports.
+
+---
+
 ## Implementation turn — 26 Sep 2026, 19:45 UTC (turn 4)
 
 Authorized to proceed continuously. Checkpoint before edits:

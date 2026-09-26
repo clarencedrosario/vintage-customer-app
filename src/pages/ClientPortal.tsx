@@ -25,6 +25,7 @@ import {
   Upload,
 } from "lucide-react";
 import { useRef, useState } from "react";import { Link } from "react-router";
+import { sha256Hex } from "@/lib/evidenceIntegrity";
 import { toast } from "sonner";
 
 /** One document row; resolves a read URL via its own guarded subscription. */
@@ -157,10 +158,19 @@ function SubmitDocumentDialog({
         body: file,
       });
       const { storageId } = (await res.json()) as { storageId: string };
+      // Integrity hash computed in the browser over the exact bytes;
+      // absent (never fabricated) if hashing is unavailable.
+      let checksum: string | undefined;
+      try {
+        checksum = await sha256Hex(await file.arrayBuffer());
+      } catch {
+        checksum = undefined;
+      }
       await attach({
         matterId: matterId as never,
         name: name.trim() || file.name,
         storageId: storageId as never,
+        checksum,
       });
       toast.success("Document submitted for your lawyer's review.");
       setOpen(false);

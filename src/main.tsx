@@ -39,6 +39,7 @@ const Comms = lazy(() => import("./pages/Comms.tsx"));
 const OfflineCentre = lazy(() => import("./pages/OfflineCentre.tsx"));
 const Health = lazy(() => import("./pages/Health.tsx"));
 const Reports = lazy(() => import("./pages/Reports.tsx"));
+const Accounting = lazy(() => import("./pages/Accounting.tsx"));
 const Team = lazy(() => import("./pages/Team.tsx"));
 const Settings = lazy(() => import("./pages/Settings.tsx"));
 const ClientPortal = lazy(() => import("./pages/ClientPortal.tsx"));
@@ -337,6 +338,14 @@ createRoot(document.getElementById("root")!).render(
                 element={
                   <RequireAuth>
                     <Billing />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/accounting"
+                element={
+                  <RequireAuth>
+                    <Accounting />
                   </RequireAuth>
                 }
               />

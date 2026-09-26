@@ -125,9 +125,10 @@ Last updated: 26 September 2026. Evidence and test results: `ADVOKATE_PROGRESS.m
 
 ## 10. Full accounting and legal billing
 - Billing: invoices, GST (CGST/SGST/IGST), payments, Razorpay links, partial payments — **Implemented but unverified** (live payment needs merchant config)
-- Double-entry accounting: chart of accounts, fiscal years, journals, period closing — **Not started** (schema ready; Phase 3)
-- GL, trial balance, P&L, balance sheet, cash-flow — **Not started**
-- AR/AP, vendor bills, receipts/payments, credit/debit notes — **Not started**
+- Double-entry accounting: chart of accounts, fiscal years, journals, period closing — **Implemented and verified** (26 Sep: seeded 23-account Indian law-practice COA incl. client-fund pair + GST/TDS payables; balanced-journal posting enforced server-side; closed-period blocking; audited reversals; dedupe-key idempotency; pure math unit-tested)
+- GL, trial balance, P&L, balance sheet, cash-flow — **Implemented but unverified** (ledger with running balance, trial balance with server-side reconciliation flag, P&L — 26 Sep; balance sheet & cash-flow **Not started**)
+- AR/AP, vendor bills, receipts/payments, credit/debit notes — **Partially implemented** (AR posted from billing — 26 Sep; AP/vendor bills/credit-debit notes **Not started**)
+- Billing → ledger integration (invoices sent, payments received incl. Razorpay path) — **Implemented and verified** (dedupe-key idempotent; skips honestly when chart unseeded)
 - Retainers, time billing, fixed fees, milestones, disbursements — **Partially implemented** (hourly/fixed/retainer arrangements exist in billing; milestone **Not started**)
 - Payment gateway integration — **Blocked by external setup**
 - Refunds, allocation, reconciliation — **Partially implemented** (payment events tracked; allocation flows partially built)
@@ -137,7 +138,7 @@ Last updated: 26 September 2026. Evidence and test results: `ADVOKATE_PROGRESS.m
 - GST/TDS workflows with verified effective-dated rules — **Implemented but unverified** (GST on invoices implemented; TDS **Not started**; no unverified rates shipped)
 - Client-fund vs operating-fund separation — **Not started** (accounts.clientFund flag ready)
 - Accountant permissions, approvals, exports — **Implemented and verified** (capabilities enforced server-side)
-- Posted journals balance; paise-safe; audited reversals; closed-period lock; retry-safe; reports reconcile; import dedupe — **Not started** (invariants designed at schema level; enforcement lands Phases 3–4)
+- Posted journals balance; paise-safe; audited reversals; closed-period lock; retry-safe; reports reconcile — **Implemented and verified** (invariants enforced in finance.ts, pure rules unit-tested in accounting.test.ts — 26 Sep; import dedupe remains for bank statements)
 - Firm accounting separate from Advokate SaaS billing — **Implemented and verified** (separate table families)
 
 ## 11. Advanced project management

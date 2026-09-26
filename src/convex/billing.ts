@@ -545,6 +545,13 @@ export const send = mutation({
         "Sent to the client.",
       )),
     });
+    // Ledger integration (Phase: accounting foundation). Best-effort with
+    // a deterministic dedupe key — without a seeded chart of accounts the
+    // call reports `skipped` and nothing is fabricated; with one, AR/fees
+    // tax postings are recorded idempotently.
+    await ctx.runMutation(internal.finance.postInvoiceJournalInternal, {
+      invoiceId: args.invoiceId,
+    });
     await logEvent(
       ctx,
       invoice.matterId,
@@ -605,6 +612,17 @@ export const recordPayment = mutation({
       recordedById: ac.user._id,
       createdAt: Date.now(),
     });
+    // Ledger integration: bank Dr / AR Cr, idempotent per payment row.
+    const paymentRow = await ctx.db
+      .query("payments")
+      .withIndex("by_invoice", (q) => q.eq("invoiceId", args.invoiceId))
+      .order("desc")
+      .first();
+    if (paymentRow) {
+      await ctx.runMutation(internal.finance.postPaymentJournalInternal, {
+        paymentId: paymentRow._id,
+      });
+    }
 
     const amountPaid = invoice.amountPaidMinor + args.amountMinor;
     const status =
@@ -1083,6 +1101,17 @@ export const reconcileWebhookInternal = internalMutation({
         providerOrderId: args.providerOrderId,
         createdAt: Date.now(),
       });
+      // Ledger integration for provider payments (same as manual ones).
+      const wpRow = await ctx.db
+        .query("payments")
+        .withIndex("by_invoice", (q) => q.eq("invoiceId", invoice._id))
+        .order("desc")
+        .first();
+      if (wpRow) {
+        await ctx.runMutation(internal.finance.postPaymentJournalInternal, {
+          paymentId: wpRow._id,
+        });
+      }
       await logEvent(
         ctx,
         invoice.matterId,

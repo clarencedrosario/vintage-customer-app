@@ -65,6 +65,8 @@ import { useMutation, useQuery } from "convex/react";import {
   Upload,
 } from "lucide-react";
 import { useRef, useState } from "react";
+import { sha256Hex } from "@/lib/evidenceIntegrity";
+import { DocumentIntegrityChip } from "@/components/DocumentIntegrity";
 import { Link, useParams, useSearchParams } from "react-router";
 import { toast } from "sonner";
 
@@ -512,12 +514,22 @@ export default function MatterDetail() {
         body: file,
       });
       const { storageId } = (await res.json()) as { storageId: string };
+      // Evidence integrity: hash the exact bytes in the browser before
+      // recording. If hashing fails the upload proceeds without a hash
+      // (honestly absent, never fabricated).
+      let integritySha256: string | undefined;
+      try {
+        integritySha256 = await sha256Hex(await file.arrayBuffer());
+      } catch {
+        integritySha256 = undefined;
+      }
       await attachDocument({
         matterId,
         name: file.name,
         kind: docKind as "document" | "communication",
         visibility: docVisibility as "internal" | "shared_with_client",
         storageId: storageId as Id<"_storage"> | undefined,
+        integritySha256,
       });
       toast.success("Document filed to the matter.");
     } catch (err) {
@@ -1455,13 +1467,19 @@ export default function MatterDetail() {
                   <div className="flex items-center justify-between gap-4">
                     <div className="min-w-0">
                       <p className="truncate text-sm">{d.name}</p>
-                      <p className="type-label mt-1 ink-faded">
-                        {d.kind} · {formatDateTimeIN(d.createdAt)}
-                        {d.submittedByClient
-                          ? " · submitted by client"
-                          : d.visibility === "shared_with_client"
-                            ? " · shared with client"
-                            : ""}
+                      <p className="type-label mt-1 flex flex-wrap items-center gap-2 ink-faded">
+                        <span>
+                          {d.kind} · {formatDateTimeIN(d.createdAt)}
+                          {d.submittedByClient
+                            ? " · submitted by client"
+                            : d.visibility === "shared_with_client"
+                              ? " · shared with client"
+                              : ""}
+                        </span>
+                        <DocumentIntegrityChip
+                          documentId={d._id}
+                          integritySha256={d.integritySha256}
+                        />
                       </p>
                     </div>
                     <div className="flex shrink-0 items-center gap-2">

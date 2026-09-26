@@ -1,13 +1,10 @@
 import { v } from "convex/values";
 import {
-  action,
   internalMutation,
   internalQuery,
   mutation,
   query,
 } from "./_generated/server";
-import { internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
 import {
   canViewDocument,
   requireAccess,
@@ -15,30 +12,18 @@ import {
   requireMatter,
 } from "./access";
 import { logUserAction } from "./auditLogger";
-import {
-  appendCustody,
-  CUSTODY_ACTIONS,
-  isValidSha256Hex,
-  sha256Hex,
-  type CustodyEvent,
-} from "../lib/evidenceIntegrity";
+import { appendCustody, CUSTODY_ACTIONS } from "../lib/evidenceIntegrity";
 
 // ===============================================================
-// Evidence integrity — chain-of-custody queries/mutations and the
-// server-side hash verification action.
+// Evidence integrity — custody query/note + internal bridges for the
+// Node-runtime verification action (all V8: Convex permits only
+// actions in "use node" modules).
 //
 // Custody trail shape and the action vocabulary are defined once in
-// src/lib/evidenceIntegrity.ts (unit-tested); the validators here are
-// the Convex mirror of those types.
+// src/lib/evidenceIntegrity.ts (unit-tested). The verification action
+// itself lives in evidenceVerify.ts (crypto.subtle guaranteed in
+// Node) and reaches the db only through the internal bridges below.
 // ===============================================================
-
-const custodyValidator = v.object({
-  at: v.number(),
-  byId: v.optional(v.id("users")),
-  byName: v.optional(v.string()),
-  action: v.union(...CUSTODY_ACTIONS.map((a) => v.literal(a))),
-  note: v.optional(v.string()),
-});
 
 /** The custody trail + integrity hash for one document (access-checked). */
 export const custody = query({
@@ -93,9 +78,8 @@ export const addCustodyNote = mutation({
 });
 
 // ---------------------------------------------------------------------
-// Internal bridges for the verification action (actions cannot access
-// the db or the auth context directly — this follows the github.ts /
-// githubStore.ts pattern already established in this codebase).
+// Internal bridges for the Node-runtime verification action (actions
+// cannot reach the db or auth context directly).
 // ---------------------------------------------------------------------
 
 /** Access-checked read of the document row for the action. */
@@ -114,14 +98,13 @@ export const docForVerification = internalQuery({
       matterId: doc.matterId,
       storageId: doc.storageId ?? null,
       recordedHash: doc.integritySha256 ?? null,
-      custody: (doc.custody ?? []) as CustodyEvent<never>[],
       actorId: ac.user._id,
       actorName: ac.user.name ?? ac.user.email ?? "Member",
     };
   },
 });
 
-/** Append a verification outcome to the custody trail (fail-silent caller). */
+/** Append the verification outcome to the custody trail + audit log. */
 export const recordVerification = internalMutation({
   args: {
     documentId: v.id("matterDocuments"),
@@ -157,67 +140,5 @@ export const recordVerification = internalMutation({
         : `Stored hash ${args.observedHash ?? "unavailable"} differs from the recorded hash.`,
       createdAt: Date.now(),
     });
-  },
-});
-
-/**
- * Re-hash the stored object and compare against the recorded integrity
- * hash. Runs in Node ("use node") so crypto.subtle and ctx.storage are
- * available; the caller must be authorized (checked in the internal
- * query bridge). A missing recorded hash means the document was uploaded
- * before this feature — verification reports that honestly instead of
- * pretending.
- */
-type VerificationInfo = {
-  documentId: Id<"matterDocuments">;
-  orgId: Id<"organizations">;
-  matterId: Id<"matters">;
-  storageId: Id<"_storage"> | null;
-  recordedHash: string | null;
-  custody: CustodyEvent<never>[];
-  actorId: Id<"users">;
-  actorName: string;
-};
-
-type VerificationResult =
-  | { ok: false; reason: "unauthorized" | "no_file" | "no_recorded_hash" | "bad_recorded_hash" | "file_missing" | "crypto_unavailable" }
-  | { ok: boolean; observedHash: string };
-
-export const verifyDocumentIntegrity = action({
-  args: { documentId: v.id("matterDocuments") },
-  handler: async (ctx, args): Promise<VerificationResult> => {
-    // Explicit result annotation breaks the module-self-reference cycle
-    // in type inference (same reason github.ts types its actor() helper).
-    const info = (await ctx.runQuery(internal.evidence.docForVerification, {
-      documentId: args.documentId,
-    })) as VerificationInfo | null;
-    if (!info) return { ok: false as const, reason: "unauthorized" as const };
-    if (!info.storageId)
-      return { ok: false as const, reason: "no_file" as const };
-    if (!info.recordedHash)
-      return { ok: false as const, reason: "no_recorded_hash" as const };
-    if (!isValidSha256Hex(info.recordedHash))
-      return { ok: false as const, reason: "bad_recorded_hash" as const };
-
-    const blob = await ctx.storage.get(info.storageId);
-    if (!blob) return { ok: false as const, reason: "file_missing" as const };
-    let observed: string;
-    try {
-      observed = await sha256Hex(await blob.arrayBuffer());
-    } catch {
-      // WebCrypto unavailable in this runtime — reported honestly rather
-      // than fabricating a verification result.
-      return { ok: false as const, reason: "crypto_unavailable" as const };
-    }
-
-    const ok = observed === info.recordedHash;
-    await ctx.runMutation(internal.evidence.recordVerification, {
-      documentId: args.documentId,
-      ok,
-      observedHash: observed,
-      byId: info.actorId,
-      byName: info.actorName,
-    });
-    return { ok: ok as boolean, observedHash: observed };
   },
 });
