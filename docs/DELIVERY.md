@@ -1,5 +1,34 @@
 # Implementation & delivery map (section 31)
 
+## HR / Payroll / Accounting expansion — Phase 1: shared foundations (added 26 Sep 2026)
+
+Program status checklist (10 phases, user-requested labels):
+
+| Phase | Scope | Status |
+|---|---|---|
+| 1 | Codebase audit, shared permissions, data-model foundations | **Implemented and verified** |
+| 2 | HR management & employee self-service | Not started |
+| 3 | Accounting foundation integrated with billing | Not started |
+| 4 | Payroll & accounting integration | Not started |
+| 5 | Advanced project management | Not started |
+| 6 | Proprietary messaging | Not started |
+| 7 | Video conferencing | Not started |
+| 8 | Proprietary email | Not started |
+| 9 | Case-law research database | Not started |
+| 10 | Cross-module security, backups, release validation | Not started |
+
+**Phase 1 delivered this session:**
+
+- 11 new capability keys in `src/convex/accessPolicy.ts`: `hr.manage`, `hr.view_own`, `hr.view_salary`, `hr.approve`, `hr.recruit`, `payroll.run`, `payroll.approve`, `finance.view`, `finance.manage`, `pm.manage`, `pm.view_all`. Defaults: owner = all; partner = all HR/finance/payroll/pm; administrator = HR management + salary visibility (no payroll/finance posting); accountant = finance.view/manage + payroll.run + own self-service (explicitly **no** hr.view_salary, no hr.manage); lawyers/paralegals/juniors = self-service + pm visibility; support_staff = self-service only.
+- `normalizePermissions` forbidden-set for support_staff extended: support staff can never be granted hr.manage/hr.view_salary/hr.approve/hr.recruit/payroll.*/finance.*/pm.* — normalization strips them even from a browser-supplied override list.
+- New pure policy rule `canViewSalaryRecord(ac, employeeOrgId, employeeUserId)`: org isolation first; reads of salary/payslip/statutory-ID data require `hr.view_salary` (or self via `hr.view_own`). A role is **not** a bypass — the per-org grant is required even for owners, so salary visibility is auditable and revocable. Plus `canManageHr`/`canManageFinance` helpers.
+- `hrTables` in `src/convex/schemaExtras.ts` (19 tables, org-scoped, by_org indexes): employees, departments, leaveProfiles, leaveRequests, attendance, orgHolidays, vacancies, candidates, hrDocuments, reviews, hrExpenses, workLogs; payroll: statutorySettings (versioned, effective-dated — operators enter verified PF/ESI/PT/TDS values; payroll refuses to run on empty config, no invented rates), salaryStructures (component-wise, effective-dated), payslips, payrollRuns (draft→in_review→approved→finalized→reversed, bank-file generation separate from payment-status marking); accounting: accounts (chart of accounts, clientFund flag), fiscalYears (closing), journalEntries (debits/credits arrays in paise, balance enforced at post, immutable posted rows, reversals, dedupeKey idempotency). All money integer paise; dates YYYY-MM-DD IST.
+- Settings permission matrix labels added for all new capabilities (`src/pages/Settings.tsx`).
+- Tests: `src/convex/accessPolicy.program.test.ts` — 17 tests covering capability registration, default-matrix role boundaries, salary-record ceiling (org isolation, self-service boundary, grant-revocation semantics), write-authority helpers, support_staff escalation stripping (including pm.*), unknown-key dropping, and regression of existing invariants.
+
+Verified 26 Sep 2026: `bunx convex dev --once` push clean, `bunx tsc -b --noEmit` 0 errors, **302/302 tests** (285 prior + 17 new). Not yet built: all module logic/UI (phases 2–9). Accountant default now includes `hr.view_own` (self-service) — matrix change recorded here for operator review.
+
+---
 Status legend:
 - **Implemented & tested** — code complete, exercised by the automated suite and/or live typecheck/build/push.
 - **Awaiting external config** — implemented, but needs credentials/approvals you must supply (keys, merchant accounts, provider review).

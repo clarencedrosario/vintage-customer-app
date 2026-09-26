@@ -8,7 +8,7 @@
 // (auth resolution, db lookups) stay in access.ts and delegate here.
 // ---------------------------------------------------------------------
 
-import type { Doc } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import type { OrgRole } from "./schema";
 
 // ---------------------------------------------------------------------
@@ -55,6 +55,42 @@ export const CAPABILITIES = [
   // Connect/disconnect third-party services (GitHub, e-mail/SMS providers).
   // Owner/partner/administrator by default; NOT grantable to support staff.
   "integrations.manage",
+
+  // -----------------------------------------------------------------
+  // HR module (feature 8 of the 2026 expansion). Salary and identity
+  // data get their own capabilities so "can manage HR" and "can read
+  // compensation" are separable grants — seeing a colleague's leave
+  // balance must not imply seeing their payslip.
+  // -----------------------------------------------------------------
+  "hr.manage", // employees, departments, leave approvals, reviews, offboarding
+  "hr.view_own", // employee self-service: own profile, leave, expenses, payslips
+  "hr.view_salary", // compensation, payslips, statutory IDs of OTHERS
+  "hr.approve", // leave/expense/requisition approval authority
+  "hr.recruit", // vacancies, candidates, interviews, offers
+
+  // -----------------------------------------------------------------
+  // Payroll module. Distinct from hr.view_salary: running payroll is
+  // an accountancy act (it posts balanced journals), viewing a salary
+  // is a read. Preparer and approver are separate grants.
+  // -----------------------------------------------------------------
+  "payroll.run", // build/preview/finalize payroll periods (posts journals)
+  "payroll.approve", // approve/lock finalized runs; reversals
+
+  // -----------------------------------------------------------------
+  // Accounting module. "finance.view" is ledger reporting (trial
+  // balance, P&L); "finance.manage" posts/reverses journals and closes
+  // periods. Client-fund ledgers need BOTH manage and a role gate
+  // enforced in finance.ts (owner/partner/accountant only).
+  // -----------------------------------------------------------------
+  "finance.view",
+  "finance.manage",
+
+  // -----------------------------------------------------------------
+  // Advanced project management (beyond matter tasks): projects,
+  // phases, milestones, dependencies, templates, automations.
+  // -----------------------------------------------------------------
+  "pm.manage", // create projects/templates/automations; assign across members
+  "pm.view_all", // firm-wide portfolio visibility (without it: assigned only)
 ] as const;
 export type Capability = (typeof CAPABILITIES)[number];
 
@@ -73,6 +109,10 @@ export const DEFAULT_PERMISSIONS: Record<OrgRole, Capability[]> = {
     "ai.use", "data.export", "audit.view",
     "team.invite",
     "conflict.override", "integrations.manage",
+    "hr.manage", "hr.view_own", "hr.view_salary", "hr.approve", "hr.recruit",
+    "payroll.run", "payroll.approve",
+    "finance.view", "finance.manage",
+    "pm.manage", "pm.view_all",
   ],
   senior_associate: [
     "matter.view_all", "matter.create", "matter.edit",
@@ -80,6 +120,7 @@ export const DEFAULT_PERMISSIONS: Record<OrgRole, Capability[]> = {
     "hearing.manage", "order.record", "task.manage", "note.write",
     "document.upload", "document.view_internal", "document.share",
     "time.log", "expense.log", "ai.use",
+    "hr.view_own", "pm.manage", "pm.view_all",
   ],
   associate: [
     "matter.view_all", "matter.create", "matter.edit",
@@ -87,6 +128,7 @@ export const DEFAULT_PERMISSIONS: Record<OrgRole, Capability[]> = {
     "hearing.manage", "order.record", "task.manage", "note.write",
     "document.upload", "document.view_internal", "document.share",
     "time.log", "expense.log", "ai.use",
+    "hr.view_own", "pm.manage", "pm.view_all",
   ],
   junior: [
     "matter.view_all", "matter.create",
@@ -94,6 +136,7 @@ export const DEFAULT_PERMISSIONS: Record<OrgRole, Capability[]> = {
     "task.manage", "note.write",
     "document.upload", "document.view_internal", "document.share",
     "time.log", "expense.log", "ai.use",
+    "hr.view_own",
   ],
   paralegal: [
     "matter.view_all", "client.view_all",
@@ -102,6 +145,7 @@ export const DEFAULT_PERMISSIONS: Record<OrgRole, Capability[]> = {
     "expense.log",
     "time.log",
     "ai.use",
+    "hr.view_own",
   ],
   accountant: [
     "matter.view_all",
@@ -111,6 +155,8 @@ export const DEFAULT_PERMISSIONS: Record<OrgRole, Capability[]> = {
     // Download-only document access: accountants may retrieve files
     // (receipts, invoices) but never upload or refile them.
     "document.share",
+    "finance.view", "finance.manage", "payroll.run",
+    "hr.view_own", // accountants are employees too: own leave/payslips
   ],
   administrator: [
     "matter.view_all", "matter.create", "matter.edit",
@@ -123,10 +169,12 @@ export const DEFAULT_PERMISSIONS: Record<OrgRole, Capability[]> = {
     "team.invite", "team.manage",
     "permissions.edit", "org.edit_profile",
     "conflict.override", "integrations.manage",
+    "hr.manage", "hr.view_own", "hr.view_salary", "hr.approve", "hr.recruit",
   ],
   support_staff: [
     "task.manage", // their own assigned tasks only
     "note.write", // matter notes restricted to assigned matters
+    "hr.view_own", // employee self-service: own leave/expenses/payslips only
   ],
   // Document upload was deliberately excluded from accountant:
   // they see billing on matters, not case documents.
@@ -167,6 +215,19 @@ export function normalizePermissions(
       "integrations.manage",
       "data.export",
       "audit.view",
+      // HR/payroll/finance: support staff keep self-service only.
+      // Self-service (hr.view_own) is deliberately NOT on the forbidden
+      // list — it is in their default set and only ever reads own rows.
+      "hr.manage",
+      "hr.view_salary",
+      "hr.approve",
+      "hr.recruit",
+      "payroll.run",
+      "payroll.approve",
+      "finance.view",
+      "finance.manage",
+      "pm.manage", // portfolio visibility & project creation stay off-limits
+      "pm.view_all",
     ]);
     return cleaned.filter((p) => !forbidden.has(p));
   }
@@ -233,6 +294,35 @@ export function canViewDocument(
     return ac.permissions.has("document.view_internal");
   }
   return true;
+}
+
+/**
+ * May this member read a sensitive HR row (salary, payslip, statutory
+ * ID)? Org isolation first — a foreign employee row is always denied.
+ * Then: hr.view_salary (explicit grant) OR the row is the viewer's own
+ * (self-service is bounded to hr.view_own, so support staff can see
+ * their own payslips but nobody else's). Owners and partners do NOT
+ * silently see every salary: the grant is per-organization and
+ * editable, and a blanket role bypass would defeat the point of the
+ * separate capability.
+ */
+export function canViewSalaryRecord(
+  ac: PolicyAccessContext,
+  employeeOrgId: Id<"organizations">,
+  employeeUserId: Id<"users">,
+): boolean {
+  if (employeeOrgId !== ac.org._id) return false;
+  if (ac.user._id === employeeUserId) return ac.permissions.has("hr.view_own");
+  return ac.permissions.has("hr.view_salary");
+}
+
+/** HR/finance/payroll write authority — self-service is never a write. */
+export function canManageHr(ac: PolicyAccessContext): boolean {
+  return ac.permissions.has("hr.manage");
+}
+
+export function canManageFinance(ac: PolicyAccessContext): boolean {
+  return ac.permissions.has("finance.manage");
 }
 
 // ---------------------------------------------------------------------

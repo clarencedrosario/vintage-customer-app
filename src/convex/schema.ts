@@ -7,6 +7,7 @@ import {
   featureSixTables,
   featureNineTables,
   vaultTables,
+  hrTables,
 } from "./schemaExtras";
 
 // ---------------------------------------------------------------------
@@ -120,6 +121,7 @@ export default defineSchema({
   ...featureSixTables,
   ...featureNineTables,
   ...vaultTables,
+  ...hrTables,
 
   users: defineTable({
     name: v.optional(v.string()),

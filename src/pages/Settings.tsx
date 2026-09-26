@@ -77,6 +77,18 @@ const CAPABILITY_LABELS: Record<string, string> = {
   "matter.delete": "Delete matters (hard delete)",
   "conflict.override": "Override confirmed conflicts",
   "integrations.manage": "Manage integrations",
+  // HR / Payroll / Finance / Project management (2026 expansion)
+  "hr.manage": "Manage HR (employees, leave, reviews)",
+  "hr.view_own": "Employee self-service",
+  "hr.view_salary": "View salaries & confidential HR records",
+  "hr.approve": "Approve leave & expense claims",
+  "hr.recruit": "Manage recruitment",
+  "payroll.run": "Run payroll",
+  "payroll.approve": "Approve & reverse payroll runs",
+  "finance.view": "View accounting reports",
+  "finance.manage": "Post journals & close periods",
+  "pm.manage": "Manage projects",
+  "pm.view_all": "View all projects",
 };
 
 export default function Settings() {
