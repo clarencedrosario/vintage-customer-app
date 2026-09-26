@@ -32,6 +32,9 @@ import type { AccessContext } from "./access";
 
 const MAX_BODY = 4000;
 const MAX_SUBJECT = 150;
+// Chat attachments: per-message cap and per-file cap (25 MB).
+const MAX_FILES_PER_MESSAGE = 6;
+const MAX_FILE_BYTES = 25 * 1024 * 1024;
 
 // ---------------------------------------------------------------------
 // Shared helpers
@@ -239,6 +242,14 @@ export const detail = query({
         if (!canViewDocument(ac, doc, matter)) continue;
         attachments.push({ documentId: doc._id, name: doc.name });
       }
+      // Uploaded images/files: URL is minted per read; images render
+      // inline in the UI, other files download.
+      const files = [];
+      for (const f of m.attachmentFiles ?? []) {
+        const url = await ctx.storage.getUrl(f.storageId);
+        if (!url) continue; // deleted storage — drop silently
+        files.push({ ...f, url });
+      }
       let invoiceRef: string | null = null;
       let invoiceAmountMinor: number | null = null;
       if (m.linkedInvoiceId) {
@@ -258,6 +269,7 @@ export const detail = query({
           (m.senderKind === "system" ? "System" : m.senderKind === "client" ? "Client" : "Member"),
         createdAt: m.createdAt,
         attachments,
+        files,
         invoiceRef,
         invoiceAmountMinor,
         kind: m.kind ?? "message",
@@ -438,11 +450,39 @@ export const removeParticipant = mutation({
 // Mutations — sending & read state
 // ---------------------------------------------------------------------
 
+/**
+ * Upload URL for a chat attachment (image or file). The caller uploads
+ * directly to Convex storage, then sends the message referencing the
+ * storage id — sendMessage re-validates every file server-side.
+ */
+export const generateAttachmentUploadUrl = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const ac = await getAccessContext(ctx);
+    if (!ac) throw new Error("You must be signed in.");
+    return await ctx.storage.generateUploadUrl();
+  },
+});
+
 export const sendMessage = mutation({
   args: {
     conversationId: v.id("conversations"),
     body: v.string(),
     attachmentDocumentIds: v.optional(v.array(v.id("matterDocuments"))),
+    // Uploaded images/files (Convex storage). Each entry is re-checked
+    // against real storage metadata at send time — the client cannot
+    // spoof size or content type.
+    attachmentFiles: v.optional(
+      v.array(
+        v.object({
+          storageId: v.id("_storage"),
+          name: v.string(),
+          mimeType: v.string(),
+          size: v.number(),
+          type: v.union(v.literal("image"), v.literal("file")),
+        }),
+      ),
+    ),
     linkedInvoiceId: v.optional(v.id("invoices")),
   },
   handler: async (ctx, args) => {
@@ -477,6 +517,33 @@ export const sendMessage = mutation({
         throw new Error("You cannot attach a document you cannot see.");
       }
     }
+    // Uploaded images/files: every storage id must really exist and the
+    // declared shape must match the stored metadata. A message may carry
+    // files OR documents — body may be empty when a file is present.
+    const files = [];
+    for (const f of args.attachmentFiles ?? []) {
+      const meta = await ctx.storage.getMetadata(f.storageId);
+      if (!meta) throw new Error("An attached file is no longer available — re-upload it.");
+      if (!f.name.trim()) throw new Error("Attached files need a file name.");
+      if ((meta.size ?? 0) > MAX_FILE_BYTES) {
+        throw new Error("Each attachment must be 25 MB or smaller.");
+      }
+      const isImage = (meta.contentType ?? "").startsWith("image/");
+      files.push({
+        storageId: f.storageId,
+        name: f.name.trim().slice(0, 200),
+        mimeType: meta.contentType ?? f.mimeType ?? "application/octet-stream",
+        size: meta.size ?? f.size ?? 0,
+        type: isImage ? ("image" as const) : ("file" as const),
+      });
+    }
+    if (files.length > MAX_FILES_PER_MESSAGE) {
+      throw new Error(`Attach at most ${MAX_FILES_PER_MESSAGE} files per message.`);
+    }
+    if (!body && files.length === 0) {
+      throw new Error("Write a message or attach a file.");
+    }
+
     if (args.linkedInvoiceId) {
       const inv = await ctx.db.get(args.linkedInvoiceId);
       if (!inv || inv.orgId !== ac.org._id) throw new Error("Invoice not found.");
@@ -497,6 +564,7 @@ export const sendMessage = mutation({
       senderKind: isClient ? "client" : "member",
       body,
       attachmentDocumentIds: args.attachmentDocumentIds,
+      attachmentFiles: files.length > 0 ? files : undefined,
       linkedInvoiceId: args.linkedInvoiceId,
       kind: "message",
       createdAt: now,

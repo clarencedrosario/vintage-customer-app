@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { toast } from "sonner";
 import { api } from "@/convex/_generated/api";
@@ -31,10 +31,14 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Bell,
   CheckCheck,
+  Download,
+  ImagePlus,
   Inbox,
+  Loader2,
   Mail,
   MessageSquare,
   MessagesSquare,
+  Paperclip,
   Plus,
   RefreshCw,
   Send,
@@ -62,9 +66,25 @@ type MessageRow = {
   senderName: string;
   createdAt: number;
   attachments: Array<{ documentId: Id<"matterDocuments">; name: string }>;
+  files: Array<{
+    storageId: Id<"_storage">;
+    name: string;
+    mimeType: string;
+    size: number;
+    type: "image" | "file";
+    url: string;
+  }>;
   invoiceRef: string | null;
   invoiceAmountMinor: number | null;
   kind: string;
+};
+
+/** One uploaded-but-not-yet-sent chat attachment. */
+type PendingFile = {
+  storageId: Id<"_storage">;
+  name: string;
+  mimeType: string;
+  size: number;
 };
 
 export default function Comms() {
@@ -299,6 +319,7 @@ function ThreadDetail({
   onUpdate: () => void;
 }) {
   const markRead = useMutation(api.conversations.markRead);
+  const generateUploadUrl = useMutation(api.conversations.generateAttachmentUploadUrl);
   const send = useMutation(api.conversations.sendMessage);
   const notify = useMutation(api.conversations.notifyParticipantsByEmail);
   const setAuto = useMutation(api.comm.setThreadAutoSend);
@@ -308,15 +329,67 @@ function ThreadDetail({
   );
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
+  // Uploaded images/files queued for the next message (chat sharing).
+  const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
 
   const canPost = detail.scope === "matter" || detail.scope === "internal";
 
+  const uploadFiles = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setUploading(true);
+    try {
+      for (const file of Array.from(files)) {
+        if (file.size > 25 * 1024 * 1024) {
+          toast.error(`${file.name} is larger than 25 MB.`);
+          continue;
+        }
+        const url = await generateUploadUrl({});
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": file.type || "application/octet-stream" },
+          body: file,
+        });
+        const { storageId } = (await res.json()) as { storageId: string };
+        setPendingFiles((prev) => [
+          ...prev,
+          {
+            storageId: storageId as Id<"_storage">,
+            name: file.name,
+            mimeType: file.type || "application/octet-stream",
+            size: file.size,
+          },
+        ]);
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Upload failed.");
+    } finally {
+      setUploading(false);
+      if (fileInput.current) fileInput.current.value = "";
+    }
+  };
+
   const doSend = async () => {
-    if (!body.trim()) return;
+    if (!body.trim() && pendingFiles.length === 0) return;
     setSending(true);
     try {
-      await send({ conversationId: detail._id, body });
+      await send({
+        conversationId: detail._id,
+        body: body.trim() || " ",
+        attachmentFiles:
+          pendingFiles.length > 0
+            ? pendingFiles.map((f) => ({
+                storageId: f.storageId,
+                name: f.name,
+                mimeType: f.mimeType,
+                size: f.size,
+                type: f.mimeType.startsWith("image/") ? ("image" as const) : ("file" as const),
+              }))
+            : undefined,
+      });
       setBody("");
+      setPendingFiles([]);
       await markRead({ conversationId: detail._id });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not send.");
@@ -396,6 +469,32 @@ function ThreadDetail({
                   ))}
                 </ul>
               )}
+              {(m.files ?? []).length > 0 && (
+                <div className="mt-2 space-y-1.5">
+                  {(m.files ?? []).map((f) =>
+                    f.type === "image" ? (
+                      <a key={f.storageId} href={f.url} target="_blank" rel="noopener noreferrer">
+                        <img
+                          src={f.url}
+                          alt={f.name}
+                          className="max-h-56 rounded-md border border-border"
+                        />
+                      </a>
+                    ) : (
+                      <a
+                        key={f.storageId}
+                        href={f.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="type-label flex items-center gap-1.5 text-[#8a6a33] hover:underline"
+                      >
+                        <Download className="size-3.5" aria-hidden="true" />
+                        {f.name}
+                      </a>
+                    ),
+                  )}
+                </div>
+              )}
               {m.invoiceRef && (
                 <p className="type-label mt-2 text-[#8a6a33]">
                   Invoice {m.invoiceRef}
@@ -413,12 +512,62 @@ function ThreadDetail({
 
         {canPost && (
           <div className="space-y-2 border-t p-4">
+            {pendingFiles.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {pendingFiles.map((f) => (
+                  <span
+                    key={f.storageId}
+                    className="flex items-center gap-1 rounded-full border border-[#B68A45]/40 bg-[#F7F5EF] px-2.5 py-0.5 text-xs"
+                  >
+                    {f.mimeType.startsWith("image/") ? "🖼" : "📎"} {f.name}
+                    <button
+                      type="button"
+                      aria-label={`Remove ${f.name}`}
+                      className="ml-1 text-muted-foreground hover:text-destructive"
+                      onClick={() =>
+                        setPendingFiles((prev) => prev.filter((x) => x.storageId !== f.storageId))
+                      }
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <input
+              ref={fileInput}
+              type="file"
+              multiple
+              accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt"
+              className="hidden"
+              onChange={(e) => void uploadFiles(e.target.files)}
+            />
             <Textarea
               rows={3}
               value={body}
               onChange={(e) => setBody(e.target.value)}
               placeholder="Write a message…"
             />
+            <div className="flex items-center gap-1.5">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={uploading}
+                onClick={() => fileInput.current?.click()}
+                aria-label="Attach images or files"
+              >
+                {uploading ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <ImagePlus className="size-3.5" />
+                )}
+                <Paperclip className="ml-1 size-3.5" />
+              </Button>
+              <p className="type-label ink-faded">
+                Images render inline · files up to 25 MB
+              </p>
+            </div>
             <div className="flex justify-end gap-2">
               <Button
                 variant="outline"
@@ -435,7 +584,11 @@ function ThreadDetail({
               >
                 <Mail className="size-3.5" /> Email thread to participants
               </Button>
-              <Button size="sm" disabled={sending || !body.trim()} onClick={doSend}>
+              <Button
+                size="sm"
+                disabled={sending || (!body.trim() && pendingFiles.length === 0)}
+                onClick={doSend}
+              >
                 <Send className="size-3.5" /> Send
               </Button>
             </div>

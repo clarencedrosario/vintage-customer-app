@@ -192,6 +192,9 @@ export const AUTO_SOURCE_KINDS: ReadonlySet<string> = new Set([
   "ask_matter",
   "smart_timeline",
   "morning_briefing",
+  // Hearing preparation analyses the whole record: case history, orders,
+  // evidence, previous hearing notes and deadlines.
+  "hearing_prep",
 ]);
 
 /** The morning briefing reads recent jobs on all of the caller's matters. */
@@ -618,6 +621,10 @@ export const listJobs = query({
         _id: r._id,
         kind: r.kind,
         status: r.status,
+        // Question + a capped answer preview, so matter-level panels (Ask
+        // AI About This Matter) can show results without N getJob calls.
+        inputNote: r.inputNote ?? null,
+        result: r.result ? r.result.slice(0, 4000) : null,
         model: r.model ?? null,
         costMinor: r.costMinor ?? 0,
         promptTokens: r.promptTokens ?? 0,

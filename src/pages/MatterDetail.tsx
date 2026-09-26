@@ -97,6 +97,240 @@ function DocumentLink({ documentId }: { documentId: Id<"matterDocuments"> }) {
   );
 }
 
+/**
+ * Matter alerts: overdue / due-soon deadlines on this matter, the next
+ * hearing, and unreviewed AI suggestions on the timeline. Pure derived
+ * view — every item links to where the lawyer acts on it.
+ */
+function MatterAlerts({
+  matterId,
+  nextHearingAt,
+  eventCount,
+}: {
+  matterId: Id<"matters">;
+  nextHearingAt?: number;
+  eventCount: number;
+}) {
+  const deadlines = useQuery(api.tasks.deadlineList, { status: "open" as const });
+  const now = Date.now();
+  const weekAhead = now + 7 * 24 * 60 * 60 * 1000;
+  const items: { key: string; tone: string; text: string; to: string }[] = [];
+  for (const d of deadlines ?? []) {
+    if (d.matterId !== matterId) continue;
+    const overdue = d.dueAt < now;
+    const soon = !overdue && d.dueAt <= weekAhead;
+    if (!overdue && !soon) continue;
+    items.push({
+      key: d._id,
+      tone: overdue ? "text-red-700" : "text-[#8a6a33]",
+      text: `${overdue ? "Overdue deadline" : "Deadline this week"} — ${d.title}`,
+      to: `/matters/${matterId}?tab=docket`,
+    });
+  }
+  if (nextHearingAt && nextHearingAt > now && nextHearingAt < weekAhead) {
+    items.unshift({
+      key: "hearing",
+      tone: "text-[#8a6a33]",
+      text: `Next hearing ${formatDateTimeIN(nextHearingAt)}`,
+      to: `/matters/${matterId}?tab=hearings`,
+    });
+  }
+  if (items.length === 0) return null;
+  return (
+    <div className="space-y-1.5 rounded-md border border-[#B68A45]/30 bg-[#F7F5EF]/60 p-3">
+      {items.slice(0, 6).map((a) => (
+        <Link
+          key={a.key}
+          to={a.to}
+          className={`block text-sm font-medium hover:underline ${a.tone}`}
+        >
+          • {a.text}
+        </Link>
+      ))}
+      {eventCount === 0 && null}
+    </div>
+  );
+}
+
+/**
+ * "Ask AI About This Matter" panel: launches an ask_matter job over the
+ * matter's extracted sources and lists recent grounded answers. Honest
+ * framing — answers are grounded only in what the chamber extracted.
+ */
+function MatterAskAI({ matterId }: { matterId: Id<"matters"> }) {
+  const prepare = useMutation(api.ai.prepareJob);
+  const jobs = useQuery(api.ai.listJobs, { matterId, limit: 10 });
+  const [q, setQ] = useState("");
+  const [busy, setBusy] = useState(false);
+  const askJobs = (jobs ?? []).filter((j) => j.kind === "ask_matter");
+
+  const ask = async () => {
+    if (!q.trim()) return;
+    setBusy(true);
+    try {
+      await prepare({ matterId, kind: "ask_matter", inputNote: q.trim() });
+      setQ("");
+      toast.success("Question saved — the answer appears below when ready.");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not run the question.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-end gap-2">
+        <div className="flex-1">
+          <Input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void ask();
+            }}
+            placeholder="Ask about this matter — e.g. what did the court direct on the last date?"
+            aria-label="Ask AI about this matter"
+          />
+        </div>
+        <Button size="sm" disabled={busy || !q.trim()} onClick={() => void ask()}>
+          {busy ? <Loader2 className="mr-1.5 size-3.5 animate-spin" /> : <Bot className="mr-1.5 size-3.5" />}
+          Ask
+        </Button>
+      </div>
+      {askJobs.length > 0 && (
+        <div className="space-y-2">
+          {askJobs.slice(0, 3).map((j) => (
+            <details key={j._id} className="rounded-md border border-border p-3">
+              <summary className="cursor-pointer text-sm">
+                {j.inputNote || "Question"}
+                <span className="type-label ml-2 ink-faded">
+                  {j.status === "done"
+                    ? "answered"
+                    : j.status === "pending"
+                      ? "working…"
+                      : j.status}
+                </span>
+              </summary>
+              {j.result && (
+                <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-background p-2 font-serif text-xs leading-relaxed">
+                  {j.result}
+                </pre>
+              )}
+            </details>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Communications tab: the matter's threads, listed inside the file with
+ * an inline composer. Reuses the same conversations backend as the Comms
+ * centre; clients see only what their access already allows.
+ */
+function MatterThreads({
+  matterId,
+  canNoteWrite,
+}: {
+  matterId: Id<"matters">;
+  canNoteWrite: boolean;
+}) {
+  const threads = useQuery(api.conversations.listForMatter, { matterId });
+  const create = useMutation(api.conversations.createConversation);
+  const [subject, setSubject] = useState("");
+  const [scope, setScope] = useState<"matter" | "internal">("matter");
+  const [busy, setBusy] = useState(false);
+
+  if (threads === undefined) {
+    return <p className="text-sm text-muted-foreground">Loading threads...</p>;
+  }
+
+  const startThread = async () => {
+    if (!subject.trim()) {
+      toast.error("Give the thread a subject.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await create({ matterId, subject: subject.trim(), scope });
+      setSubject("");
+      toast.success("Thread started.");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not start the thread.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardContent className="space-y-3 p-4">
+          <p className="font-serif text-sm font-semibold">Start a thread on this matter</p>
+          <div className="flex flex-wrap items-end gap-2">
+            <div className="min-w-[220px] flex-1">
+              <Input
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
+                placeholder="Subject, e.g. caveat filing status"
+                aria-label="New thread subject"
+              />
+            </div>
+            <Select value={scope} onValueChange={(v) => setScope(v as "matter" | "internal")}>
+              <SelectTrigger className="w-44">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="matter">Matter thread (with client)</SelectItem>
+                <SelectItem value="internal">Internal thread</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button size="sm" disabled={busy || !canNoteWrite} onClick={() => void startThread()}>
+              <MessageSquare className="mr-1.5 size-3.5" /> Start thread
+            </Button>
+          </div>
+          {!canNoteWrite && (
+            <p className="type-label ink-faded">
+              You can read the threads below but not start new ones.
+            </p>
+          )}
+        </CardContent>
+      </Card>
+
+      {threads.length === 0 ? (
+        <Card className="border-dashed">
+          <CardContent className="py-8 text-center text-sm ink-faded">
+            No conversations on this matter yet. Threads started here also
+            appear in the Communications centre.
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-2">
+          {threads.map((t) => (
+            <Link
+              key={t._id}
+              to={`/comms?thread=${t._id}`}
+              className="rule-frame block rounded-lg bg-card p-4 transition-colors hover:bg-accent/40"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate font-serif text-sm font-semibold">{t.subject}</p>
+                  <p className="type-label mt-0.5 ink-faded">
+                    {t.scope === "matter" ? "Matter thread" : "Internal thread"} ·{" "}
+                    {t.participants.map((p: { name: string }) => p.name).join(", ")}
+                  </p>
+                </div>
+                <Reply className="size-4 shrink-0 text-muted-foreground" />
+              </div>
+            </Link>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function MatterDetail() {
   const [packOpen, setPackOpen] = useState(false);
   // Hearing the pack dialog should preselect (e.g. the newly scheduled
@@ -222,7 +456,7 @@ export default function MatterDetail() {
   const tabParam = searchParams.get("tab");
   const activeTab =
     tabParam &&
-    ["command", "hearings", "orders", "tasks", "documents", "time", "expenses", "invoices", "notes", "parties", "issues", "docket", "audit", "ai", "requests"].includes(
+    ["command", "timeline", "hearings", "orders", "tasks", "documents", "time", "expenses", "invoices", "notes", "comms", "parties", "issues", "docket", "audit", "ai", "requests"].includes(
       tabParam,
     )
       ? tabParam
@@ -496,12 +730,42 @@ export default function MatterDetail() {
             </p>
           </>
         )}
+        {/* At-a-glance strip: status · court · next hearing */}
+        <Separator className="my-5" />
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <div>
+            <p className="type-label ink-faded">Status</p>
+            <p className="mt-0.5 text-sm font-medium">
+              {STATUS_LABELS[matter.status] ?? matter.status}
+              {matter.archivedAt ? " · Archived" : ""}
+            </p>
+          </div>
+          <div>
+            <p className="type-label ink-faded">Court</p>
+            <p className="mt-0.5 truncate text-sm font-medium">
+              {[matter.court, matter.bench, matter.courtroom].filter(Boolean).join(" · ") || "—"}
+            </p>
+          </div>
+          <div>
+            <p className="type-label ink-faded">Next hearing</p>
+            {matter.nextHearingAt ? (
+              <p className="mt-0.5 text-sm font-medium">
+                {formatDateTimeIN(matter.nextHearingAt)}
+              </p>
+            ) : (
+              <p className="mt-0.5 text-sm text-muted-foreground">None scheduled</p>
+            )}
+          </div>
+        </div>
       </div>
 
       <Tabs value={activeTab} onValueChange={setTab} className="mt-8">
         <TabsList className="flex-wrap">
           <TabsTrigger value="command" className="gap-2">
-            <Landmark className="size-4" /> Command Centre
+            <Landmark className="size-4" /> Overview
+          </TabsTrigger>
+          <TabsTrigger value="timeline" className="gap-2">
+            <CalendarClock className="size-4" /> Timeline
           </TabsTrigger>
           <TabsTrigger value="hearings" className="gap-2">
             <Gavel className="size-4" /> Hearings
@@ -525,7 +789,10 @@ export default function MatterDetail() {
             <Receipt className="size-4" /> Expenses
           </TabsTrigger>
           <TabsTrigger value="invoices" className="gap-2">
-            <Receipt className="size-4" /> Invoices
+            <Receipt className="size-4" /> Billing
+          </TabsTrigger>
+          <TabsTrigger value="comms" className="gap-2">
+            <MessageSquare className="size-4" /> Communications
           </TabsTrigger>
           <TabsTrigger value="notes" className="gap-2">
             <StickyNote className="size-4" /> Notes
@@ -549,7 +816,132 @@ export default function MatterDetail() {
 
         {/* Command Centre — permission-aware aggregate situation board */}
         <TabsContent value="command" className="mt-6">
-          {matterId && <CommandCentre matterId={matterId} />}
+          <div className="space-y-5">
+            {/* Alerts strip */}
+            {matterId && (
+              <MatterAlerts
+                matterId={matterId}
+                nextHearingAt={matter.nextHearingAt}
+                eventCount={(events ?? []).length}
+              />
+            )}
+            {matterId && <CommandCentre matterId={matterId} />}
+            <div className="grid gap-5 lg:grid-cols-2">
+              {/* Recent documents */}
+              <Card>
+                <CardContent className="p-4">
+                  <p className="font-serif text-sm font-semibold">Recent documents</p>
+                  {(documents ?? []).length === 0 ? (
+                    <p className="mt-3 text-sm ink-faded">No documents filed yet.</p>
+                  ) : (
+                    <ul className="mt-3 space-y-2">
+                      {(documents ?? [])
+                        .slice()
+                        .sort((a, b) => b.createdAt - a.createdAt)
+                        .slice(0, 5)
+                        .map((d) => (
+                          <li key={d._id} className="flex items-center justify-between gap-2 text-sm">
+                            <span className="min-w-0 truncate">{d.name}</span>
+                            <span className="shrink-0">
+                              <DocumentLink documentId={d._id} />
+                            </span>
+                          </li>
+                        ))}
+                    </ul>
+                  )}
+                </CardContent>
+              </Card>
+              {/* Ask AI About This Matter */}
+              {matterId && canNoteWrite && (
+                <Card>
+                  <CardContent className="p-4">
+                    <p className="font-serif text-sm font-semibold">Ask AI About This Matter</p>
+                    <p className="type-label mt-0.5 ink-faded">
+                      Grounded in this matter's extracted sources only.
+                    </p>
+                    <div className="mt-3">
+                      <MatterAskAI matterId={matterId} />
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+            </div>
+          </div>
+        </TabsContent>
+
+        {/* Communications — the matter's threads, in the file */}
+        <TabsContent value="comms" className="mt-6">
+          <MatterThreads matterId={matterId!} canNoteWrite={canNoteWrite} />
+        </TabsContent>
+
+        {/* Timeline — chronological docket with source-document links */}
+        <TabsContent value="timeline" className="mt-6">
+          {(events ?? []).length === 0 ? (
+            <Card className="border-dashed">
+              <CardContent className="py-8 text-center text-sm ink-faded">
+                The case timeline is empty — filings, orders, hearings and
+                payments appear here as the matter progresses.
+              </CardContent>
+            </Card>
+          ) : (
+            <ol>
+              {(events ?? []).map((e, i) => (
+                <li key={e._id} className="relative flex gap-4 pb-6">
+                  {i < (events ?? []).length - 1 && (
+                    <span className="absolute left-[5px] top-4 h-full w-px bg-border" />
+                  )}
+                  <span
+                    className={`mt-1.5 size-[11px] shrink-0 rounded-full border ${
+                      e.aiSuggested && !e.reviewed
+                        ? "border-[#8a6a33] bg-[#8a6a33]/20"
+                        : "border-primary/60 bg-background"
+                    }`}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm leading-snug">{e.detail}</p>
+                    <p className="type-label mt-1 ink-faded">
+                      {formatDateTimeIN(e.occurredAt ?? e.createdAt)} · {e.kind}
+                      {e.datePrecision === "approx" ? " · approx date" : ""}
+                      {e.aiSuggested && !e.reviewed ? " · AI suggestion" : ""}
+                      {e.sourceRef ? ` · ${e.sourceRef}` : ""}
+                    </p>
+                    {e.linkKind === "document" && e.linkId && (
+                      <p className="mt-1 text-xs">
+                        <DocumentLink documentId={e.linkId as Id<"matterDocuments">} />
+                      </p>
+                    )}
+                    {e.linkKind === "hearing" && e.linkId && (
+                      <button
+                        type="button"
+                        className="type-label text-primary hover:underline"
+                        onClick={() => setTab("hearings")}
+                      >
+                        View hearing →
+                      </button>
+                    )}
+                    {e.linkKind === "order" && e.linkId && (
+                      <button
+                        type="button"
+                        className="type-label text-primary hover:underline"
+                        onClick={() => setTab("orders")}
+                      >
+                        View order →
+                      </button>
+                    )}
+                    {e.linkKind === "message" && e.linkId && (
+                      <button
+                        type="button"
+                        className="type-label text-primary hover:underline"
+                        onClick={() => setTab("comms")}
+                      >
+                        View message →
+                      </button>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          )}
         </TabsContent>
 
         {/* Hearings */}

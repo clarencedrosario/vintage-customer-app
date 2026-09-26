@@ -561,10 +561,16 @@ export const setDeskTaskStatus = mutation({
     }
 
     if (task.matterId !== undefined) {
+      const label: Record<string, string> = {
+        pending: "moved back to To Do",
+        in_progress: "started",
+        review: "sent for review",
+        done: "completed",
+      };
       await ctx.db.insert("matterEvents", {
         matterId: task.matterId,
         kind: "task",
-        detail: `Task ${args.status === "done" ? "completed" : "reopened"} — ${task.title}.`,
+        detail: `Task ${label[args.status] ?? "reopened"} — ${task.title}.`,
         createdAt: Date.now(),
         authorId: ac.user._id,
         occurredAt: Date.now(),

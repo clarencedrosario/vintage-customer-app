@@ -60,7 +60,11 @@ export const MATTER_STATUSES = {
   CLOSED: "closed",
 } as const;
 
-export const TASK_STATUSES = ["pending", "in_progress", "done"] as const;
+// Task board statuses: To Do (pending) → In Progress → Review → Completed.
+// "review" holds finished work awaiting a supervisor's approval before it
+// counts as done; the pure helpers in lib/commandCentre treat review as
+// still open.
+export const TASK_STATUSES = ["pending", "in_progress", "review", "done"] as const;
 
 /** Firm-wide tasks are filing / service / delivery / collection errands. */
 export const TASK_KINDS = [
@@ -613,6 +617,10 @@ export default defineSchema({
     authorities: v.optional(
       v.array(v.object({ label: v.string(), url: v.optional(v.string()) })),
     ),
+    // Reminder lead times in days before the hearing (30/14/7/3/1),
+    // per hearing; 0 = the morning of the hearing. Falls back to the
+    // firm default when unset.
+    reminderDays: v.optional(v.array(v.number())),
     createdAt: v.number(),
   })
     .index("by_matter", ["matterId"])
@@ -1414,6 +1422,21 @@ export default defineSchema({
     body: v.string(),
     // Attached matter documents (existing rows, access re-checked on read).
     attachmentDocumentIds: v.optional(v.array(v.id("matterDocuments"))),
+    // Uploaded files/images (Convex storage). Chat-style sharing: images
+    // render inline, other files download. Metadata + type are stored
+    // alongside the storage id; access re-checked against the thread on read.
+    attachmentFiles: v.optional(
+      v.array(
+        v.object({
+          storageId: v.id("_storage"),
+          name: v.string(),
+          mimeType: v.string(),
+          size: v.number(),
+          // "image" renders inline; anything else offers a download.
+          type: v.union(v.literal("image"), v.literal("file")),
+        }),
+      ),
+    ),
     linkedInvoiceId: v.optional(v.id("invoices")),
     kind: v.optional(
       v.union(

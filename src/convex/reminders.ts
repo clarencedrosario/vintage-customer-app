@@ -78,32 +78,58 @@ export const runScan = internalMutation({
 
     let created = 0;
 
-    // ---- 1. Hearing reminders (next 24h) -----------------------------
+    // ---- 1. Hearing reminders -----------------------------------------
+    // Cadence per hearing: 30/14/7/3/1 days and the morning of the
+    // hearing (IST). A hearing's reminderDays override the firm default;
+    // each (hearing, offset, user) fires at most once (dedupe key pins
+    // the offset so the 30-day notice never doubles as the 14-day one).
+    const DEFAULT_HEARING_REMINDER_DAYS = [30, 14, 7, 3, 1, 0];
     const hearings = await ctx.db
       .query("hearings")
       .withIndex("by_status", (q) => q.eq("status", "scheduled"))
       .collect();
-    const hearingSoon = hearings.filter((h) => h.at > now && h.at <= in24h);
-
-    for (const h of hearingSoon) {
+    for (const h of hearings) {
+      if (h.at <= now) continue;
       const matter = await ctx.db.get(h.matterId);
       if (!matter) continue;
+      const offsets = (
+        h.reminderDays && h.reminderDays.length > 0
+          ? h.reminderDays
+          : DEFAULT_HEARING_REMINDER_DAYS
+      )
+        .filter((d) => Number.isFinite(d) && d >= 0 && d <= 60)
+        .sort((a, b) => b - a);
+      // Which offsets actually fall due today: the scheduled hearing
+      // time minus offset days must land inside today's IST window.
+      const dueOffsets = offsets.filter((d) => {
+        const fireAt = h.at - d * 24 * 60 * 60 * 1000;
+        return fireAt >= todayEnd - 24 * 3600 * 1000 && fireAt < todayEnd;
+      });
+      if (dueOffsets.length === 0) continue;
       const targets = new Set<Id<"users">>();
       if (matter.leadLawyerId) targets.add(matter.leadLawyerId);
       if (h.appearingAdvocateId) targets.add(h.appearingAdvocateId);
-      for (const uid of targets) {
-        const id = await ctx.runMutation(internal.notifications.createInternal, {
-          orgId: matter.orgId,
-          userId: uid,
-          kind: "hearing_reminder",
-          title: `Hearing ${formatWhen(h.at)} — ${matter.reference}`,
-          body: h.purpose ? `${matter.title} · ${h.purpose}` : matter.title,
-          linkTo: `/matters/${matter._id}?tab=hearings`,
-          dedupeKey: `hearing:${h._id}:${dayKey}:${uid}`,
-        });
-        if (id) created += 1;
+      for (const offset of dueOffsets) {
+        for (const uid of targets) {
+          const whenLabel =
+            offset === 0 ? "today" : offset === 1 ? "tomorrow" : `in ${offset} days`;
+          const id = await ctx.runMutation(internal.notifications.createInternal, {
+            orgId: matter.orgId,
+            userId: uid,
+            kind: "hearing_reminder",
+            title: `Hearing ${whenLabel} — ${matter.reference}`,
+            body: h.purpose ? `${matter.title} · ${h.purpose}` : matter.title,
+            linkTo: `/matters/${matter._id}?tab=hearings`,
+            dedupeKey: `hearing:${h._id}:${dayKey}:${offset}:${uid}`,
+          });
+          if (id) created += 1;
+        }
       }
     }
+
+    // Hearings starting within 24h — still used by the legacy
+    // `hearing_tomorrow` automation trigger below.
+    const hearingSoon = hearings.filter((h) => h.at > now && h.at <= in24h);
 
     // ---- 2. Deadline reminders ---------------------------------------
     const deadlines = await ctx.db

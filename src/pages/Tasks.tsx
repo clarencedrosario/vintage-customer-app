@@ -53,6 +53,14 @@ const TASK_KIND_LABELS: Record<string, string> = {
   collection: "Collection",
 };
 
+/** Board statuses: To Do → In Progress → Review → Completed. */
+export const TASK_STATUS_LABELS: Record<string, string> = {
+  pending: "To Do",
+  in_progress: "In Progress",
+  review: "Review",
+  done: "Completed",
+};
+
 const DEADLINE_CATEGORY_LABELS: Record<string, string> = {
   limitation: "Limitation",
   filing: "Filing",
@@ -365,6 +373,16 @@ function TaskRow({
         <td className="px-4 py-3">
           <Badge variant="outline" className="font-normal">
             {TASK_KIND_LABELS[task.kind] ?? task.kind}
+          </Badge>
+          <Badge
+            variant="outline"
+            className={`ml-1 font-normal ${
+              task.status === "review"
+                ? "border-[#B68A45] text-[#8a6a33]"
+                : ""
+            }`}
+          >
+            {TASK_STATUS_LABELS[task.status] ?? task.status}
           </Badge>
         </td>
         <td className="whitespace-nowrap px-4 py-3">

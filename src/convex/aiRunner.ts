@@ -103,7 +103,17 @@ function promptFor(kind: string, sources: Source[], note: string | null, transcr
     case "hearing_prep":
       return {
         wantsJson: false,
-        user: `Prepare a hearing brief from the selected sources: matters to be ready on, the documents to carry (with source references), questions the bench may ask grounded in the record, and points on which the file is silent. Do not predict the outcome.${noteLine}\n\n${ctx}`,
+        user: `Prepare a premium hearing-preparation brief from the selected sources. Produce EXACTLY these nine sections, each as a heading in this order:
+1. Case facts — only what the record establishes, each fact anchored to its [source, p.N].
+2. Issues — the issues in dispute as the documents frame them.
+3. Our position — our client's position per the record, labelled as position, not established fact.
+4. Opponent position — the opposing party's asserted position per the record, labelled as their claim.
+5. Previous orders — every order or direction the sources record, with dates and anchors.
+6. Key evidence — the evidence points that matter, each tied to its source document.
+7. Relevant documents — the documents to carry to court (with source references),
+8. Outstanding issues — what is unresolved or missing from the record, including points on which the file is silent.
+9. Preparation checklist — concrete items to complete before the hearing (documents to bundle, witnesses to arrange, filings to confirm, questions the bench may ask grounded in the record).
+Rules: never predict the outcome; never import facts not in the sources; anchor every factual statement; mark missing items as missing rather than inventing them.${noteLine}\n\n${ctx}`,
       };
     case "draft":
       return {

@@ -839,6 +839,9 @@ export const addHearing = mutation({
     appearingAdvocateId: v.optional(v.id("users")),
     prepNotes: v.optional(v.string()),
     requiredDocuments: v.optional(v.array(v.string())),
+    // Reminder lead times in days before the hearing (30/14/7/3/1;
+    // 0 = morning of). Empty/absent = the firm default cadence.
+    reminderDays: v.optional(v.array(v.number())),
   },
   handler: async (ctx, args) => {
     const ac = await requireAccess(ctx);
@@ -883,6 +886,7 @@ export const addHearing = mutation({
       requiredDocuments: args.requiredDocuments?.length
         ? args.requiredDocuments
         : undefined,
+      reminderDays: args.reminderDays?.length ? args.reminderDays : undefined,
       status: "scheduled",
       createdAt: Date.now(),
     });
@@ -910,6 +914,7 @@ export const editHearing = mutation({
     appearingAdvocateId: v.optional(v.id("users")),
     prepNotes: v.optional(v.string()),
     requiredDocuments: v.optional(v.array(v.string())),
+    reminderDays: v.optional(v.array(v.number())),
   },
   handler: async (ctx, args) => {
     const ac = await requireAccess(ctx);
@@ -939,6 +944,8 @@ export const editHearing = mutation({
       patch.requiredDocuments = args.requiredDocuments.length
         ? args.requiredDocuments
         : undefined;
+    if (args.reminderDays !== undefined)
+      patch.reminderDays = args.reminderDays.length ? args.reminderDays : undefined;
 
     await ctx.db.patch(args.hearingId, patch);
     if (patch.at !== undefined) {

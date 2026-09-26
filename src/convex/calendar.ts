@@ -282,3 +282,81 @@ export const markedDays = query({
       .sort((a, b) => a.date.localeCompare(b.date));
   },
 });
+
+/**
+ * Everything scheduled in an inclusive IST date range, flattened and
+ * access-filtered. Powers the Day/Week/Month/List calendar views and
+ * their court / lawyer / matter / courtroom filters (applied by the
+ * page against the resolved names below).
+ */
+export const range = query({
+  args: {
+    fromDate: v.string(),
+    toDate: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const ac = await getAccessContext(ctx);
+    if (!ac) return [];
+    const from = istDayEnd(args.fromDate) - 24 * 60 * 60 * 1000 + 1;
+    const to = istDayEnd(args.toDate);
+
+    const orgMatters = await ctx.db
+      .query("matters")
+      .withIndex("by_org", (q) => q.eq("orgId", ac.org._id))
+      .collect();
+    const matters = orgMatters.filter((m) => canViewMatter(ac, m));
+    const matterById = new Map(matters.map((m) => [m._id, m]));
+
+    const userIds = new Set<Id<"users">>();
+    for (const m of matters) {
+      if (m.leadLawyerId) userIds.add(m.leadLawyerId);
+    }
+
+    const hearingRows = (
+      await Promise.all(
+        matters.map((m) =>
+          ctx.db
+            .query("hearings")
+            .withIndex("by_matter", (q) => q.eq("matterId", m._id))
+            .collect(),
+        ),
+      )
+    )
+      .flat()
+      .filter((h) => h.status !== "cancelled" && h.at >= from && h.at <= to)
+      .sort((a, b) => a.at - b.at);
+
+    for (const h of hearingRows) {
+      if (h.appearingAdvocateId) userIds.add(h.appearingAdvocateId);
+    }
+
+    const nameByUser = new Map<Id<"users">, string>();
+    for (const id of userIds) {
+      const u = await ctx.db.get(id);
+      if (u) nameByUser.set(id, u.name ?? u.email ?? "Member");
+    }
+
+    return hearingRows.map((h) => {
+      const m = matterById.get(h.matterId);
+      const leadId = m?.leadLawyerId;
+      return {
+        _id: h._id,
+        at: h.at,
+        status: h.status,
+        title: h.title,
+        court: h.court ?? null,
+        courtroom: h.courtroom ?? null,
+        purpose: h.purpose ?? null,
+        judge: h.judge ?? null,
+        matterId: h.matterId,
+        matterReference: m?.reference ?? "—",
+        matterTitle: m?.title ?? "",
+        leadLawyerId: leadId ?? null,
+        leadLawyerName: leadId ? (nameByUser.get(leadId) ?? null) : null,
+        appearingAdvocateName: h.appearingAdvocateId
+          ? nameByUser.get(h.appearingAdvocateId) ?? null
+          : null,
+      };
+    });
+  },
+});

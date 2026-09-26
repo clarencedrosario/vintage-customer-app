@@ -70,7 +70,8 @@ const STEPS: { title: string; hint: string }[] = [
   { title: "Billing", hint: "How this matter is billed" },
 ];
 
-function NewMatterDialog() {
+/** Guided 5-step matter-creation wizard (also used from the Matters register). */
+export function NewMatterDialog() {
   const clients = useQuery(api.clients.list);
   const members = useQuery(api.workspace.team);
   const createMatter = useMutation(api.matters.create);
