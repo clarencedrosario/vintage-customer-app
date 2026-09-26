@@ -9,6 +9,7 @@ import {
 import type { AccessContext } from "./access";
 import { enforceTenantIsolation } from "./middleware/security";
 import { logUserAction } from "./auditLogger";
+import { appendCustody } from "../lib/evidenceIntegrity";
 import { rowBelongsToTenant } from "../lib/tenantIsolation";
 import {
   generateSecureDownloadLink,
@@ -202,6 +203,17 @@ export const issueSecureDownloadLink = mutation({
       return null;
     }
     const link = generateSecureDownloadLink(doc.storageId, { secret });
+    // Chain of custody: every issued link is recorded on the document
+    // (no token material — only who/what/when) in addition to the
+    // org-level audit log.
+    await ctx.db.patch(args.documentId, {
+      custody: appendCustody(doc.custody, {
+        at: Date.now(),
+        byId: ac.user._id,
+        byName: ac.user.name ?? ac.user.email ?? "Member",
+        action: "downloaded",
+      }),
+    });
     // Layer-3 binding: immutable audit record for every link issued.
     // Fail-silent by contract — a dropped log write never blocks the
     // (already-authorized) issuance, and the audit row contains no

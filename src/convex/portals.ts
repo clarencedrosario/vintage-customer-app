@@ -870,6 +870,13 @@ export const clientUploadDocument = mutation({
       visibility: "shared_with_client",
       storageId: args.storageId,
       submittedByClient: true,
+      custody: [
+        {
+          at: Date.now(),
+          byId: user._id,
+          action: "submitted_by_client" as const,
+        },
+      ],
       createdAt: Date.now(),
     });
     await ctx.db.insert("matterEvents", {

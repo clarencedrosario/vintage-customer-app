@@ -24,6 +24,7 @@ import { api } from "@/convex/_generated/api";
 import { CommandCentre } from "@/components/CommandCentre";
 import { HearingPackDialog } from "@/components/HearingPackDialog";
 import { HearingOutcomeDialog } from "@/components/HearingOutcomeDialog";
+import { HearingRescheduleDialog } from "@/components/HearingRescheduleDialog";
 import { ProposalReviewPanel } from "@/components/ProposalReviewPanel";
 import { AiStudio } from "@/components/AiStudio";
 import { Badge } from "@/components/ui/badge";
@@ -342,6 +343,14 @@ export default function MatterDetail() {
     id: Id<"hearings">;
     title: string;
     court: string | null;
+  } | null>(null);
+  // Hearing being rescheduled (audit-trailed, clash-warned dialog).
+  const [rescheduleHearing, setRescheduleHearing] = useState<{
+    id: Id<"hearings">;
+    title: string;
+    at: number;
+    courtroom: string | null;
+    appearingAdvocateId: Id<"users"> | null;
   } | null>(null);
   const { matterId: rawId } = useParams<{ matterId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -968,6 +977,18 @@ export default function MatterDetail() {
               onOpenChange={(v) => !v && setOutcomeHearing(null)}
             />
           )}
+          {rescheduleHearing && (
+            <HearingRescheduleDialog
+              hearingId={rescheduleHearing.id}
+              hearingTitle={rescheduleHearing.title}
+              currentAt={rescheduleHearing.at}
+              courtroom={rescheduleHearing.courtroom}
+              appearingAdvocateId={rescheduleHearing.appearingAdvocateId}
+              matterLeadId={matter?.leadLawyerId ?? null}
+              open
+              onOpenChange={(v) => !v && setRescheduleHearing(null)}
+            />
+          )}
 
           {/* Feature 2 review desk — proposals from recorded outcomes are
               approved, edited or rejected here before anything is created. */}
@@ -1035,6 +1056,21 @@ export default function MatterDetail() {
                           }}
                         >
                           <FileText className="mr-1 h-4 w-4" /> Prepare pack
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() =>
+                            setRescheduleHearing({
+                              id: h._id,
+                              title: h.title,
+                              at: h.at,
+                              courtroom: h.courtroom ?? null,
+                              appearingAdvocateId: h.appearingAdvocateId ?? null,
+                            })
+                          }
+                        >
+                          Reschedule
                         </Button>
                         <Button
                           size="sm"

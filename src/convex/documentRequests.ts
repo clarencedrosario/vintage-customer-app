@@ -244,6 +244,16 @@ export const accept = mutation({
       visibility: "internal",
       storageId: r.currentStorageId,
       submittedByClient: true,
+      // Carry the submission's hash forward if the checklist recorded one.
+      integritySha256: r.currentIntegritySha256,
+      custody: [
+        {
+          at: Date.now(),
+          byId: ac.user._id,
+          byName: ac.user.name ?? ac.user.email ?? "Member",
+          action: "accepted_from_request" as const,
+        },
+      ],
       createdAt: Date.now(),
     });
 

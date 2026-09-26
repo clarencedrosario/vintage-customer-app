@@ -423,6 +423,14 @@ export const commit = mutation({
           name: f.name,
           kind: (f.kind || "document") as Doc<"matterDocuments">["kind"],
           visibility: (f.visibility || "internal") as Doc<"matterDocuments">["visibility"],
+          custody: [
+            {
+              at: now,
+              byId: ac.user._id,
+              byName: ac.user.name ?? ac.user.email ?? "Member",
+              action: "imported" as const,
+            },
+          ],
           createdAt: now,
         });
         created++;

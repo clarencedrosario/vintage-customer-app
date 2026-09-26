@@ -2,6 +2,7 @@ import { defineSchema, defineTable } from "convex/server";
 import { authTables } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { DEADLINE_CATEGORIES } from "./constants";
+import { CUSTODY_ACTIONS } from "../lib/evidenceIntegrity";
 import {
   featureFiveTables,
   featureSixTables,
@@ -623,6 +624,20 @@ export default defineSchema({
     // per hearing; 0 = the morning of the hearing. Falls back to the
     // firm default when unset.
     reminderDays: v.optional(v.array(v.number())),
+    // Reschedule audit trail — every move appends {who, when, reason,
+    // oldAt, newAt}. Prior entries are never overwritten.
+    reschedules: v.optional(
+      v.array(
+        v.object({
+          at: v.number(),
+          byId: v.id("users"),
+          byName: v.string(),
+          reason: v.string(),
+          oldAt: v.number(),
+          newAt: v.number(),
+        }),
+      ),
+    ),
     createdAt: v.number(),
   })
     .index("by_matter", ["matterId"])
@@ -658,6 +673,25 @@ export default defineSchema({
       v.literal("shared_with_client"),
     ),
     storageId: v.optional(v.id("_storage")),
+    // Evidence integrity (2026 expansion): SHA-256 (lowercase hex) of the
+    // exact stored bytes, computed by the uploader's browser at upload
+    // time. Independently re-verifiable server-side via the
+    // evidence.verifyDocumentIntegrity action.
+    integritySha256: v.optional(v.string()),
+    // Chain of custody: capped append-only trail (see
+    // src/lib/evidenceIntegrity.ts). The org audit log remains the
+    // complete record for consequential actions.
+    custody: v.optional(
+      v.array(
+        v.object({
+          at: v.number(),
+          byId: v.optional(v.id("users")),
+          byName: v.optional(v.string()),
+          action: v.union(...CUSTODY_ACTIONS.map((a) => v.literal(a))),
+          note: v.optional(v.string()),
+        }),
+      ),
+    ),
     // Client portal submissions land here.
     submittedByClient: v.optional(v.boolean()),
     requestedFromClient: v.optional(v.boolean()),

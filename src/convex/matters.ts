@@ -22,6 +22,15 @@ import {
   TASK_PRIORITIES,
   type OrgRole,
 } from "./schema";
+import {
+  detectClashes,
+  rescheduleRejection,
+  buildRescheduleAudit,
+  carryReminderDays,
+  istDay,
+  istDayBounds,
+  type ClashCandidate,
+} from "../lib/hearingSchedule";
 
 // Limits
 const MAX_TEXT = 4000;
@@ -1521,6 +1530,10 @@ export const attachDocument = mutation({
       v.literal("shared_with_client"),
     ),
     storageId: v.optional(v.id("_storage")),
+    // SHA-256 (lowercase hex) of the uploaded bytes, computed in the
+    // uploader's browser. Optional for legacy clients; when present it
+    // seeds the evidence-integrity record.
+    integritySha256: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const ac = await requireAccess(ctx);
@@ -1529,6 +1542,12 @@ export const attachDocument = mutation({
 
     const name = args.name.trim().slice(0, MAX_NAME);
     if (!name) throw new Error("Document name is required.");
+    if (
+      args.integritySha256 !== undefined &&
+      !/^[a-f0-9]{64}$/.test(args.integritySha256)
+    ) {
+      throw new Error("Invalid integrity hash format.");
+    }
     const docId = await ctx.db.insert("matterDocuments", {
       matterId: args.matterId,
       uploaderId: ac.user._id,
@@ -1536,6 +1555,15 @@ export const attachDocument = mutation({
       kind: args.kind,
       visibility: args.visibility,
       storageId: args.storageId,
+      integritySha256: args.integritySha256,
+      custody: [
+        {
+          at: Date.now(),
+          byId: ac.user._id,
+          byName: ac.user.name ?? ac.user.email ?? "Member",
+          action: "filed" as const,
+        },
+      ],
       createdAt: Date.now(),
     });
     await logEvent(
@@ -1744,5 +1772,173 @@ export const listExpenses = query({
       .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))
       .collect();
     return rows.sort((a, b) => b.createdAt - a.createdAt);
+  },
+});
+
+// =====================================================================
+// Hearing rescheduling with clash warnings (26 Sep 2026 audit gap).
+//
+// Pure rules live in src/lib/hearingSchedule.ts (unit-tested); this
+// module enforces them server-side: capability + matter access first,
+// then the same reschedule/clash rules the UI previews. Every move is
+// appended to the hearing's `reschedules` audit trail (old value kept,
+// never overwritten) and written to the org audit log; the matter
+// chronology records the change and matters.nextHearingAt is refreshed
+// by the existing helper.
+// =====================================================================
+
+/**
+ * Clash preview for scheduling and rescheduling dialogs. Same-day
+ * (IST) hearings across the whole organization are compared against the
+ * candidate time; a clash requires time overlap AND a shared resource
+ * (courtroom or effective advocate). Nothing here is a hard block — a
+ * firm may deliberately double-book; the UI warns, the audit records.
+ */
+export const checkHearingClash = query({
+  args: {
+    at: v.number(),
+    courtroom: v.optional(v.string()),
+    appearingAdvocateId: v.optional(v.id("users")),
+    // The candidate matter's lead lawyer — the fallback diary used when
+    // no appearing advocate is chosen (mirrors addHearing defaults).
+    fallbackAdvocateId: v.optional(v.id("users")),
+    // Set when rescheduling: the hearing being moved excludes itself.
+    excludeHearingId: v.optional(v.id("hearings")),
+  },
+  handler: async (ctx, args) => {
+    const ac = await getAccessContext(ctx);
+    if (!ac) return null;
+
+    // Compare only against hearings on the candidate's IST day, across
+    // the matters the caller is authorized to see.
+    const day = istDayBounds(istDay(args.at));
+    const matters = (
+      await ctx.db
+        .query("matters")
+        .withIndex("by_org", (q) => q.eq("orgId", ac.org._id))
+        .collect()
+    ).filter((m) => canViewMatter(ac, m));
+    const matterById = new Map(matters.map((m) => [m._id, m]));
+
+    const candidates: ClashCandidate[] = [];
+    for (const m of matters) {
+      const rows = await ctx.db
+        .query("hearings")
+        .withIndex("by_matter", (q) => q.eq("matterId", m._id))
+        .collect();
+      for (const h of rows) {
+        if (h.status === "cancelled") continue;
+        if (h.at < day.start || h.at > day.end) continue;
+        candidates.push({
+          hearingId: h._id,
+          matterId: h.matterId,
+          title: `${m.reference} — ${h.title}`,
+          at: h.at,
+          courtroom: h.courtroom,
+          appearingAdvocateId: h.appearingAdvocateId,
+        });
+      }
+    }
+
+    const clashes = detectClashes(
+      {
+        hearingId: args.excludeHearingId,
+        at: args.at,
+        courtroom: args.courtroom,
+        appearingAdvocateId: args.appearingAdvocateId,
+        fallbackAdvocateId: args.fallbackAdvocateId,
+      },
+      candidates,
+    );
+
+    return {
+      clashes: clashes.map((c) => ({
+        ...c,
+        matterReference:
+          matterById.get(c.matterId as Id<"matters">)?.reference ?? "—",
+      })),
+    };
+  },
+});
+
+/**
+ * Reschedule a hearing with a mandatory recorded reason. Only scheduled
+ * or adjourned hearings may move (pure rule in hearingSchedule.ts);
+ * the previous time is preserved in the audit trail, reminders carry
+ * forward (they re-anchor to the new time), the matter chronology gets
+ * an event, and the org audit log records who moved what and why.
+ */
+export const rescheduleHearing = mutation({
+  args: {
+    hearingId: v.id("hearings"),
+    newAt: v.number(),
+    reason: v.string(),
+    courtroom: v.optional(v.string()),
+    appearingAdvocateId: v.optional(v.id("users")),
+  },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    requireCapability(ac, "hearing.manage");
+    const hearing = await requireEditableHearing(ctx, args.hearingId);
+    const matter = await requireMatter(ctx, ac, hearing.matterId);
+    void matter;
+
+    // Server-side validation of the same rules the client previews.
+    const rejection = rescheduleRejection({
+      currentStatus: hearing.status,
+      currentAt: hearing.at,
+      newAt: args.newAt,
+      now: Date.now(),
+    });
+    if (rejection) throw new Error(rejection);
+
+    const reason = args.reason.trim();
+    if (reason.length < 3) {
+      throw new Error("A reschedule reason is required (at least 3 characters).");
+    }
+
+    const now = Date.now();
+    await ctx.db.patch(args.hearingId, {
+      at: args.newAt,
+      status: "scheduled",
+      reminderDays: carryReminderDays(hearing.reminderDays),
+      reschedules: [
+        ...(hearing.reschedules ?? []),
+        buildRescheduleAudit(
+          ac.user._id,
+          ac.user.name ?? ac.user.email ?? "Member",
+          reason,
+          hearing.at,
+          args.newAt,
+          now,
+        ),
+      ],
+    });
+
+    await refreshNextHearing(ctx, hearing.matterId);
+    const oldWhen = new Date(hearing.at).toLocaleString("en-IN", {
+      timeZone: ac.org.timezone,
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
+    const newWhen = new Date(args.newAt).toLocaleString("en-IN", {
+      timeZone: ac.org.timezone,
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
+    await logEvent(
+      ctx,
+      hearing.matterId,
+      "hearing",
+      `Hearing rescheduled from ${oldWhen} to ${newWhen} — ${reason}.`,
+      { linkKind: "hearing", linkId: args.hearingId },
+    );
+    await audit(
+      ctx,
+      ac,
+      hearing.matterId,
+      "Hearing rescheduled",
+      `${oldWhen} → ${newWhen} (${reason})`,
+    );
   },
 });

@@ -25,6 +25,75 @@ Notes:
   project; restore data via Convex dashboard snapshot import. This remains a
   launch-checklist item — **not** claimed as a verified restore.
 
+## Implementation turn — 26 Sep 2026, 19:45 UTC (turn 4)
+
+Authorized to proceed continuously. Checkpoint before edits:
+`backups/source-checkpoint-2026-09-26b.tar.gz` (266 files, sha256
+`2d958d4994362544aae633590eb67019fdd19e8bfa5c5462fc2e9e1e069c0926`).
+
+### Completed: hearing rescheduling + clash warnings (workflow-4 audit gap)
+
+- **Pure logic** `src/lib/hearingSchedule.ts` — IST day model (day/bounds),
+  clash detection (same IST day + time overlap ≤30 min buffer AND shared
+  resource: courtroom or effective advocate; sparse-data "adjacent" warning
+  only when neither side names a resource), reschedule validation (held/
+  cancelled immovable, no-op rejected, 24 h past-grace), audit-record builder
+  (generic over branded ids), reminder-cadence carry-forward.
+- **Tests** `src/lib/hearingSchedule.test.ts` — 27 tests, all passing. One
+  contract bug found and fixed during TDD: the first draft flagged every
+  time-overlap as "adjacent"; corrected so warnings require a shared resource
+  (or fully sparse data).
+- **Schema** (additive, optional field): `hearings.reschedules` — append-only
+  audit array {at, byId, byName, reason, oldAt, newAt}. No migration risk;
+  legacy rows read fine.
+- **Server** `src/convex/matters.ts`:
+  - `checkHearingClash` query — clash preview across the caller's *visible*
+    matters on the candidate's IST day (permission-filtered; cancelled
+    excluded; self-exclusion for reschedules).
+  - `rescheduleHearing` mutation — `hearing.manage` capability + `requireMatter`
+    + `requireEditableHearing`; server re-validates the pure rules; mandatory
+    ≥3-char reason; appends the audit record (old time preserved, never
+    overwritten); reminders carry forward (re-anchor to the new time);
+    chronology event + org audit log; `refreshNextHearing` maintained.
+  - Status note: an adjourned hearing that is moved becomes `scheduled` again
+    (its adjournment is captured in the reason + audit trail).
+- **UI** — new `src/components/HearingRescheduleDialog.tsx` (mandatory reason,
+  optional courtroom/advocate update, live clash warnings from the same query,
+  warnings are non-blocking and say so); `Reschedule` action added to hearing
+  rows in `src/pages/MatterDetail.tsx` (wired with matter lead as fallback
+  diary).
+
+### Verification (actual results, this turn)
+
+- `bun run test` → **20 files, 329/329 passed** (302 prior + 27 new).
+- `bunx tsc -b --noEmit` → **0 errors**.
+- `bunx convex dev --once` → **push OK 19:41 UTC to the development deployment**
+  (`moonlit-elk-307`, dev). Additive schema change only. No git push, no
+  production deployment.
+- Mid-turn issues found and fixed en route: one contract bug in clash detection
+  (TDD), one branded-id type mismatch (resolved by making the audit builder
+  generic), and one transient edit-tool anomaly that briefly corrupted the
+  `audit()` helper in matters.ts (repaired; final typecheck + tests green).
+
+### What to test in the preview
+
+1. Open a matter → Hearings → a scheduled hearing now shows **Reschedule**.
+2. Reschedule with a short reason → rejected; ≥3 chars → moved, chronology
+   event appears, hearing shows the new time.
+3. Set the new time to overlap another hearing of the same advocate (same IST
+   day, within 30 min) → amber clash warning listing the conflicting matter,
+   hearing, and reason; rescheduling is still allowed.
+4. Re-check the Calendar/Court Day views — the hearing appears on its new day;
+   reminders fire relative to the new time.
+5. Audit log (Settings → audit view) records "Hearing rescheduled" with actor.
+
+### In progress next
+
+Document integrity hashes + chain-of-custody events (§6 audit gap), continuing
+the master sequence.
+
+---
+
 ## Read-only audit — 26 Sep 2026, 19:07 UTC (turn 3)
 
 Scope: the six Phase-2 legal workflows + deployment-fact reconciliation.
