@@ -25,9 +25,117 @@ Notes:
   project; restore data via Convex dashboard snapshot import. This remains a
   launch-checklist item — **not** claimed as a verified restore.
 
-## Regression baseline (recorded before any Phase-1a edit)
+## Read-only audit — 26 Sep 2026, 19:07 UTC (turn 3)
 
-Command and actual output:
+Scope: the six Phase-2 legal workflows + deployment-fact reconciliation.
+No application code or backend was changed in this run (read-only turn).
+
+### Deployment facts (corrected record)
+
+- **This run executed:** `bunx tsc -b --noEmit` (exit 0) and `bun run test`
+  (302/302) at 19:07 UTC. **`bunx convex dev --once` was NOT executed in this
+  run** — the 26 Sep 10:47/10:55 IST pushes were cited from the earlier session.
+- **Dev deployment (`moonlit-elk-307`, "vintage-customer-app (dev)"):** last
+  pushed in the previous session when Phase-1 schema landed (added the 19-table
+  `hrTables` group; no new functions). No Convex deployment of any kind in the
+  audit run.
+- **Git:** none — platform-managed; never committed/pushed/merged by the agent.
+- **Production:** no deployment initiated by the agent; platform/operator action.
+
+### Fresh verification (run NOW in this turn, 19:07 UTC)
+
+- `bunx tsc -b --noEmit` → **exit 0**
+- `bun run test` → **19 files, 302/302 passed**
+
+### Historical results (prior session, 26 Sep morning)
+
+- `bunx convex dev --once` → push OK 10:47 & 10:55 IST (schema + codegen).
+
+### Workflow-by-workflow audit findings
+
+Evidence basis: server-code inspection of `src/convex/*` (handlers re-derive
+access per request; capability gates confirmed) + pure-logic unit tests. Per the
+verification vocabulary, none of this constitutes an E2E browser walkthrough.
+
+**1. Client intake & onboarding — Implemented and verified (code + unit tests; no E2E pass)**
+- Files: `src/convex/intake.ts` (1,276 lines), `src/lib/intakeFlow.test.ts`, `src/pages/Intake.tsx`.
+- Evidence: intake→conflict gate→client/matter conversion chain read in code
+  (`conflictCheckId` gate at conversion); `intakeFlow` unit tests green.
+- Gaps: no E2E walkthrough recorded; consultation booking exists
+  (`consultRequests.ts`) but no automated test covers booking→conversion.
+
+**2. Conflict checks & reviewed decisions — Implemented and verified (code + unit tests; no E2E pass)**
+- Files: `src/convex/conflicts.ts` (621 lines), `src/lib/conflictFlow.test.ts`, `src/pages/Conflicts.tsx`.
+- Evidence: `classify`/`override`/`reject` mutations with `conflict.override`
+  capability gate (support-staff excluded), 10-char minimum override reason,
+  audit insert + `logUserAction`; `canProceedToMatter` blocks matter creation
+  on unoverridden confirmed conflicts; explicit no-guarantee framing.
+- Gaps: no E2E walkthrough; match-quality against realistic data untested.
+
+**3. Matters: creation/update/closure/access — Implemented and verified (code + denial tests; no E2E pass)**
+- Files: `src/convex/matters.ts` (1,748 lines), `src/convex/accessPolicy*.ts`, `src/convex/accessPolicy.test.ts` (2-tenant denial fixture), `src/pages/Matters.tsx` + `MatterDetail.tsx`.
+- Evidence: every list/get re-filters via `canViewMatter`; team-restrict only by
+  authorized roles; `closeMatter`/`reopenMatter` lifecycle present.
+- Gaps: no E2E walkthrough; closure cascade effects on billing not re-verified.
+
+**4. Hearings, deadlines, reminders — Implemented and verified (code + unit tests; no E2E pass), with 2 gaps**
+- Files: `src/convex/matters.ts` (hearings), `src/convex/deadlineRules.ts`, `src/convex/schemaExtras.ts` (versioned rules), `src/convex/crons.ts` + `reminders.ts`, `src/convex/calendar.ts`, `src/pages/Calendar.tsx`, `CourtDay.tsx`, `DeadlineRules.tsx`.
+- Evidence: versioned deadline rules with frozen specs + calculation breakdowns;
+  lawyer-approval gate on rule-generated deadline drafts; reminder cron every
+  5 min (hearings 24h, deadlines due/reminder-day); IST day model shared by
+  calendar and briefing code.
+- **Gaps (newly found):** (a) no audited reschedule action — hearings are
+  editable until outcome recorded, but no dedicated reschedule-with-reason flow;
+  (b) no calendar-clash warning when scheduling (`addHearing` has double-click
+  dedupe only).
+
+**5. Documents, sharing, revocation — Implemented and verified (code; no E2E pass), with 3 gaps**
+- Files: `src/convex/documents.ts`, `src/lib/documentManager.ts` + test, `src/convex/schemaExtras.ts` (vault), `src/pages/Documents.tsx`.
+- Evidence: dual-layer tenant middleware + per-request `canViewMatter`/
+  `canViewDocument`; share links token-verified (unit-tested in
+  `documentManager.test.ts`); vault versioning preserves originals; permission-
+  aware library query.
+- **Gaps (newly found):** (a) no evidence integrity hashes / chain-of-custody
+  events on `matterDocuments`; (b) no document-level legal holds/retention
+  (backup `retentionNote` is unrelated); (c) no E2E walkthrough.
+
+**6. Client portal & explicit visibility — Implemented and verified (code; no E2E pass)**
+- Files: `src/convex/portals.ts` (clientPortal/clientUploadDocument/
+  clientMessage/completeTask), `src/convex/commOutbox.ts` (approval outbox), `src/pages/ClientPortal.tsx`.
+- Evidence: portal queries resolve server-side from memberships; client uploads
+  land as `submittedByClient` rows via generated upload URLs; outbox approval
+  flow unit-tested (`commOutboxFlow.test.ts`); notifications link to records.
+- Gaps: no E2E walkthrough; invoice payment inside portal needs merchant config
+  (blocked externally).
+
+### Audit conclusion & proposed next task (awaiting approval)
+
+All six workflows are implemented with server-side enforcement and unit-test
+evidence, but **none has a recorded end-to-end walkthrough**. Two audit gaps are
+user-visible defects in a live practice: hearing rescheduling and calendar-clash
+warnings. The proposed bounded task addresses the higher-impact one:
+
+**Proposed bounded task — hearing rescheduling with audited trail + clash
+warnings (workflow 4):**
+1. Pure logic in `src/lib/hearingSchedule.ts`: `describeClashes()` (detect
+   same-advocate/lead-lawyer hearings within a configurable buffer on the target
+   IST day) + `rescheduleTransition()` (validate current status allows
+   reschedule, carry forward reminder cadence, record {oldAt,newAt,reason,by}
+   for the audit trail). Unit-tested first.
+2. Server: `rescheduleHearing` mutation in `src/convex/matters.ts` (capability
+   `hearing.manage` + requireMatter + audited via `logUserAction`; clamps
+   `matters.nextHearingAt`); optional `clashes` return from a new
+   `checkHearingClash` query consumed by the scheduling dialogs.
+3. UI: Reschedule action on MatterDetail hearing rows + clash warnings in the
+   add/reschedule dialogs (Calendar/CourtDay share the same query).
+4. Verify: unit tests + `bunx convex dev --once` + `tsc -b --noEmit` + full
+   suite; checkpoint tar before editing.
+
+Alternatives considered: E2E browser evidence collection (needs operator or
+browser tooling — not available this run); document integrity hashes (valuable
+but less urgent than scheduling integrity in daily practice). Awaiting approval.
+
+## Regression baseline (recorded before any Phase-1a edit)
 
 - `bunx tsc -b --noEmit` → **exit 0, no errors**
 - `bun run test` (vitest) → **19 files passed, 302/302 tests passed**

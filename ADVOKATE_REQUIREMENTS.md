@@ -12,6 +12,12 @@ Every item carries one of these statuses, applied honestly:
 > substituted for real functionality without explicit labelling. Where a claim
 > would be dishonest (e.g. "guaranteed no conflict", "e2e encrypted", "verified
 > e-signature"), the requirement itself says no — and so does this file.
+>
+> Verification vocabulary (tightened after the 26 Sep audit): **"verified"** means
+> the implementation is enforced server-side and exercised by the automated suite
+> or a clean typecheck/push — it is NOT an operator end-to-end browser pass.
+> No legal workflow has had a recorded E2E browser walkthrough yet; that evidence
+> category is tracked separately in `ADVOKATE_PROGRESS.md`.
 
 Last updated: 26 September 2026. Evidence and test results: `ADVOKATE_PROGRESS.md`.
 
@@ -64,7 +70,9 @@ Last updated: 26 September 2026. Evidence and test results: `ADVOKATE_PROGRESS.m
 - Court-day views for lawyers and assigned support staff — **Implemented and verified**
 - Configurable deadline rules, holiday calendars, rule versions, calculation explanations — **Implemented and verified** (versioned rules; frozen specs; breakdown trail)
 - Mandatory recorded lawyer verification for legally consequential deadlines — **Implemented and verified** (draft → lawyer approval → acknowledged lifecycle)
-- Reminders, escalation, rescheduling, conflict warnings — **Implemented and verified**
+- Reminders, escalation — **Implemented and verified** (5-min reminder cron + escalation in `crons.ts`/`reminders.ts`)
+- Rescheduling (audited reschedule action) — **Not started** (gap found in 26 Sep audit: hearings are editable until outcome is recorded, but there is no dedicated audited reschedule-with-reason flow)
+- Calendar-conflict warnings when scheduling — **Not started** (gap found in 26 Sep audit: `addHearing` double-click dedupe exists, but no clash detection against a lawyer's existing hearings/deadlines)
 - Hearing packs (documents, chronology, notes, pending work) — **Implemented and verified**
 - Reviewed orders linked to follow-up tasks and deadlines — **Implemented and verified**
 - Court-status integrations via authorized sources only — **Blocked by external setup** (manual import is the only source; clearly timestamped and labelled)
@@ -75,10 +83,10 @@ Last updated: 26 September 2026. Evidence and test results: `ADVOKATE_PROGRESS.m
 - Version history, review, controlled downloads, revocable share links — **Implemented and verified** (Document Vault + vaultVersions)
 - Drafting templates, generation, reusable clauses — **Implemented and verified** (Drafts module)
 - E-signature integration with accurate status — **Not started** (no provider; typed names/images never described as verified signatures)
-- Evidence numbering, metadata, integrity hashes, chain-of-custody events — **Implemented but unverified** (file access log + storage metadata; not exercised by automated tests end-to-end)
+- Evidence numbering, metadata, integrity hashes, chain-of-custody events — **Not started** (gap found in 26 Sep audit: `matterDocuments` has no integrity-hash field; file-access logging exists, hashing does not)
 - Original-file preservation, derived-file tracking — **Implemented and verified** (vault versions preserve originals)
 - File-type/size validation, malware scanning, secure storage — **Implemented but unverified** (validation implemented; malware scanning **Not started** — no scanning service configured)
-- Retention rules, legal holds, audited deletion — **Implemented but unverified**
+- Retention rules, legal holds, audited deletion — **Not started** (gap found in 26 Sep audit: the only retention code is `backupRecords.retentionNote`, which is unrelated to document legal holds)
 - Permission-aware document search — **Implemented and verified**
 
 ## 7. Lawyer collaboration
