@@ -930,3 +930,105 @@ export const featureSixTables = {
     createdAt: v.number(),
   }).index("by_outbox", ["outboxId"]),
 };
+
+// =====================================================================
+// FEATURE 10 — CJ GLOBAL: platform operations (2026 expansion).
+//
+// The support-ticket layer is deliberately separate from in-chamber
+// practice data: customers (clients, staff, chamber members) raise
+// tickets about the PLATFORM, and platform operators triage them. No
+// legal record is exposed through this surface — a ticket carries its
+// own subject/body and (optionally) a reference to the AI job that was
+// escalated, never a matter file.
+//
+// Conventions:
+// - Ticket creation needs only an authenticated, non-anonymous account
+//   (any portal). Triage/assignment/resolve/close needs the platform
+//   operator flag (users.isPlatformAdmin), audited like every other
+//   platform action — consistent with section 24's "no default owner
+//   privilege over tenant data".
+// - orgId is OPTIONAL: a signed-in chamber member can attach their org
+//   for context, but the ticket belongs to the SUBMITTER for visibility
+//   (only the submitter and platform operators can read it).
+// - Lifecycle: open → in_progress → resolved → closed, with reopen
+//   from resolved/closed. Transitions enforced server-side.
+// =====================================================================
+
+export const TICKET_STATUSES = [
+  "open",
+  "in_progress",
+  "resolved",
+  "closed",
+] as const;
+
+export const TICKET_PRIORITIES = ["low", "normal", "high", "urgent"] as const;
+
+export const TICKET_KINDS = [
+  "general",
+  "billing",
+  "technical",
+  "account",
+  "ai_escalation",
+] as const;
+
+export const platformOpsTables = {
+  // One row per customer support ticket. Visibility: the submitter and
+  // platform operators only — never chamber-wide, never cross-chamber.
+  supportTickets: defineTable({
+    orgId: v.optional(v.id("organizations")), // submitter context, optional
+    submittedById: v.id("users"),
+    submittedByName: v.optional(v.string()),
+    submittedByEmail: v.optional(v.string()),
+    kind: v.union(...TICKET_KINDS.map((k) => v.literal(k))),
+    priority: v.union(...TICKET_PRIORITIES.map((p) => v.literal(p))),
+    status: v.union(...TICKET_STATUSES.map((s) => v.literal(s))),
+    subject: v.string(),
+    body: v.string(),
+    // Set when the ticket was raised from an Advokate AI conversation —
+    // the escalation path (feature 10). The AI job id is kept for
+    // operator context; the job's contents are NOT exposed here.
+    escalatedFromAiJobId: v.optional(v.id("aiJobs")),
+    assignedToId: v.optional(v.id("users")),
+    assignedToName: v.optional(v.string()),
+    assignedAt: v.optional(v.number()),
+    firstResponseAt: v.optional(v.number()), // SLA signal, set on first operator reply
+    resolvedAt: v.optional(v.number()),
+    resolvedById: v.optional(v.id("users")),
+    resolutionNote: v.optional(v.string()),
+    closedAt: v.optional(v.number()),
+    closedById: v.optional(v.id("users")),
+    reopenCount: v.optional(v.number()),
+    lastActivityAt: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_status", ["status"]) // org-agnostic operator queue
+    .index("by_submitter", ["submittedById"])
+    .index("by_org", ["orgId"]),
+
+  // Append-only message thread on a ticket. AuthorType distinguishes
+  // the customer, the platform operator, and an assigned operator.
+  supportTicketMessages: defineTable({
+    ticketId: v.id("supportTickets"),
+    authorId: v.optional(v.id("users")), // null = never; kept required-id for safety
+    authorType: v.union(
+      v.literal("customer"),
+      v.literal("operator"),
+      v.literal("system"),
+    ),
+    authorName: v.optional(v.string()),
+    body: v.string(),
+    createdAt: v.number(),
+  }).index("by_ticket", ["ticketId"]),
+
+  // Platform operations audit: every triage decision (assign, priority
+  // change, resolve, close, reopen, note) lands here, mirroring the
+  // platformAdminAudit pattern of section 24.
+  platformOpsAudit: defineTable({
+    actorId: v.id("users"),
+    actorName: v.optional(v.string()),
+    action: v.string(), // "ticket.assign", "ticket.resolve", …
+    ticketId: v.optional(v.id("supportTickets")),
+    detail: v.optional(v.string()),
+    createdAt: v.number(),
+  }).index("by_ticket", ["ticketId"]).index("by_time", ["createdAt"]),
+};

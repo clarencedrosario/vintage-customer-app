@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
+import { SupportCentre } from "@/components/SupportCentre";
 
 const MAX_UPDATE = 1000;
 
@@ -351,6 +352,11 @@ export default function StaffPortal() {
           </section>
         </div>
       </div>
+
+      {/* CJ GLOBAL — platform support tickets (raised by, not chamber work) */}
+      <section aria-label="Platform support" className="mt-10" id="support">
+        <SupportCentre compact />
+      </section>
     </ChamberShell>
   );
 }

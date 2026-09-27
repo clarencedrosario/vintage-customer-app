@@ -32,7 +32,9 @@ import {
   CloudOff,
   FolderOpen,
   Gavel,
+  Headset,
   Landmark,
+  LifeBuoy,
   ListChecks,
   LogOut,
   Menu,
@@ -117,12 +119,14 @@ const PORTAL_NAV: Record<"client" | "staff", NavItem[]> = {
     { to: "/portal?tab=documents", label: "My documents", icon: FolderOpen },
     { to: "/portal?tab=requests", label: "Document requests", icon: ClipboardList },
     { to: "/portal?tab=messages", label: "Messages", icon: ScrollText },
+    { to: "/portal?tab=support", label: "Platform support", icon: LifeBuoy },
   ],
   staff: [
     { to: "/staff", label: "My work", icon: ClipboardList },
     { to: "/staff?tab=matters", label: "Matters I support", icon: Landmark },
     { to: "/staff?tab=hearings", label: "Hearings", icon: Gavel },
     { to: "/staff?tab=documents", label: "Documents", icon: FolderOpen },
+    { to: "/staff?tab=support", label: "Platform support", icon: LifeBuoy },
   ],
 };
 
@@ -380,19 +384,30 @@ function OrgSwitcher({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
-/** Discreet top-bar entry to the platform console — only for platform admins. */
+/** Discreet top-bar entry to the platform consoles — only for platform
+ *  admins: /platform (subscriptions/chambers) and /owner (support ops). */
 function PlatformLink() {
   const amAdmin = useQuery(api.platform.amIPlatformAdmin);
   if (!amAdmin) return null;
   return (
-    <NavLink
-      to="/platform"
-      title="Platform console"
-      aria-label="Platform console"
-      className="flex size-8 items-center justify-center rounded-md text-slate-500 hover:bg-muted hover:text-foreground"
-    >
-      <Shield className="size-4" aria-hidden="true" />
-    </NavLink>
+    <>
+      <NavLink
+        to="/owner"
+        title="Support operations console"
+        aria-label="Support operations console"
+        className="flex size-8 items-center justify-center rounded-md text-slate-500 hover:bg-muted hover:text-foreground"
+      >
+        <Headset className="size-4" aria-hidden="true" />
+      </NavLink>
+      <NavLink
+        to="/platform"
+        title="Platform console"
+        aria-label="Platform console"
+        className="flex size-8 items-center justify-center rounded-md text-slate-500 hover:bg-muted hover:text-foreground"
+      >
+        <Shield className="size-4" aria-hidden="true" />
+      </NavLink>
+    </>
   );
 }
 

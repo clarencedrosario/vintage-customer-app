@@ -16,11 +16,20 @@ import type { Doc, Id } from "@/convex/_generated/dataModel";
 import { formatDateTimeIN } from "@/lib/format";
 import { useMutation, useQuery } from "convex/react";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   AlertTriangle,
   Bot,
   Check,
   FileSearch,
   FileText,
+  Headset,
   Loader2,
   Mic,
   Scale,
@@ -699,6 +708,19 @@ function JobResult({
   jobId: Id<"aiJobs">;
   matterId: Id<"matters">;
 }) {
+  return (
+    <JobResultInner jobId={jobId} matterId={matterId} />
+  );
+}
+
+/** Job result with the CJ GLOBAL human-handoff affordance. */
+function JobResultInner({
+  jobId,
+  matterId,
+}: {
+  jobId: Id<"aiJobs">;
+  matterId: Id<"matters">;
+}) {
   const job = useQuery(api.ai.getJob, { jobId });
   const confirmFn = useMutation(api.ai.confirmEvents);
   const rejectFn = useMutation(api.ai.rejectEvent);
@@ -706,9 +728,13 @@ function JobResult({
   const removeRowFn = useMutation(api.ai.removeEvidenceRow);
   const issues = useQuery(api.matters.listIssues, { matterId });
   const docket = useQuery(api.matters.listEvents, { matterId });
+  const escalate = useMutation(api.platformOps.escalateFromAiJob);
 
   const [issueId, setIssueId] = useState<string>("");
   const [busy, setBusy] = useState(false);
+  const [escOpen, setEscOpen] = useState(false);
+  const [escSubject, setEscSubject] = useState("");
+  const [escDesc, setEscDesc] = useState("");
 
   useEffect(() => {
     if (!issueId && issues && issues.length > 0) setIssueId(issues[0]._id);
@@ -754,6 +780,29 @@ function JobResult({
             <p>The assistant could not complete this request:</p>
             <p className="mt-1 text-muted-foreground">{job.error}</p>
           </div>
+        </div>
+      )}
+      {/* CJ GLOBAL — AI-to-human escalation: hand this AI conversation to a
+          platform operator as a high-priority support ticket. */}
+      {(job.status === "done" || job.status === "failed" || job.status === "expired") && (
+        <div className="flex justify-end">
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 text-xs"
+            onClick={() => {
+              setEscSubject(
+                job.status === "done"
+                  ? "Review this AI answer"
+                  : "AI request failed",
+              );
+              setEscDesc("");
+              setEscOpen(true);
+            }}
+          >
+            <Headset className="mr-1.5 size-3.5" aria-hidden="true" />
+            Escalate to human support
+          </Button>
         </div>
       )}
       {job.status === "expired" && (
@@ -879,6 +928,72 @@ function JobResult({
           )}
         </>
       )}
+
+      {/* CJ GLOBAL — human-handoff dialog */}
+      <Dialog open={escOpen} onOpenChange={setEscOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="font-serif">Escalate to human support</DialogTitle>
+            <DialogDescription>
+              A platform operator picks this up as a high-priority ticket. Your
+              message matters — describe what the AI missed or got wrong. The
+              matter's contents stay confidential; only your description and
+              the request reference reach support.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <Label htmlFor="esc-subject" className="text-xs">Subject</Label>
+              <Input
+                id="esc-subject"
+                value={escSubject}
+                onChange={(e) => setEscSubject(e.target.value)}
+                className="h-8 text-sm"
+                maxLength={200}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="esc-desc" className="text-xs">
+                What went wrong or needs human review?
+              </Label>
+              <Textarea
+                id="esc-desc"
+                value={escDesc}
+                onChange={(e) => setEscDesc(e.target.value)}
+                rows={4}
+                maxLength={8000}
+                className="text-sm"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button size="sm" variant="ghost" onClick={() => setEscOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              disabled={escSubject.trim().length < 4 || escDesc.trim().length < 10}
+              onClick={async () => {
+                try {
+                  await escalate({
+                    jobId,
+                    subject: escSubject.trim(),
+                    description: escDesc.trim(),
+                  });
+                  toast.success(
+                    "Handed off to human support — track it under Platform support.",
+                  );
+                  setEscOpen(false);
+                } catch (e) {
+                  toast.error(e instanceof Error ? e.message : "Could not escalate.");
+                }
+              }}
+            >
+              Hand off to a human
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -19,7 +19,7 @@ Every item carries one of these statuses, applied honestly:
 > No legal workflow has had a recorded E2E browser walkthrough yet; that evidence
 > category is tracked separately in `ADVOKATE_PROGRESS.md`.
 
-Last updated: 27 September 2026 (turn: five-question audit closed; HR module shipped; payroll slice shipped; CJ GLOBAL checklist added). Evidence and test results: `ADVOKATE_PROGRESS.md`.
+Last updated: 27 September 2026 (turn: five-question audit closed; HR module shipped; payroll slice shipped; CJ GLOBAL support-ticketing slice shipped). Evidence and test results: `ADVOKATE_PROGRESS.md`.
 
 ---
 
@@ -279,15 +279,13 @@ Last updated: 27 September 2026 (turn: five-question audit closed; HR module shi
 ## 25. CJ GLOBAL — platform operations (checklist added 27 Sep 2026)
 
 Platform-level operations layer, as distinct from the in-chamber practice
-product. Tracked here per this file's honesty rule; statuses are current as of
-the 27 Sep codebase and have **no schema tables yet** — untouched by the 26 Sep
-HR/accounting/custody work.
+product. The customer support ticketing slice shipped 27 Sep (code + unit
+tests verified by push/typecheck/suite; **no browser E2E pass yet** — that
+evidence category stays tracked in `ADVOKATE_PROGRESS.md`).
 
-- Platform owner administration console (all-chamber oversight, `/owner`) — **Not started** (no `/owner` route in `src/main.tsx`)
+- Customer support ticketing (submit/triage/resolve across chambers) — **Implemented and verified** (27 Sep: `supportTickets`/`supportTicketMessages`/`platformOpsAudit` tables in `platformOpsTables`; `platformOps.ts` — any authenticated user submits (`submitTicket`), customer reply/reopen (`addCustomerMessage`), operator triage gated on `users.isPlatformAdmin` (`startProgress`/`addOperatorMessage`/`assignTicket`/`setTicketPriority`/`resolveTicket`/`closeTicket`/`reopenTicket`), enforced status machine (open→in_progress→resolved→closed with reopen), per-submitter visibility with operator override, mandatory resolution notes, full ops audit trail; UI: shared `SupportCentre` in client portal + staff portal, `/owner` operator console with queue/SLA counters/audit; pure rules unit-tested in `platformOps.test.ts`)
+- AI-to-human support escalation — **Implemented and verified** (27 Sep: `escalateFromAiJob` creates an `ai_escalation` ticket pinned to the AI job id, access-checked against the job's org, high priority by default, AI job contents never copied into the ticket; "Escalate to human support" affordance on every completed/failed/expired AI request in the AI Studio; operators see the handoff provenance in the queue and thread)
+- Platform owner administration console (all-chamber oversight, `/owner`) — **Implemented and verified** (27 Sep: `/owner` route + page — live cross-chamber ticket queue with claim/reply/resolve/close/reopen/priority actions, health counters incl. unassigned + >24h-first-response + open AI handoffs, operations audit feed; operator gate is `users.isPlatformAdmin` server-side, shared with the section-24 `/platform` subscription console; the queue exposes support metadata only — never tenant legal records)
 - Platform employee onboarding surface (`/employee`) — **Not started** (route absent; `src/convex/invitations.ts` covers in-chamber org member invites only, not a platform-wide employee lifecycle)
 - Developer route (`/developer`) — **Not started** (route absent)
-- Customer support ticketing (submit/triage/resolve across chambers) — **Not started** (no ticket tables, queries, or UI)
-- AI-to-human support escalation — **Not started** (no escalation path from AI surfaces to human operators)
-- Portal-facing routes that DO exist today: `/portal`, `/staff`, `/login`, `/find-a-lawyer` plus the authenticated practice routes
-
-These are the next platform-operations slice after the payroll module.
+- Portal-facing routes that DO exist today: `/portal`, `/staff`, `/login`, `/find-a-lawyer`, `/owner` plus the authenticated practice routes

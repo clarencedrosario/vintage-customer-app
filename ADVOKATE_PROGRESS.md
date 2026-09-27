@@ -8,6 +8,76 @@ Last checkpoint: **27 September 2026**
 
 ---
 
+## Implementation turn — 27 Sep 2026 (CJ GLOBAL support-ticketing slice shipped)
+
+### Scope delivered (user request: owner console, customer tickets, AI-to-human escalation)
+
+**Backend — `src/convex/platformOps.ts` + `platformOpsTables` in `schemaExtras.ts`:**
+- New tables (additive push): `supportTickets` (optional orgId, submitter identity,
+  kind general/billing/technical/account/ai_escalation, 4-level priority, status
+  open→in_progress→resolved→closed, assignee + firstResponseAt + resolution fields,
+  reopenCount, `escalatedFromAiJobId`, indexes by_status/by_submitter/by_org),
+  `supportTicketMessages` (append-only thread, authorType customer/operator/system),
+  `platformOpsAudit` (one row per operator action, by_time index).
+- Access model: submit/reply = any authenticated non-anonymous user from any portal;
+  triage/resolve/close = `users.isPlatformAdmin` only (same gate as the section-24
+  console — deliberately NOT a chamber capability, consistent with section 24's
+  "no default owner privilege over tenant data"); reads = submitter + operators only.
+- Status machine enforced server-side (`canTransitionTicket`): open→in_progress→
+  resolved→closed, reopen from resolved/closed; customer reply on resolved/closed
+  auto-reopens with reopenCount increment; resolution requires a ≥10-char note;
+  closed tickets refuse operator replies until reopened.
+- `escalateFromAiJob`: AI-to-human handoff — access-checks the caller against the
+  AI job's org (same rule ai.request enforces), creates a high-priority
+  `ai_escalation` ticket carrying ONLY the job reference + the user's own
+  description; the AI job's contents never enter the ticket.
+- Operator analytics: `opsCounts` (open/in_progress/unassigned/open AI handoffs/
+  >24h-without-first-response) and `opsAudit` feed; `operatorQueue` lists live
+  (non-closed) tickets by last activity; `firstResponseAt` stamped on first
+  operator reply (SLA signal).
+
+**Frontend:**
+- `/owner` route + `src/pages/OwnerConsole.tsx`: operator console with health
+  counters, cross-chamber live queue (claim/reply/resolve/close/reopen/priority
+  via select), ticket thread dialog (operator view + reply), resolve and reopen
+  dialogs with mandatory text, operations audit table, honest cross-link to
+  `/platform` and a note that tenant legal records are never shown here.
+- `src/components/SupportCentre.tsx` (shared): "my tickets" list, raise-ticket
+  dialog (kind/priority), thread dialog with customer reply + reopen-on-reply;
+  embedded in BOTH `ClientPortal.tsx` and `StaffPortal.tsx` (id="support" anchor,
+  compact mode) — plus `?tab=support` entries in `PORTAL_NAV` (client + staff).
+- `ChamberShell.tsx`: top-bar Headset link to `/owner` for platform admins
+  (alongside the existing Shield `/platform` link), rendered only when
+  `amIPlatformAdmin` is true.
+- `src/components/AiStudio.tsx`: "Escalate to human support" action on every
+  done/failed/expired AI request (JobResult), with a subject+description dialog
+  calling `platformOps.escalateFromAiJob`.
+
+**Tests + verification (code-inspection + automated suite; NO browser E2E yet):**
+- `src/convex/platformOps.test.ts` (11 tests): full transition matrix incl.
+  reopen-only-to-open and closed-terminal; visibility rules — submitter yes,
+  other customer no, platform operator yes, chamber owner WITHOUT the platform
+  flag no (guards the section-24 boundary); constants integrity (4 statuses,
+  5 kinds incl. ai_escalation, 4 priorities).
+- Suite: **26 files, 422/422 passed** (411 prior + 11 new). `bunx convex dev
+  --once` push OK (moonlit-elk-307 dev, functions ready); `bunx tsc -b --noEmit`
+  clean after fixing one missing `DialogTrigger` import.
+- Honest limits: no browser pass of submit→triage→resolve has happened; the
+  operator flow needs a `users.isPlatformAdmin` grant via the section-24
+  bootstrap (`PLATFORM_OWNER_EMAIL`) before anyone can actually triage; no
+  notification is sent to operators when a ticket lands (polling via the
+  console query only) — flagged as next-slice work.
+
+### Next
+
+- Operator enablement: run the platform bootstrap so the owner email actually
+  holds `isPlatformAdmin`, then a manual browser pass of submit → triage →
+  resolve → customer reopen.
+- Optional hardening: appNotifications on ticket creation/first response;
+  `/employee` platform onboarding surface; `/developer` route (rest of Section 25).
+
+---
+
 ## Implementation turn — 27 Sep 2026 (five-question audit closed → HR module shipped)
 
 ### Q1 — deployment identity (RESOLVED, code-inspection evidence only)

@@ -1,5 +1,32 @@
 # Implementation & delivery map (section 31)
 
+## Handoff — 27 Sep 2026: CJ GLOBAL support-ticketing slice shipped
+
+**Delivered (push OK moonlit-elk-307 dev, tsc clean, 422/422 tests — code +
+automated-suite evidence; no browser E2E pass yet):**
+
+- **Customer support ticketing** — new `platformOpsTables` (`supportTickets`,
+  `supportTicketMessages`, `platformOpsAudit`) + `src/convex/platformOps.ts`:
+  any authenticated user submits and replies (client portal, staff portal,
+  console via the shared `SupportCentre`); platform operators (`users.isPlatformAdmin`)
+  claim/reply/assign/set-priority/resolve/close/reopen from the new `/owner`
+  console; status machine, per-submitter visibility, mandatory resolution
+  notes, and a full ops audit trail are enforced server-side; pure rules
+  unit-tested in `platformOps.test.ts` (11 tests, incl. the guard that a
+  chamber owner WITHOUT the platform flag cannot read foreign tickets).
+- **AI-to-human escalation** — `escalateFromAiJob` pins a high-priority
+  `ai_escalation` ticket to the AI job (access-checked against the job's org;
+  job contents never copied into the ticket); "Escalate to human support"
+  affordance added to every completed/failed/expired request in the AI Studio.
+- **Operator console** — `/owner` route + page: live cross-chamber queue,
+  health counters (unassigned, open AI handoffs, >24h no-first-response),
+  thread/resolve/reopen dialogs, ops audit feed; top-bar Headset entry for
+  platform admins alongside the existing `/platform` Shield link.
+- **Known gaps flagged**: operator flow needs the section-24 bootstrap grant
+  (`PLATFORM_OWNER_EMAIL`) before anyone can triage; no push notification to
+  operators on new tickets (console polling only); `/employee` and
+  `/developer` remain Not started.
+
 ## Handoff — 27 Sep 2026: five-question audit closed, HR module live, payroll next
 
 **Answers delivered (evidence in ADVOKATE_PROGRESS.md):**

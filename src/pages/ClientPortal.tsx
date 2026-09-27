@@ -27,6 +27,7 @@ import {
 import { useRef, useState } from "react";import { Link } from "react-router";
 import { sha256Hex } from "@/lib/evidenceIntegrity";
 import { toast } from "sonner";
+import { SupportCentre } from "@/components/SupportCentre";
 
 /** One document row; resolves a read URL via its own guarded subscription. */
 function ClientDocLink({ documentId }: { documentId: Id<"matterDocuments"> }) {
@@ -578,6 +579,11 @@ export default function ClientPortal() {
             ))
           )}
         </ol>
+      </section>
+
+      {/* CJ GLOBAL — platform support tickets (distinct from chamber messaging) */}
+      <section aria-label="Platform support" className="mt-10" id="support">
+        <SupportCentre compact />
       </section>
     </ChamberShell>
   );
