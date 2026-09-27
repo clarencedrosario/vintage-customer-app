@@ -68,13 +68,57 @@ Last checkpoint: **27 September 2026**
   notification is sent to operators when a ticket lands (polling via the
   console query only) — flagged as next-slice work.
 
-### Next
+### Follow-up (same day) — AI-handoff materialized view (write-maintained)
+
+**Design:** `aiHandoffStats` is a write-maintained mat view — one row per
+chamber with the chamber's open AI-handoff counters (open / unclaimed /
+high-priority) plus forward-only last-handoff/last-resolution timestamps.
+No cron or scheduler maintains it: **every ticket mutation that changes a
+handoff's live state bumps the row in the SAME transaction** as the ticket
+write (create, claim, assign, priority change, resolve, close, customer or
+operator reopen), so a read can never observe ticket state without its view
+row.
+
+**Pure rules (`src/convex/handoffView.ts`, 13 new tests):** delta model is a
+before/after snapshot pair — counters recompute as row − before-contribution
++ after-contribution, which uniformly covers create/claim/priority/resolve/
+close/reopen with ONE rule (no per-event branching). Counters are floored at
+zero against buggy replays; timestamps are forward-only against out-of-order
+writes; `lastResolvedAt` advances only when a ticket LANDS on resolved.
+`rebuildHandoffRow` recomputes a chamber row from a base-table scan and
+`handoffCountersMatch` is the drift check (counters only — timestamps differ
+by design between forward-only view and authoritative rebuild).
+
+**Server (`platformOps.ts`):** `bumpHandoffView` applies the snapshot rule
+in-transaction (skips non-AI tickets and org-less legacy rows — the audited
+rebuild is their correction path); `handoffViewRows` (operator read, chamber
+names joined); `myChamberHandoffStats` (chamber-scoped read for the escalation
+UI); `rebuildAiHandoffStats` — operator-triggered, full base-table scan,
+patches only drifted rows, result recorded in platformOpsAudit.
+
+**UI:** `/owner` gains an "AI handoffs by chamber" card over the mat view
+(open/unclaimed/high-priority per chamber, timestamps, highlighted non-zero
+unclaimed/high counters) with an audited "Rebuild view" button; the AI Studio
+escalation dialog now shows the caller's chamber's live handoff counters
+(open count, unclaimed, last resolution) from `myChamberHandoffStats` before
+submitting.
+
+**Verification:** push OK (moonlit-elk-307 dev), `tsc -b --noEmit` clean, suite
+**26 files, 435/435** (was 422: 11 platformOps tests rewritten as 24 — the 11
+original ticket/visibility tests preserved verbatim plus 13 handoff-view tests
+incl. the mixed-history equivalence check that delta-maintained rows equal
+rebuilt rows). Honest limits: the view is verified by unit tests + push only —
+no browser pass; the rebuild's drift correction has no test fixture yet (the
+pure rules it calls are tested).
+
+### Next (CJ GLOBAL slice)
 
 - Operator enablement: run the platform bootstrap so the owner email actually
   holds `isPlatformAdmin`, then a manual browser pass of submit → triage →
-  resolve → customer reopen.
-- Optional hardening: appNotifications on ticket creation/first response;
-  `/employee` platform onboarding surface; `/developer` route (rest of Section 25).
+  resolve → customer reopen (and of the per-chamber handoff view + rebuild).
+- Optional hardening: appNotifications on ticket creation/first response; a
+  drift-check fixture for the rebuild; `/employee` platform onboarding
+  surface; `/developer` route (rest of Section 25).
 
 ---
 

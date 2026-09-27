@@ -87,6 +87,8 @@ export default function OwnerConsole() {
   const counts = useQuery(api.platformOps.opsCounts);
   const queue = useQuery(api.platformOps.operatorQueue);
   const audit = useQuery(api.platformOps.opsAudit, { limit: 50 });
+  const handoffRows = useQuery(api.platformOps.handoffViewRows);
+  const rebuildView = useMutation(api.platformOps.rebuildAiHandoffStats);
 
   const start = useMutation(api.platformOps.startProgress);
   const reply = useMutation(api.platformOps.addOperatorMessage);
@@ -108,6 +110,7 @@ export default function OwnerConsole() {
   const [resolveNote, setResolveNote] = useState("");
   const [reopenOpen, setReopenOpen] = useState<string | null>(null);
   const [reopenReason, setReopenReason] = useState("");
+  const [rebuilding, setRebuilding] = useState(false);
 
   const act = async (fn: () => Promise<unknown>, ok: string) => {
     try {
@@ -184,6 +187,100 @@ export default function OwnerConsole() {
             </Card>
           ))}
         </div>
+
+        {/* AI-handoff mat view — one row per chamber, write-maintained */}
+        <Card>
+          <CardHeader>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <CardTitle className="font-serif text-lg">
+                  AI handoffs by chamber
+                </CardTitle>
+                <CardDescription>
+                  Write-maintained view: every escalation/claim/resolve/reopen
+                  bumps these counters in the same transaction as the ticket
+                  write. The rebuild re-checks every chamber from the base
+                  tickets and corrects any drift, audited.
+                </CardDescription>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={rebuilding}
+                onClick={async () => {
+                  setRebuilding(true);
+                  try {
+                    const r = await rebuildView({});
+                    toast.success(
+                      `View rebuilt — ${r.checked} chamber(s) checked, ${r.corrected} row(s) corrected.`,
+                    );
+                  } catch (err) {
+                    toast.error(err instanceof Error ? err.message : "Rebuild failed.");
+                  } finally {
+                    setRebuilding(false);
+                  }
+                }}
+              >
+                Rebuild view
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto rounded-md border border-border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Chamber</TableHead>
+                    <TableHead>Open handoffs</TableHead>
+                    <TableHead>Unclaimed</TableHead>
+                    <TableHead>High priority</TableHead>
+                    <TableHead>Last handoff</TableHead>
+                    <TableHead>Last resolved</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {handoffRows === undefined && (
+                    <TableRow>
+                      <TableCell colSpan={6} className="text-xs text-muted-foreground">
+                        Loading…
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {handoffRows?.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={6} className="text-xs text-muted-foreground">
+                        No AI handoffs yet — escalations from the AI Studio
+                        create the rows.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {handoffRows?.map((r) => (
+                    <TableRow key={r.orgId}>
+                      <TableCell className="text-xs font-medium">{r.orgName}</TableCell>
+                      <TableCell className="text-xs font-semibold">{r.openCount}</TableCell>
+                      <TableCell className="text-xs">
+                        {r.unclaimedCount > 0 ? (
+                          <span className="text-orange-900">{r.unclaimedCount}</span>
+                        ) : (
+                          r.unclaimedCount
+                        )}
+                      </TableCell>
+                      <TableCell className="text-xs">
+                        {r.highPriorityCount > 0 ? (
+                          <span className="text-red-900">{r.highPriorityCount}</span>
+                        ) : (
+                          r.highPriorityCount
+                        )}
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap text-xs">{when(r.lastHandoffAt)}</TableCell>
+                      <TableCell className="whitespace-nowrap text-xs">{when(r.lastResolvedAt)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
 
         {/* Queue */}
         <Card>

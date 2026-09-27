@@ -20,11 +20,22 @@ automated-suite evidence; no browser E2E pass yet):**
   affordance added to every completed/failed/expired request in the AI Studio.
 - **Operator console** — `/owner` route + page: live cross-chamber queue,
   health counters (unassigned, open AI handoffs, >24h no-first-response),
-  thread/resolve/reopen dialogs, ops audit feed; top-bar Headset entry for
-  platform admins alongside the existing `/platform` Shield link.
+  thread/resolve/reopen dialogs, ops audit feed, and the **"AI handoffs by
+  chamber" mat-view card** (open/unclaimed/high-priority per chamber with an
+  audited rebuild button); top-bar Headset entry for platform admins
+  alongside the existing `/platform` Shield link.
+- **AI-handoff materialized view** — `aiHandoffStats` is write-maintained:
+  one row per chamber, bumped in the same transaction as every ticket change
+  that moves a handoff's live state (create/claim/priority/resolve/close/
+  reopen); pure before/after-snapshot delta rules in `handoffView.ts`
+  (counters floored at zero, timestamps forward-only); audited
+  `rebuildAiHandoffStats` recomputes from base tables for self-heal; the AI
+  Studio escalation dialog shows the chamber's live counters via
+  `myChamberHandoffStats`.
 - **Known gaps flagged**: operator flow needs the section-24 bootstrap grant
   (`PLATFORM_OWNER_EMAIL`) before anyone can triage; no push notification to
-  operators on new tickets (console polling only); `/employee` and
+  operators on new tickets (console polling only); the rebuild's drift
+  correction has no test fixture (its pure rules are tested); `/employee` and
   `/developer` remain Not started.
 
 ## Handoff — 27 Sep 2026: five-question audit closed, HR module live, payroll next

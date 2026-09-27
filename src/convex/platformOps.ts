@@ -21,6 +21,7 @@ import { v } from "convex/values";
 import {
   mutation,
   query,
+  internalMutation,
   type QueryCtx,
   type MutationCtx,
 } from "./_generated/server";
@@ -31,6 +32,12 @@ import {
   TICKET_PRIORITIES,
   TICKET_KINDS,
 } from "./schemaExtras";
+import {
+  mergeHandoffSnapshotChange,
+  rebuildHandoffRow,
+  handoffCountersMatch,
+  type HandoffTicketSnapshot,
+} from "./handoffView";
 
 type TicketStatus = "open" | "in_progress" | "resolved" | "closed";
 
@@ -95,6 +102,76 @@ async function ticketOrThrow(
   const t = await ctx.db.get(ticketId);
   if (!t) throw new Error("Ticket not found.");
   return t;
+}
+
+// ---------------------------------------------------------------------
+// AI-handoff materialized view (write-maintained)
+//
+// Every mutator below calls bumpHandoffView IN THE SAME TRANSACTION as
+// its ticket write, so the view row can never lag a ticket write. Pure
+// delta rules live in handoffView.ts (snapshot in, snapshot out — one
+// rule covers create/claim/priority/resolve/close/reopen). orgId may be
+// undefined on legacy tickets — those are skipped (they cannot be
+// attributed to a chamber) and the audited rebuild is the correction
+// path.
+// ---------------------------------------------------------------------
+
+function handoffSnapshotOf(
+  ticket: Pick<
+    Doc<"supportTickets">,
+    "orgId" | "kind" | "status" | "priority" | "assignedToId"
+  >,
+): HandoffTicketSnapshot {
+  return {
+    kind: ticket.kind,
+    orgId: ticket.orgId ?? undefined,
+    status: ticket.status,
+    priority: ticket.priority,
+    assignedToId: ticket.assignedToId ?? null,
+  };
+}
+
+async function bumpHandoffView(
+  ctx: MutationCtx,
+  before: HandoffTicketSnapshot | null,
+  after: HandoffTicketSnapshot,
+  at: number,
+): Promise<void> {
+  // Only AI-escalation tickets with a chamber belong in the view.
+  if (after.kind !== "ai_escalation" || !after.orgId) return;
+  const existing = await ctx.db
+    .query("aiHandoffStats")
+    .withIndex("by_org", (q) => q.eq("orgId", after.orgId as never))
+    .unique();
+  const next = mergeHandoffSnapshotChange(
+    existing
+      ? {
+          orgId: existing.orgId,
+          openCount: existing.openCount,
+          unclaimedCount: existing.unclaimedCount,
+          highPriorityCount: existing.highPriorityCount,
+          lastHandoffAt: existing.lastHandoffAt ?? null,
+          lastResolvedAt: existing.lastResolvedAt ?? null,
+          updatedAt: existing.updatedAt,
+        }
+      : null,
+    before,
+    after,
+    at,
+  );
+  const row = {
+    openCount: next.openCount,
+    unclaimedCount: next.unclaimedCount,
+    highPriorityCount: next.highPriorityCount,
+    lastHandoffAt: next.lastHandoffAt ?? undefined,
+    lastResolvedAt: next.lastResolvedAt ?? undefined,
+    updatedAt: next.updatedAt,
+  };
+  if (existing) {
+    await ctx.db.patch(existing._id, row);
+  } else {
+    await ctx.db.insert("aiHandoffStats", { orgId: after.orgId as never, ...row });
+  }
 }
 
 /** Submitter or platform operator — the only readers of a ticket. */
@@ -170,6 +247,14 @@ export const submitTicket = mutation({
       createdAt: now,
     });
 
+    // Mat-view bump, same transaction as the ticket insert.
+    await bumpHandoffView(
+      ctx,
+      null,
+      handoffSnapshotOf(await ctx.db.get(ticketId) as Doc<"supportTickets">),
+      now,
+    );
+
     return ticketId;
   },
 });
@@ -239,6 +324,14 @@ export const escalateFromAiJob = mutation({
       body: description.slice(0, 2000),
       createdAt: now,
     });
+
+    // Mat-view bump, same transaction as the handoff insert.
+    await bumpHandoffView(
+      ctx,
+      null,
+      handoffSnapshotOf(await ctx.db.get(ticketId) as Doc<"supportTickets">),
+      now,
+    );
 
     return { ticketId };
   },
@@ -380,6 +473,8 @@ export const addCustomerMessage = mutation({
         lastActivityAt: now,
       });
       await auditOps(ctx, user, "ticket.reopen_by_customer", ticket._id);
+      // View: reopened tickets re-enter the open counters.
+      await bumpHandoffView(ctx, handoffSnapshotOf(ticket), { ...handoffSnapshotOf(ticket), status: "open" }, now);
       return { reopened: true };
     }
     await ctx.db.patch(ticket._id, { lastActivityAt: now });
@@ -419,6 +514,13 @@ export const startProgress = mutation({
       });
     }
     await auditOps(ctx, operator, "ticket.start", ticket._id);
+    // View: claim moves the ticket from unclaimed to claimed (still open).
+    await bumpHandoffView(
+      ctx,
+      handoffSnapshotOf(ticket),
+      { ...handoffSnapshotOf(ticket), status: "in_progress", assignedToId: operator._id },
+      now,
+    );
   },
 });
 
@@ -458,14 +560,22 @@ export const assignTicket = mutation({
     const operator = await requireOperator(ctx);
     const ticket = await ticketOrThrow(ctx, args.ticketId);
     const now = Date.now();
+    const nextStatus = ticket.status === "open" ? "in_progress" : ticket.status;
     await ctx.db.patch(ticket._id, {
       assignedToId: operator._id,
       assignedToName: operator.name ?? operator.email ?? undefined,
       assignedAt: now,
-      status: ticket.status === "open" ? "in_progress" : ticket.status,
+      status: nextStatus,
       lastActivityAt: now,
     });
     await auditOps(ctx, operator, "ticket.assign", ticket._id);
+    // View: assignment (and any open→in_progress move) is one snapshot step.
+    await bumpHandoffView(
+      ctx,
+      handoffSnapshotOf(ticket),
+      { ...handoffSnapshotOf(ticket), status: nextStatus, assignedToId: operator._id },
+      now,
+    );
   },
 });
 
@@ -483,6 +593,13 @@ export const setTicketPriority = mutation({
       lastActivityAt: Date.now(),
     });
     await auditOps(ctx, operator, "ticket.priority", ticket._id, args.priority);
+    // View: priority changes move the high-priority counter while open.
+    await bumpHandoffView(
+      ctx,
+      handoffSnapshotOf(ticket),
+      { ...handoffSnapshotOf(ticket), priority: args.priority },
+      Date.now(),
+    );
   },
 });
 
@@ -518,6 +635,13 @@ export const resolveTicket = mutation({
       lastActivityAt: now,
     });
     await auditOps(ctx, operator, "ticket.resolve", ticket._id);
+    // View: leaving the open set; lastResolvedAt advances (forward-only).
+    await bumpHandoffView(
+      ctx,
+      handoffSnapshotOf(ticket),
+      { ...handoffSnapshotOf(ticket), status: "resolved" },
+      now,
+    );
   },
 });
 
@@ -538,6 +662,15 @@ export const closeTicket = mutation({
       lastActivityAt: now,
     });
     await auditOps(ctx, operator, "ticket.close", ticket._id);
+    // View: closed is also outside the open set (resolved→closed is a
+    // counter no-op — both states are non-open — but the snapshot model
+    // handles it uniformly).
+    await bumpHandoffView(
+      ctx,
+      handoffSnapshotOf(ticket),
+      { ...handoffSnapshotOf(ticket), status: "closed" },
+      now,
+    );
   },
 });
 
@@ -567,6 +700,13 @@ export const reopenTicket = mutation({
       createdAt: now,
     });
     await auditOps(ctx, operator, "ticket.reopen", ticket._id, reason);
+    // View: reopened tickets re-enter the open counters.
+    await bumpHandoffView(
+      ctx,
+      handoffSnapshotOf(ticket),
+      { ...handoffSnapshotOf(ticket), status: "open" },
+      now,
+    );
   },
 });
 
@@ -583,5 +723,134 @@ export const opsAudit = query({
       .withIndex("by_time", (q) => q.gte("createdAt", 0))
       .order("desc")
       .take(Math.min(args.limit ?? 50, 200));
+  },
+});
+
+// ---------------------------------------------------------------------
+// AI-handoff view: reads + audited rebuild
+// ---------------------------------------------------------------------
+
+/**
+ * Operator read of the mat view: one row per chamber that has live AI
+ * handoff counters, joined with the chamber name for display.
+ */
+export const handoffViewRows = query({
+  args: {},
+  handler: async (ctx) => {
+    await requireOperator(ctx);
+    const rows = await ctx.db.query("aiHandoffStats").collect();
+    const withNames = await Promise.all(
+      rows.map(async (r) => {
+        const org = await ctx.db.get(r.orgId);
+        return {
+          orgId: r.orgId,
+          orgName: org?.name ?? "(deleted chamber)",
+          openCount: r.openCount,
+          unclaimedCount: r.unclaimedCount,
+          highPriorityCount: r.highPriorityCount,
+          lastHandoffAt: r.lastHandoffAt ?? null,
+          lastResolvedAt: r.lastResolvedAt ?? null,
+          updatedAt: r.updatedAt,
+        };
+      }),
+    );
+    return withNames.sort((a, b) => b.openCount - a.openCount || a.orgName.localeCompare(b.orgName));
+  },
+});
+
+/**
+ * Chamber-scoped read for the escalation UI: the caller's own chamber's
+ * open AI-handoff counters (or nulls when the chamber has none). This is
+ * what the AI Studio escalation dialog surfaces before submitting.
+ */
+export const myChamberHandoffStats = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await actorOf(ctx);
+    if (!user) return null;
+    const ac = await getAccessContext(ctx);
+    if (!ac) return null;
+    const row = await ctx.db
+      .query("aiHandoffStats")
+      .withIndex("by_org", (q) => q.eq("orgId", ac.org._id))
+      .unique();
+    return {
+      openCount: row?.openCount ?? 0,
+      unclaimedCount: row?.unclaimedCount ?? 0,
+      highPriorityCount: row?.highPriorityCount ?? 0,
+      lastResolvedAt: row?.lastResolvedAt ?? null,
+    };
+  },
+});
+
+/**
+ * Audited self-heal: recompute EVERY chamber's view row from the base
+ * supportTickets table and write back rows whose counters drifted. The
+ * result reports checked/updated/chamber list; every correction is one
+ * ops-audit row. Normal operation never needs this — every mutator bumps
+ * the view in-transaction — but the rebuild makes drift detectable and
+ * correctable instead of trusted-away.
+ */
+export const rebuildAiHandoffStats = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const operator = await requireOperator(ctx);
+
+    // Full scan of AI-escalation tickets (kind has no dedicated index;
+    // ticket volume is operator-bounded and the rebuild is an explicit,
+    // rare, audited action).
+    const all = await ctx.db.query("supportTickets").collect();
+    const byOrg = new Map<string, typeof all>();
+    for (const t of all) {
+      if (t.kind !== "ai_escalation" || !t.orgId) continue;
+      const list = byOrg.get(t.orgId) ?? [];
+      list.push(t);
+      byOrg.set(t.orgId, list);
+    }
+
+    const now = Date.now();
+    const updated: string[] = [];
+    for (const [orgId, tickets] of byOrg) {
+      const rebuilt = rebuildHandoffRow(
+        orgId,
+        tickets.map((t) => ({
+          status: t.status,
+          priority: t.priority,
+          assignedToId: t.assignedToId ?? null,
+          createdAt: t.createdAt,
+          resolvedAt: t.resolvedAt ?? null,
+        })),
+        now,
+      );
+      const existing = await ctx.db
+        .query("aiHandoffStats")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId as never))
+        .unique();
+      const drifted = !existing || !handoffCountersMatch(existing, rebuilt);
+      if (!drifted) continue;
+      const row = {
+        openCount: rebuilt.openCount,
+        unclaimedCount: rebuilt.unclaimedCount,
+        highPriorityCount: rebuilt.highPriorityCount,
+        lastHandoffAt: rebuilt.lastHandoffAt ?? undefined,
+        lastResolvedAt: rebuilt.lastResolvedAt ?? undefined,
+        updatedAt: now,
+      };
+      if (existing) {
+        await ctx.db.patch(existing._id, row);
+      } else {
+        await ctx.db.insert("aiHandoffStats", { orgId: orgId as never, ...row });
+      }
+      updated.push(orgId);
+    }
+
+    await auditOps(
+      ctx,
+      operator,
+      "handoff_view.rebuild",
+      undefined,
+      `${byOrg.size} chamber(s) checked, ${updated.length} row(s) corrected`,
+    );
+    return { checked: byOrg.size, corrected: updated.length };
   },
 });

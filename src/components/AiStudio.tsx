@@ -729,6 +729,8 @@ function JobResultInner({
   const issues = useQuery(api.matters.listIssues, { matterId });
   const docket = useQuery(api.matters.listEvents, { matterId });
   const escalate = useMutation(api.platformOps.escalateFromAiJob);
+  // Chamber's open AI-handoff counters from the write-maintained mat view.
+  const handoffStats = useQuery(api.platformOps.myChamberHandoffStats);
 
   const [issueId, setIssueId] = useState<string>("");
   const [busy, setBusy] = useState(false);
@@ -929,7 +931,8 @@ function JobResultInner({
         </>
       )}
 
-      {/* CJ GLOBAL — human-handoff dialog */}
+      {/* CJ GLOBAL — human-handoff dialog, with the chamber's live
+          handoff counters from the write-maintained mat view. */}
       <Dialog open={escOpen} onOpenChange={setEscOpen}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
@@ -941,6 +944,19 @@ function JobResultInner({
               the request reference reach support.
             </DialogDescription>
           </DialogHeader>
+          {handoffStats && (handoffStats.openCount > 0 || handoffStats.unclaimedCount > 0) && (
+            <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+              Your chamber currently has {handoffStats.openCount} open AI
+              handoff{handoffStats.openCount === 1 ? "" : "s"}
+              {handoffStats.unclaimedCount > 0
+                ? `, ${handoffStats.unclaimedCount} not yet claimed by an operator`
+                : ""}
+              {handoffStats.lastResolvedAt
+                ? ` — the last one was resolved ${formatDateTimeIN(handoffStats.lastResolvedAt)}`
+                : ""}
+              . Your escalation joins that queue.
+            </p>
+          )}
           <div className="space-y-3">
             <div className="space-y-1">
               <Label htmlFor="esc-subject" className="text-xs">Subject</Label>

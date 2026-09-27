@@ -1030,5 +1030,25 @@ export const platformOpsTables = {
     ticketId: v.optional(v.id("supportTickets")),
     detail: v.optional(v.string()),
     createdAt: v.number(),
-  }).index("by_ticket", ["ticketId"]).index("by_time", ["createdAt"]),
+  })
+    .index("by_ticket", ["ticketId"])
+    .index("by_time", ["createdAt"]),
+
+  // Write-maintained materialized view: ONE row per chamber with the
+  // chamber's open AI-handoff counters (open/unclaimed/high-priority) and
+  // forward-only last-handoff/last-resolution timestamps. Bumped inside
+  // the SAME transaction as every ticket write that changes a handoff's
+  // live state (create/claim/resolve/close/reopen) — never by a cron —
+  // so a read can never see a ticket without its view row. Delta rules
+  // live in handoffView.ts (unit-tested); rebuildAiHandoffStats recomputes
+  // every row from the base tables as an audited self-heal.
+  aiHandoffStats: defineTable({
+    orgId: v.id("organizations"),
+    openCount: v.number(),
+    unclaimedCount: v.number(),
+    highPriorityCount: v.number(),
+    lastHandoffAt: v.optional(v.number()),
+    lastResolvedAt: v.optional(v.number()),
+    updatedAt: v.number(),
+  }).index("by_org", ["orgId"]),
 };
