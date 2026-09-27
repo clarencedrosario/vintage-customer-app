@@ -37,7 +37,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Headset, Shield, ShieldAlert } from "lucide-react";
+import { Headset, Shield, ShieldAlert, ShieldCheck } from "lucide-react";
 import { Link } from "react-router";
 
 // =====================================================================
@@ -84,6 +84,8 @@ function when(ts?: number | null): string {
 
 export default function OwnerConsole() {
   const amAdmin = useQuery(api.platform.amIPlatformAdmin);
+  const eligibility = useQuery(api.platform.myOwnerActivationEligibility);
+  const selfActivate = useMutation(api.platform.selfActivateOwner);
   const counts = useQuery(api.platformOps.opsCounts);
   const queue = useQuery(api.platformOps.operatorQueue);
   const audit = useQuery(api.platformOps.opsAudit, { limit: 50 });
@@ -111,6 +113,7 @@ export default function OwnerConsole() {
   const [reopenOpen, setReopenOpen] = useState<string | null>(null);
   const [reopenReason, setReopenReason] = useState("");
   const [rebuilding, setRebuilding] = useState(false);
+  const [activating, setActivating] = useState(false);
 
   const act = async (fn: () => Promise<unknown>, ok: string) => {
     try {
@@ -133,13 +136,44 @@ export default function OwnerConsole() {
     return (
       <ChamberShell subtitle="CJ Global" title="Operations console">
         <Card>
-          <CardContent className="pt-6">
+          <CardContent className="space-y-4 pt-6">
             <p className="flex items-start gap-2 text-sm text-muted-foreground">
               <ShieldAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
               This console is restricted to platform operators. Chamber owners
               manage their own chamber from the practice console; customer
               tickets are handled exclusively here.
             </p>
+            {eligibility?.eligible && (
+              <div className="rounded-md border border-[#B68A45]/40 bg-[#B68A45]/[0.06] p-4">
+                <p className="flex items-center gap-2 text-sm font-medium">
+                  <ShieldCheck className="size-4 text-[#8a6a33]" aria-hidden="true" />
+                  This account is the configured platform owner.
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Activation is verified server-side against your signed-in,
+                  email-verified identity and is written to the platform audit
+                  log. No other account can activate here.
+                </p>
+                <Button
+                  size="sm"
+                  className="mt-3"
+                  disabled={activating}
+                  onClick={async () => {
+                    setActivating(true);
+                    try {
+                      await selfActivate({});
+                      toast.success("Platform ownership activated.");
+                      window.location.reload();
+                    } catch (err) {
+                      toast.error(err instanceof Error ? err.message : "Activation failed.");
+                      setActivating(false);
+                    }
+                  }}
+                >
+                  {activating ? "Activating…" : "Activate platform ownership"}
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
       </ChamberShell>

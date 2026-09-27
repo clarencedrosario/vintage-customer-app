@@ -1,5 +1,34 @@
 # Implementation & delivery map (section 31)
 
+## Handoff — 27 Sep 2026: owner activation shipped (verified gate, activation pending user sign-in)
+
+- **Configured**: `PLATFORM_OWNER_EMAIL=clarencedrosario@gmail.com` set on the
+  dev deployment. **Gate proven negative**: `platform:bootstrapAdmin` refused
+  the grant because the account's email was not yet OTP-verified — an
+  unverified account cannot become owner (by design, executed and recorded).
+- **Added**: audited `platform.selfActivateOwner` (grants the operator flag
+  only to the signed-in, server-side-verified account matching the env var;
+  refuses all others generically), `platform.myOwnerActivationEligibility`,
+  an activation card on `/owner`, and `platform.bootstrapStatus` diagnostics.
+  **Activation is NOT yet executed** — it completes at first OTP sign-in + one
+  click on `/owner`; until then owner access is honestly "code-verified,
+  activation pending".
+- **Owner steps**: preview → `/owner` → sign in with the owner email → enter
+  the emailed 6-digit OTP → click **Activate platform ownership** (audited) →
+  console loads. 2FA challenge applies per the console-route gate; enroll via
+  Settings → two-factor.
+- **Team & Access** verified implemented + capability-tested (invite with seat
+  gating, role set with last-owner protection, suspend/reactivate effective
+  immediately; owner/administrator hold team.invite+team.manage,
+  accountant/support_staff do not; support_staff cannot be normalized into
+  administration).
+- **Support workflow**: policy-level sequence automated (445/445); **browser
+  unverified** — 8-step manual script recorded in ADVOKATE_PROGRESS.md.
+- **Rebuild**: operator-only, explicit scan limits (REBUILD_MAX_TICKETS=5000 /
+  REBUILD_MAX_ORGS=500, abort-with-error, test-pinned); two drift-correction
+  fixtures added (missed resolve-bump detected + corrected; missed reopen-bump
+  detected).
+
 ## Handoff — 27 Sep 2026: CJ GLOBAL support-ticketing slice shipped
 
 **Delivered (push OK moonlit-elk-307 dev, tsc clean, 422/422 tests — code +

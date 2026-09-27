@@ -8,6 +8,120 @@ Last checkpoint: **27 September 2026**
 
 ---
 
+## Implementation turn — 27 Sep 2026 (owner activation shipped; support workflow verified at policy level)
+
+### Owner access (requests 1–5)
+
+- **Owner email** — user-selected: `clarencedrosario@gmail.com` (matches the
+  primary named account in the 26 Sep DB export; not an anonymous account).
+- **Bootstrap mechanism (already implemented, explained)** — `users.isPlatformAdmin`
+  is the operator flag; the classic grant path is `platform.bootstrapAdmin`, an
+  internalMutation that grants ONLY to the existing account whose email equals
+  the server-side env var `PLATFORM_OWNER_EMAIL` AND whose `emailVerified` is
+  true. It is never self-serve from the UI, grants no default password, and
+  creates no account.
+- **Configuration done** — `bunx convex env set PLATFORM_OWNER_EMAIL
+  clarencedrosario@gmail.com` succeeded on the dev deployment (moonlit-elk-307).
+- **Gate PROVEN (negative result, deliberate)** — running `platform:bootstrapAdmin`
+  returned `{granted:false, reason:"That account's email is not verified."}`:
+  the account exists on the deployment but had never completed an OTP sign-in.
+  `platform:bootstrapStatus` (new diagnostics) correctly refused the CLI
+  caller too — no operator session. An unverified account CANNOT be granted:
+  requirement 3 held in practice.
+- **Activation path completed (audited self-activation)** — because the OTP
+  mailbox is user-side, we added `platform.selfActivateOwner`: grants
+  `isPlatformAdmin` only to the signed-in, non-anonymous, server-side
+  emailVerified account whose email equals PLATFORM_OWNER_EMAIL; audited as
+  `admin.self_activate`; refuses generically without revealing the configured
+  address. `platform.myOwnerActivationEligibility` drives an activation card
+  on `/owner` shown only to the eligible account. `platform:bootstrapAdmin`
+  remains available as the CLI path once the email is verified.
+- **Verification status — HONEST: activation is code-verified but NOT yet
+  executed** (the user must sign in with an emailed OTP first; the negative
+  gate test above is executed and recorded). The moment the user signs in via
+  OTP and clicks "Activate platform ownership" on /owner, activation is real
+  and audited.
+- **Preview URL and steps** — same origin as the app preview: **`/owner`**
+  (router path; open the preview and navigate to /owner, or use the preview's
+  URL bar with `/owner`). Steps: (1) open /owner signed-out → redirected to
+  /login?returnTo=/owner; (2) sign in with `clarencedrosario@gmail.com` → a
+  6-digit OTP is emailed (Freebuff send_otp service — operational); (3) enter
+  the OTP → signed in, email now verified server-side; (4) /owner shows the
+  amber activation card (only for the matching verified account) → click
+  **Activate platform ownership** (audited); (5) the console loads — queue,
+  counters, handoff view, audit. MFA: the /owner route sits behind the
+  same-session 2FA challenge gate on console routes; enroll from Settings →
+  two-factor if you want the challenge enforced on every console route.
+- **Rebuild restriction + limits** — `rebuildAiHandoffStats` stays
+  requireOperator-gated; explicit `REBUILD_MAX_TICKETS = 5000` /
+  `REBUILD_MAX_ORGS = 500` scan limits abort the rebuild with an explanatory
+  error instead of silently truncating; both constants pinned by test.
+
+### Team & Access + isolation (requests 6–7)
+
+- **Verified implemented server-side** (inspected + typechecked, existing
+  tests green): `invitations.inviteStaff` (team.invite capability, token+salt,
+  expiry, seat-limit gating with `seatAvailable`), `workspace.setMemberRole`
+  (team.manage + last-active-owner protection), `workspace.suspendMember` /
+  `reactivateMember` (team.manage; suspension is effective immediately because
+  every query re-derives access from membership status per request),
+  `invitations.revokeInvitation`. UI live on `/team` (role dropdown, suspend /
+  reactivate actions, invite form with role select).
+- **New capability-invariant tests** (platformOps.test.ts): no chamber role's
+  DEFAULT_PERMISSIONS contains any `platform.*` capability (the operator flag
+  is outside the chamber permission system); support_staff cannot be normalized
+  into team-administration capabilities; the invite/manage capability matrix
+  (owner/administrator yes; accountant/support_staff no).
+- **Cross-tenant isolation note** — the chamber isolation fixture (2-tenant
+  denial tests) already covers `canViewMatter`; ticket visibility is
+  submitter+operator only, denial-tested in platformOps.test.ts.
+
+### Support workflow (request 8) — AUTOMATED vs BROWSER, kept separate
+
+- **Automated (executed, 445/445)** — the full sequence customer creates →
+  agent claims → agent replies → customer sees reply → resolve is pinned at
+  the policy level in `support workflow sequence (policy level)`: transition
+  gates per step, reply refusal only on closed, per-step visibility
+  (customer+operator yes, other customer and chamber owner no), reopen-by-
+  customer-reply, operator reopen after close.
+- **Browser: UNVERIFIED** — no browser pass of the flow has happened. Manual
+  script (two browser profiles or normal + incognito):
+  1. Profile A (operator/owner): activate as above; Profile B: sign in as a
+     client or staff account (or a second chamber member).
+  2. B: /portal (or /staff) → Platform support card → Raise ticket → subject
+     + description → submit. EXPECT: toast + ticket row "Open".
+  3. A: /owner → queue shows the ticket (status Open, submitter name) →
+     click subject → thread opens → Claim. EXPECT: badge In progress.
+  4. A: type a reply in the thread → Send. EXPECT: message appears with
+     "Advokate support" styling.
+  5. B: reopen the thread from the support card. EXPECT: the operator reply
+     visible.
+  6. A: Resolve → ≥10-char note → confirm. EXPECT: badge Resolved; note in
+     thread.
+  7. B: reply on the resolved ticket. EXPECT: ticket re-opens (badge Open).
+  8. A: audit table gains a row per action; the "AI handoffs by chamber" card
+     reflects an AI-escalation ticket if one is raised from the AI Studio.
+  Record results here; only then may the workflow be labelled browser-verified.
+
+### Verification (actual results)
+
+- `bunx convex env set PLATFORM_OWNER_EMAIL …` — ✔ set on moonlit-elk-307 dev.
+- `bunx convex run platform:bootstrapAdmin` — ✔ executed, **refused the
+  unverified account** (negative gate proof, recorded above).
+- Pushes: 17:13 and 17:19 UTC OK (functions ready); `bunx tsc -b --noEmit`
+  → 0 errors; `bun run test` → **26 files, 445/445** (435 + 10 new: drift
+  fixtures ×2, scan-limit pin, workflow sequence ×4, platform-capability
+  invariants ×3).
+
+### Next
+
+- User performs activation (sign-in OTP + one click) — then the manual browser
+  script above can be executed and recorded.
+- Only after that: notifications on ticket events, /employee and /developer
+  surfaces (rest of Section 25).
+
+---
+
 ## Implementation turn — 27 Sep 2026 (CJ GLOBAL support-ticketing slice shipped)
 
 ### Scope delivered (user request: owner console, customer tickets, AI-to-human escalation)

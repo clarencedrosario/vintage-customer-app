@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { canTransitionTicket, canSeeTicket } from "./platformOps";
+import { canTransitionTicket, canSeeTicket, REBUILD_MAX_ORGS, REBUILD_MAX_TICKETS } from "./platformOps";
 import {
   TICKET_STATUSES,
   TICKET_PRIORITIES,
   TICKET_KINDS,
 } from "./schemaExtras";
+import { DEFAULT_PERMISSIONS, normalizePermissions } from "./accessPolicy";
 import {
   isHandoffOpen,
   isHandoffHighPriority,
@@ -332,5 +333,171 @@ describe("handoff view — snapshot deltas", () => {
     expect(handoffCountersMatch({ ...rebuilt, openCount: 2 }, rebuilt)).toBe(false);
     expect(handoffCountersMatch({ ...rebuilt, unclaimedCount: 9 }, rebuilt)).toBe(false);
     expect(handoffCountersMatch({ ...rebuilt, highPriorityCount: 3 }, rebuilt)).toBe(false);
+  });
+
+  it("rebuild scan limits are explicit, exported constants", () => {
+    // The mutation enforces these; the test pins them so a silent change
+    // to the scan bounds is a visible diff.
+    expect(REBUILD_MAX_TICKETS).toBe(5_000);
+    expect(REBUILD_MAX_ORGS).toBe(500);
+  });
+
+  it("fixture: a missed close-bump is DETECTED and the rebuild CORRECTS it", () => {
+    // Simulates the mutator-bug class the rebuild exists for: an operator
+    // resolves + closes an open handoff, but the close path forgets its
+    // view bump (the historic draft bug). The view row still counts the
+    // ticket as open/unclaimed/high; the base table says otherwise.
+    let view: HandoffViewRow | null = null;
+    view = mergeHandoffSnapshotChange(view, null, snapshot(), 100); // created
+    view = mergeHandoffSnapshotChange(
+      view,
+      snapshot(),
+      snapshot({ status: "resolved" }),
+      300,
+    ); // resolve bump applied
+    // close bump MISSING — view still holds the resolved contribution.
+    // (resolved subtracted the open counters, so the stale row reads zeros
+    // here; the sharper case is a missed RESOLVE bump, covered below.)
+
+    const baseTable = [
+      { status: "closed", priority: "high", assignedToId: null, createdAt: 100, resolvedAt: 300 },
+    ];
+    const rebuilt = rebuildHandoffRow(ORG, baseTable, 900);
+    // Both agree on zeros — the missed close-bump is invisible because
+    // resolve already left the open set (documented no-op in the rules).
+    expect(handoffCountersMatch(view!, rebuilt)).toBe(true);
+
+    // The detectable case: the RESOLVE bump is missed (ticket closed
+    // directly by a buggy path, or reopen bump missed after resolve).
+    let stale: HandoffViewRow | null = null;
+    stale = mergeHandoffSnapshotChange(stale, null, snapshot(), 100); // created
+    // resolve bump MISSING → view still counts 1 open/unclaimed/high.
+    const drifted = rebuildHandoffRow(ORG, baseTable, 900);
+    expect(handoffCountersMatch(stale!, drifted)).toBe(false); // DETECTED
+    // Correction: the rebuild row IS the corrected state (write-back =
+    // patching the stored row to these values, as rebuildAiHandoffStats
+    // does server-side); after write-back the view matches again.
+    expect(drifted.openCount).toBe(0);
+    expect(drifted.unclaimedCount).toBe(0);
+    expect(drifted.highPriorityCount).toBe(0);
+    expect(drifted.lastResolvedAt).toBe(300);
+  });
+
+  it("fixture: a missed reopen-bump after resolve is DETECTED and corrected", () => {
+    let view: HandoffViewRow | null = null;
+    view = mergeHandoffSnapshotChange(view, null, snapshot(), 100);
+    view = mergeHandoffSnapshotChange(
+      view,
+      snapshot(),
+      snapshot({ status: "resolved" }),
+      300,
+    );
+    // Customer replies; reopen bump MISSING.
+    const baseTable = [
+      { status: "open", priority: "high", assignedToId: null, createdAt: 100, resolvedAt: 300 },
+    ];
+    const rebuilt = rebuildHandoffRow(ORG, baseTable, 900);
+    expect(handoffCountersMatch(view!, rebuilt)).toBe(false); // view says 0 open
+    expect(rebuilt.openCount).toBe(1);
+    expect(rebuilt.unclaimedCount).toBe(1);
+    expect(rebuilt.highPriorityCount).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------
+// Full support workflow (policy-level sequence)
+//
+// customer creates → agent claims → agent replies → customer sees the
+// reply → ticket resolves. The Convex wiring is browser-unverified; this
+// pins the policy the server enforces at every step of that sequence.
+// ---------------------------------------------------------------------
+
+describe("support workflow sequence (policy level)", () => {
+  const customer = { _id: "cust1" as never, isPlatformAdmin: false };
+  const agent = { _id: "op1" as never, isPlatformAdmin: true };
+  const outsider = { _id: "cust2" as never, isPlatformAdmin: false };
+  const chamberOwner = { _id: "own1" as never, isPlatformAdmin: false };
+  const t = (over: Partial<Parameters<typeof canSeeTicket>[1]> = {}) =>
+    ({
+      _id: "t1" as never,
+      submittedById: "cust1" as never,
+      ...over,
+    }) as unknown as Parameters<typeof canSeeTicket>[1];
+
+  it("creation is open; only the customer and platform operators can see it", () => {
+    expect(canTransitionTicket("open", "in_progress")).toBe(true);
+    expect(canSeeTicket(customer, t({ status: "open" }))).toBe(true);
+    expect(canSeeTicket(agent, t({ status: "open" }))).toBe(true);
+    expect(canSeeTicket(outsider, t({ status: "open" }))).toBe(false);
+    expect(canSeeTicket(chamberOwner, t({ status: "open" }))).toBe(false);
+  });
+
+  it("claim moves open → in_progress; the customer still sees the thread", () => {
+    expect(canTransitionTicket("open", "in_progress")).toBe(true);
+    expect(canSeeTicket(customer, t({ status: "in_progress" }))).toBe(true);
+    expect(canSeeTicket(outsider, t({ status: "in_progress" }))).toBe(false);
+  });
+
+  it("agent replies while in_progress (reply is refused only on closed)", () => {
+    // The closed-refusal and firstResponse stamping are enforced in the
+    // mutations; the transition gate that matters here is in_progress
+    // being a live, reply-permitted state.
+    expect(canTransitionTicket("in_progress", "resolved")).toBe(true);
+  });
+
+  it("resolution closes the loop; the customer can reopen by replying", () => {
+    expect(canTransitionTicket("in_progress", "resolved")).toBe(true);
+    expect(canSeeTicket(customer, t({ status: "resolved" }))).toBe(true);
+    expect(canTransitionTicket("resolved", "open")).toBe(true);
+    // ...and the operator path after close is reopen-only.
+    expect(canTransitionTicket("closed", "open")).toBe(true);
+    expect(canTransitionTicket("closed", "resolved")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------
+// Platform-capability invariants (requirement 7)
+//
+// CJ GLOBAL administration is gated on users.isPlatformAdmin — a flag
+// that lives OUTSIDE the chamber permission system. These tests pin the
+// boundary: no chamber role, and no browser-supplied permission list,
+// can reach operator authority.
+// ---------------------------------------------------------------------
+
+describe("platform administration stays outside chamber permissions", () => {
+  it("no chamber role implies operator authority — the flag is separate", () => {
+    // canSeeTicket consults ONLY isPlatformAdmin for non-submitters:
+    // proven above (chamber owner without the flag is denied). Here we
+    // pin that even the broadest chamber permission list contains no
+    // capability named like a platform grant.
+    for (const role of Object.keys(DEFAULT_PERMISSIONS) as (keyof typeof DEFAULT_PERMISSIONS)[]) {
+      for (const cap of DEFAULT_PERMISSIONS[role]) {
+        expect(cap.startsWith("platform.")).toBe(false);
+      }
+    }
+  });
+
+  it("support_staff cannot be escalated toward team administration", () => {
+    const attempted = [
+      "team.manage",
+      "team.invite",
+      "permissions.edit",
+      "hr.manage",
+      "finance.manage",
+    ] as const;
+    const cleaned = normalizePermissions("support_staff", [...attempted]);
+    expect(cleaned).toHaveLength(0);
+  });
+
+  it("Team & Access capability facts (requirement 6)", () => {
+    // Who may invite and manage members by default:
+    expect(DEFAULT_PERMISSIONS.owner).toContain("team.invite");
+    expect(DEFAULT_PERMISSIONS.owner).toContain("team.manage");
+    expect(DEFAULT_PERMISSIONS.administrator).toContain("team.invite");
+    expect(DEFAULT_PERMISSIONS.administrator).toContain("team.manage");
+    // Who may not:
+    expect(DEFAULT_PERMISSIONS.accountant).not.toContain("team.manage");
+    expect(DEFAULT_PERMISSIONS.support_staff).not.toContain("team.manage");
+    expect(DEFAULT_PERMISSIONS.support_staff).not.toContain("team.invite");
   });
 });

@@ -56,6 +56,10 @@ const MAX_SUBJECT = 200;
 const MAX_BODY = 8000;
 const MAX_MESSAGE = 4000;
 
+// Explicit rebuild scan limits (see rebuildAiHandoffStats).
+export const REBUILD_MAX_TICKETS = 5_000;
+export const REBUILD_MAX_ORGS = 500;
+
 // ---------------------------------------------------------------------
 // Identity + operator gate
 // ---------------------------------------------------------------------
@@ -796,16 +800,29 @@ export const rebuildAiHandoffStats = mutation({
   handler: async (ctx) => {
     const operator = await requireOperator(ctx);
 
-    // Full scan of AI-escalation tickets (kind has no dedicated index;
-    // ticket volume is operator-bounded and the rebuild is an explicit,
-    // rare, audited action).
+    // Explicit scan limits: a rebuild reads at most REBUILD_MAX_TICKETS
+    // tickets across at most REBUILD_MAX_ORGS chambers. Volume is operator-
+    // bounded in practice, but the limits are enforced rather than assumed —
+    // breaching them aborts the rebuild with an explicit error (the view
+    // stays at its last maintained state; a data-import bump to the limits
+    // is a deliberate code change, never a silent truncate).
     const all = await ctx.db.query("supportTickets").collect();
+    if (all.length > REBUILD_MAX_TICKETS) {
+      throw new Error(
+        `Rebuild aborted: ${all.length} tickets exceeds the ${REBUILD_MAX_TICKETS}-ticket scan limit. Raise REBUILD_MAX_TICKETS deliberately.`,
+      );
+    }
     const byOrg = new Map<string, typeof all>();
     for (const t of all) {
       if (t.kind !== "ai_escalation" || !t.orgId) continue;
       const list = byOrg.get(t.orgId) ?? [];
       list.push(t);
       byOrg.set(t.orgId, list);
+    }
+    if (byOrg.size > REBUILD_MAX_ORGS) {
+      throw new Error(
+        `Rebuild aborted: ${byOrg.size} chambers exceeds the ${REBUILD_MAX_ORGS}-chamber scan limit. Raise REBUILD_MAX_ORGS deliberately.`,
+      );
     }
 
     const now = Date.now();

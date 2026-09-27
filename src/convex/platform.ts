@@ -88,6 +88,107 @@ export const bootstrapAdmin = internalMutation({
   },
 });
 
+/**
+ * Audited self-activation for the platform owner. Hard conditions, ALL
+ * enforced server-side from the session and the deployment env — never
+ * from browser input:
+ *  1. The caller is signed in with a REAL (non-anonymous) account.
+ *  2. PLATFORM_OWNER_EMAIL is set on the deployment.
+ *  3. The caller's account email equals it exactly.
+ *  4. The account's email is verified (emailVerified — set only by the
+ *     email-OTP provider on successful code verification).
+ * No account is created here, no password is involved, and a failed
+ * match is refused generically without revealing the configured address.
+ * The activation lands in platformAdminAudit like every other grant.
+ */
+export const selfActivateOwner = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const user = await getCurrentUser(ctx);
+    if (!user || user.isAnonymous) {
+      throw new Error("Sign in with a verified account first.");
+    }
+    const email = process.env.PLATFORM_OWNER_EMAIL?.trim().toLowerCase();
+    if (!email) {
+      throw new Error("Platform owner activation is not configured.");
+    }
+    if (!user.email || user.email.trim().toLowerCase() !== email) {
+      throw new Error("This account is not the configured platform owner.");
+    }
+    if (!user.emailVerified) {
+      throw new Error(
+        "Verify your email first (sign in with the code we email you), then activate.",
+      );
+    }
+    if (user.isPlatformAdmin) {
+      return { granted: true, alreadyActive: true };
+    }
+    await ctx.db.patch(user._id, { isPlatformAdmin: true });
+    await audit(
+      ctx,
+      user,
+      "admin.self_activate",
+      "user",
+      user._id,
+      "Email-verified account matched PLATFORM_OWNER_EMAIL.",
+    );
+    return { granted: true, alreadyActive: false };
+  },
+});
+
+/**
+ * Activation eligibility for the signed-in user (drives the UI button).
+ * Only the matching, verified mailbox owner can ever receive true —
+ * everyone else gets a bare false with no information about the
+ * configured address.
+ */
+export const myOwnerActivationEligibility = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await getCurrentUser(ctx);
+    if (!user || user.isAnonymous) return { eligible: false };
+    const email = process.env.PLATFORM_OWNER_EMAIL?.trim().toLowerCase();
+    if (!email) return { eligible: false };
+    const eligible =
+      !!user.email &&
+      user.email.trim().toLowerCase() === email &&
+      !!user.emailVerified;
+    return { eligible, alreadyActive: !!user.isPlatformAdmin };
+  },
+});
+
+/**
+ * Operator-facing diagnostics for the bootstrap gate (requirePlatformAdmin
+ * callers only — the result is meaningless to anyone else). Reports the
+ * env-var state, whether a matching account exists, and its verification
+ * status WITHOUT exposing any grant capability: activating ownership still
+ * requires running platform.bootstrapAdmin from an authenticated CLI.
+ * Never returns the email itself — only a masked form.
+ */
+export const bootstrapStatus = query({
+  args: {},
+  handler: async (ctx) => {
+    await requirePlatformAdmin(ctx);
+    const email = process.env.PLATFORM_OWNER_EMAIL?.trim().toLowerCase();
+    const masked = email
+      ? `${email.slice(0, 2)}•••@${email.split("@")[1] ?? ""}`
+      : null;
+    if (!email) {
+      return { configured: false, accountExists: false, emailVerified: false, maskedEmail: null as string | null };
+    }
+    const u = await ctx.db
+      .query("users")
+      .withIndex("email", (q) => q.eq("email", email))
+      .first();
+    return {
+      configured: true,
+      accountExists: !!u,
+      emailVerified: !!u?.emailVerified,
+      maskedEmail: masked,
+    };
+  },
+});
+
 // ---------------------------------------------------------------------
 // Exceptional access — explicitly authorized, expiring, audited
 // ---------------------------------------------------------------------
