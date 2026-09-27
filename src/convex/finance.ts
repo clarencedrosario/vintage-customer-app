@@ -236,7 +236,7 @@ export const postJournal = mutation({
     if (args.dedupeKey) {
       const dupe = await ctx.db
         .query("journalEntries")
-        .withIndex("by_dedupe", (q) => q.eq("dedupeKey", args.dedupeKey))
+        .withIndex("by_dedupe", (q) => q.eq("dedupeKey", args.dedupeKey!))
         .first();
       if (dupe) {
         return { journalId: dupe._id, posted: false as const };
@@ -441,10 +441,12 @@ export const profitAndLossReport = query({
 
 // ---------------------------------------------------------------------
 // Billing → ledger integration. Called from billing.ts after an invoice
-// is sent / a payment recorded. Posting is best-effort-but-deterministic:
-// without a seeded chart of accounts the call reports `skipped` (the
-// operator can seed and nothing silently fabricates entries); with one,
-// the dedupe key makes retries idempotent.
+// is sent / a payment recorded / an invoice cancelled / a refund issued.
+// Posting is best-effort-but-deterministic: without a usable chart of
+// accounts the call reports `skipped` (the Accounting page surfaces the
+// gap — nothing is silently fabricated); with one, the dedupe key makes
+// retries idempotent. Every invoice journal records the invoice id in
+// originalLineIds so later unwinding references exactly what was posted.
 // ---------------------------------------------------------------------
 
 export const postInvoiceJournalInternal = internalMutation({
@@ -512,6 +514,7 @@ export const postInvoiceJournalInternal = internalMutation({
       status: "posted",
       source: "billing",
       sourceId: invoice._id,
+      originalLineIds: [invoice._id],
       debits: [{ accountId: ar._id, amountPaise: invoice.totalMinor }],
       credits,
       dedupeKey,
@@ -519,6 +522,23 @@ export const postInvoiceJournalInternal = internalMutation({
       createdAt: Date.now(),
     });
     return { posted: true as const, journalId: id };
+  },
+});
+
+/**
+ * Stamp `originalLineIds` onto a billing journal after it posts (used by
+ * the send path when the journal already existed without the stamp).
+ * Billing-source journals only; a missing row is a no-op.
+ */
+export const backfillJournalLinesInternal = internalMutation({
+  args: {
+    journalId: v.id("journalEntries"),
+    originalLineIds: v.array(v.id("invoices")),
+  },
+  handler: async (ctx, args) => {
+    const journal = await ctx.db.get(args.journalId);
+    if (!journal || journal.source !== "billing") return;
+    await ctx.db.patch(args.journalId, { originalLineIds: args.originalLineIds });
   },
 });
 
@@ -556,5 +576,393 @@ export const postPaymentJournalInternal = internalMutation({
       createdAt: Date.now(),
     });
     return { posted: true as const, journalId: id };
+  },
+});
+
+/**
+ * Cancellation / credit note for a sent invoice. Two idempotent steps:
+ * 1. REVERSE the original invoice journal (audited reversal row with a
+ *    `billing:<invoice>:invoice_cancelled` dedupe key) so AR and income
+ *    stop carrying the cancelled amount.
+ * 2. Money already collected and not refunded leaves a matching
+ *    credit-note journal (AR Dr / Bank Cr) so receivables zero out.
+ * Skips honestly when nothing was ever posted (pre-COA invoices) — the
+ * gap panel + reconciliation cover that case instead of assuming one.
+ */
+export const postInvoiceCreditJournalInternal = internalMutation({
+  args: {
+    invoiceId: v.id("invoices"),
+    reason: v.string(),
+    actorId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    const invoice = await ctx.db.get(args.invoiceId);
+    if (!invoice) return { posted: false as const, reason: "no_invoice" as const };
+
+    const originalKey = journalDedupeKey("billing", invoice._id, "invoice_sent");
+    const original = await ctx.db
+      .query("journalEntries")
+      .withIndex("by_dedupe", (q) => q.eq("dedupeKey", originalKey))
+      .first();
+    if (!original || original.status !== "posted")
+      return { posted: false as const, reason: "no_original" as const };
+
+    // Step 1 — reverse the original invoice journal (never delete it).
+    const reverseKey = journalDedupeKey("billing", invoice._id, "invoice_cancelled");
+    const reversalDupe = await ctx.db
+      .query("journalEntries")
+      .withIndex("by_dedupe", (q) => q.eq("dedupeKey", reverseKey))
+      .first();
+    let reversalId: Id<"journalEntries"> | undefined = reversalDupe?._id;
+    if (!reversalDupe) {
+      reversalId = await ctx.db.insert("journalEntries", {
+        orgId: invoice.orgId,
+        entryDate: original.entryDate,
+        memo: `Reversal of journal ${original._id} — invoice cancelled: ${args.reason.slice(0, 240)}`,
+        status: "posted",
+        source: "billing",
+        sourceId: invoice._id,
+        originalLineIds: original.originalLineIds,
+        debits: original.credits,
+        credits: original.debits,
+        reversalOfId: original._id,
+        dedupeKey: reverseKey,
+        createdById: args.actorId,
+        createdAt: Date.now(),
+      });
+      await ctx.db.patch(original._id, { status: "reversed" });
+    }
+
+    // Step 2 — collected-but-unrefunded money leaves a credit-note
+    // journal (Bank Cr / AR Dr) so collected cash and AR both zero out
+    // for the cancelled invoice. Refunds live on payment rows — sum them.
+    const invoicePaymentRows = await ctx.db
+      .query("payments")
+      .withIndex("by_invoice", (q) => q.eq("invoiceId", invoice._id))
+      .collect();
+    const refundedTotal = invoicePaymentRows.reduce(
+      (s, p) => s + (p.refundedMinor ?? 0),
+      0,
+    );
+    const collected = Math.max(
+      (invoice.amountPaidMinor ?? 0) - refundedTotal,
+      0,
+    );
+    if (collected > 0) {
+      const cnKey = journalDedupeKey("billing", invoice._id, "credit_note_issued");
+      const cnDupe = await ctx.db
+        .query("journalEntries")
+        .withIndex("by_dedupe", (q) => q.eq("dedupeKey", cnKey))
+        .first();
+      if (!cnDupe) {
+        const bank = await accountByCode(ctx, invoice.orgId, "1000");
+        const ar = await accountByCode(ctx, invoice.orgId, "1100");
+        if (bank && ar) {
+          await ctx.db.insert("journalEntries", {
+            orgId: invoice.orgId,
+            entryDate: new Date().toISOString().slice(0, 10),
+            memo: `Credit note — ${invoice.number}: ${args.reason.slice(0, 240)}`,
+            status: "posted",
+            source: "billing",
+            sourceId: invoice._id,
+            debits: [{ accountId: ar._id, amountPaise: collected }],
+            credits: [{ accountId: bank._id, amountPaise: collected }],
+            dedupeKey: cnKey,
+            createdById: args.actorId,
+            createdAt: Date.now(),
+          });
+        }
+      }
+    }
+    return { posted: true as const, journalId: reversalId ?? original._id };
+  },
+});
+
+/**
+ * Refund journal: AR is re-debited and bank credited for the refunded
+ * amount — the exact mirror of the original payment journal, dedupe-keyed
+ * per refund (`billing:<payment>:refund:<amount>`) so a retry never
+ * double-posts. Skips when no chart is seeded; the gap panel shows the
+ * reconciliation state instead of assuming one.
+ */
+export const postRefundJournalInternal = internalMutation({
+  args: {
+    paymentId: v.id("payments"),
+    amountMinor: v.number(),
+    reason: v.string(),
+    actorId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    const payment = await ctx.db.get(args.paymentId);
+    if (!payment) return { posted: false as const, reason: "no_payment" as const };
+    if (!Number.isInteger(args.amountMinor) || args.amountMinor <= 0)
+      throw new Error("Refund amount must be a positive whole number of paise.");
+
+    const invoice = await ctx.db.get(payment.invoiceId);
+    if (!invoice) return { posted: false as const, reason: "no_invoice" as const };
+
+    const bank = await accountByCode(ctx, invoice.orgId, "1000");
+    const ar = await accountByCode(ctx, invoice.orgId, "1100");
+    if (!bank || !ar)
+      return { posted: false as const, reason: "chart_not_seeded" as const };
+
+    const dedupeKey = journalDedupeKey(
+      "billing",
+      payment._id,
+      `refund:${args.amountMinor}`,
+    );
+    const dupe = await ctx.db
+      .query("journalEntries")
+      .withIndex("by_dedupe", (q) => q.eq("dedupeKey", dedupeKey))
+      .first();
+    if (dupe) return { posted: true as const, journalId: dupe._id };
+
+    const id = await ctx.db.insert("journalEntries", {
+      orgId: invoice.orgId,
+      entryDate: new Date().toISOString().slice(0, 10),
+      memo: `Refund — ${invoice.number}: ${args.reason.slice(0, 240)}`,
+      status: "posted",
+      source: "billing",
+      sourceId: payment._id,
+      debits: [{ accountId: ar._id, amountPaise: args.amountMinor }],
+      credits: [{ accountId: bank._id, amountPaise: args.amountMinor }],
+      dedupeKey,
+      createdById: args.actorId,
+      createdAt: Date.now(),
+    });
+    return { posted: true as const, journalId: id };
+  },
+});
+
+// ---------------------------------------------------------------------
+// Reconciliation — the gap panel. Every sent invoice and captured
+// payment is expected to have a live journal; this lists the ones that
+// do not, WITH the reason, so no gap is ever invisible.
+// ---------------------------------------------------------------------
+
+/** Required account codes for billing postings to work at all. */
+const BILLING_CRITICAL_CODES = ["1000", "1100", "4000"];
+
+/** Parse "billing:<id>:<slot>" keys into (id, slot) pairs. */
+function parseBillingKey(
+  dedupeKey: string,
+): { id: string; slot: string } | null {
+  const parts = dedupeKey.split(":");
+  if (parts.length !== 3 || parts[0] !== "billing") return null;
+  return { id: parts[1], slot: parts[2] };
+}
+
+export const billingPostingGaps = query({
+  args: {},
+  handler: async (ctx) => {
+    const ac = await getAccessContext(ctx);
+    if (!ac) return null;
+    requireCapability(ac, "finance.view");
+
+    const accounts = await ctx.db
+      .query("accounts")
+      .withIndex("by_org", (q) => q.eq("orgId", ac.org._id))
+      .collect();
+    const chartSeeded = accounts.length > 0;
+    const missingCritical = BILLING_CRITICAL_CODES.filter(
+      (c) => !accounts.some((a) => a.code === c && a.active),
+    );
+
+    const invoices = await ctx.db
+      .query("invoices")
+      .withIndex("by_org", (q) => q.eq("orgId", ac.org._id))
+      .collect();
+    const invoiceNumberById = new Map(invoices.map((i) => [i._id, i.number]));
+
+    const journals = await ctx.db
+      .query("journalEntries")
+      .withIndex("by_org", (q) => q.eq("orgId", ac.org._id))
+      .collect();
+    // Live (posted) invoice journal per invoice id; a posted
+    // invoice_cancelled reversal flips the flag to false.
+    const invoiceJournalLive = new Map<string, boolean>();
+    const paymentJournalLive = new Map<string, boolean>();
+    for (const j of journals) {
+      if (j.source !== "billing" || !j.dedupeKey) continue;
+      const parsed = parseBillingKey(j.dedupeKey);
+      if (!parsed) continue;
+      const live = j.status === "posted";
+      if (parsed.slot === "invoice_sent")
+        invoiceJournalLive.set(parsed.id, live);
+      else if (parsed.slot === "invoice_cancelled" && live)
+        invoiceJournalLive.set(parsed.id, false);
+      else if (parsed.slot === "payment_received")
+        paymentJournalLive.set(parsed.id, live);
+    }
+
+    const reasonFor = (cancelledReversalRecorded: boolean): string => {
+      if (!chartSeeded)
+        return "The chart of accounts had not been seeded when this was recorded. Seed it, then run Reconcile.";
+      if (missingCritical.length > 0)
+        return `Chart of accounts is missing required account code(s): ${missingCritical.join(", ")}. Add them, then run Reconcile.`;
+      if (cancelledReversalRecorded)
+        return "Invoice was cancelled after posting — its reversal is recorded; this row is informational, not a gap.";
+      return "Recorded before the chart of accounts was set up (or posting was interrupted). Run Reconcile to post the missing journal.";
+    };
+
+    const invoicesWithoutJournal = invoices
+      .filter(
+        (i) =>
+          (i.status === "sent" ||
+            i.status === "partially_paid" ||
+            i.status === "paid") &&
+          invoiceJournalLive.get(i._id) !== true,
+      )
+      .map((i) => ({
+        invoiceId: i._id,
+        number: i.number,
+        totalMinor: i.totalMinor,
+        status: i.status,
+        cancelledReversalRecorded: invoiceJournalLive.get(i._id) === false,
+        reason: reasonFor(invoiceJournalLive.get(i._id) === false),
+      }))
+      .sort((a, b) => a.number.localeCompare(b.number));
+
+    // Payments index by_invoice — walk each org invoice's payment rows.
+    const paymentsWithoutJournal: {
+      paymentId: Id<"payments">;
+      invoiceNumber: string;
+      amountMinor: number;
+      mode?: string;
+      receivedOn: string;
+      reason: string;
+    }[] = [];
+    if (chartSeeded) {
+      for (const inv of invoices) {
+        const rows = await ctx.db
+          .query("payments")
+          .withIndex("by_invoice", (q) => q.eq("invoiceId", inv._id))
+          .collect();
+        for (const p of rows) {
+          if (p.status !== "captured") continue;
+          if (paymentJournalLive.get(p._id) === true) continue;
+          paymentsWithoutJournal.push({
+            paymentId: p._id,
+            invoiceNumber: invoiceNumberById.get(inv._id) ?? "—",
+            amountMinor: p.amountMinor,
+            mode: p.mode,
+            receivedOn: p.receivedOn,
+            reason: reasonFor(false),
+          });
+        }
+      }
+      paymentsWithoutJournal.sort((a, b) =>
+        a.invoiceNumber.localeCompare(b.invoiceNumber),
+      );
+    }
+
+    return {
+      chartSeeded,
+      missingCritical,
+      invoicesWithoutJournal,
+      paymentsWithoutJournal,
+      summary: {
+        invoiceGapCount: invoicesWithoutJournal.filter((g) => !g.cancelledReversalRecorded).length,
+        invoiceGapPaise: invoicesWithoutJournal
+          .filter((g) => !g.cancelledReversalRecorded)
+          .reduce((s, g) => s + g.totalMinor, 0),
+        paymentGapCount: paymentsWithoutJournal.length,
+        paymentGapPaise: paymentsWithoutJournal.reduce((s, g) => s + g.amountMinor, 0),
+      },
+    };
+  },
+});
+
+/**
+ * Permission-controlled (finance.manage), idempotent backfill: loops the
+ * gap list and posts each missing journal through the same internal
+ * postings the live paths use (same dedupe keys), so running it twice
+ * is a no-op. Refuses to run against a missing or incomplete chart.
+ */
+export const reconcileBillingJournals = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const ac = await requireAccess(ctx);
+    requireCapability(ac, "finance.manage");
+
+    const accounts = await ctx.db
+      .query("accounts")
+      .withIndex("by_org", (q) => q.eq("orgId", ac.org._id))
+      .collect();
+    if (accounts.length === 0)
+      throw new Error(
+        "Seed the chart of accounts first — reconciliation refuses to guess account mappings.",
+      );
+    const missingCritical = BILLING_CRITICAL_CODES.filter(
+      (c) => !accounts.some((a) => a.code === c && a.active),
+    );
+    if (missingCritical.length > 0)
+      throw new Error(
+        `Chart of accounts is incomplete — missing account code(s): ${missingCritical.join(", ")}. Add them before reconciling.`,
+      );
+
+    const journals = await ctx.db
+      .query("journalEntries")
+      .withIndex("by_org", (q) => q.eq("orgId", ac.org._id))
+      .collect();
+    const invoiceJournalLive = new Map<string, boolean>();
+    const paymentJournalLive = new Map<string, boolean>();
+    for (const j of journals) {
+      if (j.source !== "billing" || !j.dedupeKey) continue;
+      const parsed = parseBillingKey(j.dedupeKey);
+      if (!parsed) continue;
+      const live = j.status === "posted";
+      if (parsed.slot === "invoice_sent")
+        invoiceJournalLive.set(parsed.id, live);
+      else if (parsed.slot === "invoice_cancelled" && live)
+        invoiceJournalLive.set(parsed.id, false);
+      else if (parsed.slot === "payment_received")
+        paymentJournalLive.set(parsed.id, live);
+    }
+
+    const invoices = await ctx.db
+      .query("invoices")
+      .withIndex("by_org", (q) => q.eq("orgId", ac.org._id))
+      .collect();
+
+    let invoiceJournalsPosted = 0;
+    for (const inv of invoices) {
+      if (
+        inv.status !== "sent" &&
+        inv.status !== "partially_paid" &&
+        inv.status !== "paid"
+      )
+        continue;
+      if (invoiceJournalLive.get(inv._id) === true) continue;
+      const r = await ctx.runMutation(internal.finance.postInvoiceJournalInternal, {
+        invoiceId: inv._id,
+      });
+      if (r.posted) invoiceJournalsPosted += 1;
+    }
+
+    let paymentJournalsPosted = 0;
+    for (const inv of invoices) {
+      if (invoiceJournalLive.get(inv._id) === false) continue; // cancelled
+      const rows = await ctx.db
+        .query("payments")
+        .withIndex("by_invoice", (q) => q.eq("invoiceId", inv._id))
+        .collect();
+      for (const p of rows) {
+        if (p.status !== "captured") continue;
+        if (paymentJournalLive.get(p._id) === true) continue;
+        const r = await ctx.runMutation(internal.finance.postPaymentJournalInternal, {
+          paymentId: p._id,
+        });
+        if (r.posted) paymentJournalsPosted += 1;
+      }
+    }
+
+    await logUserAction(ctx, {
+      userId: ac.user._id,
+      organizationId: ac.org._id,
+      actionType: "finance.billing_reconciled",
+      resourceId: ac.org._id,
+    });
+    return { invoiceJournalsPosted, paymentJournalsPosted };
   },
 });

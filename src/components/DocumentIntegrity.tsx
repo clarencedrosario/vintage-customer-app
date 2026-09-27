@@ -32,6 +32,34 @@ export function DocumentIntegrityChip({
     api.evidence.custody,
     open ? { documentId } : "skip",
   );
+  // Complete history from the append-only store — paginated, newest
+  // first, never truncated (the row trail above caps at 200 events).
+  const [history, setHistory] = useState<
+    | undefined
+    | {
+        page: {
+          _id: string;
+          at: number;
+          byName?: string;
+          action: string;
+          note?: string;
+          version?: number;
+        }[];
+        continueCursor: string;
+        isDone: boolean;
+      }
+  >(undefined);
+  const [historyCursor, setHistoryCursor] = useState<string | null>(null);
+  const historyQuery = useQuery(
+    api.evidence.custodyHistory,
+    open
+      ? { documentId, cursor: historyCursor ?? undefined, pageSize: 25 }
+      : "skip",
+  );
+  if (open && historyQuery && historyQuery !== history) {
+    setHistory(historyQuery);
+  }
+
   const verify = useAction(api.evidenceVerify.verifyDocumentIntegrity);
   const addNote = useMutation(api.evidence.addCustodyNote);
   const [note, setNote] = useState("");
@@ -63,8 +91,15 @@ export function DocumentIntegrityChip({
       toast.error(err instanceof Error ? err.message : "Verification failed.");
     } finally {
       setBusy(false);
-    }
+  }
   };
+
+  const toLocalIST = (ts: number) =>
+    new Date(ts).toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata",
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
 
   return (
     <span className="inline-flex items-center gap-1">
@@ -111,6 +146,17 @@ export function DocumentIntegrityChip({
             </DialogDescription>
           </DialogHeader>
 
+          <div className="rounded border border-border bg-muted/30 p-2 text-[11px] ink-faded">
+            <p>
+              <span className="type-label">Hash provenance:</span> the recorded
+              hash is <span className="text-foreground">client-declared</span>{" "}
+              (computed by the uploader's browser at upload). “Verify” re-hashes
+              the stored bytes server-side; a passing check marks it
+              <span className="text-foreground"> server-verified</span> and
+              records that event in custody history.
+            </p>
+          </div>
+
           <div className="max-h-72 space-y-2 overflow-y-auto">
             {record === undefined ? (
               <p className="text-sm ink-faded">Loading…</p>
@@ -133,11 +179,7 @@ export function DocumentIntegrityChip({
                       <ShieldAlert className="mb-1 h-3.5 w-3.5" aria-hidden="true" />
                     )}
                     <span className="type-label ink-faded">
-                      {new Date(e.at).toLocaleString("en-IN", {
-                        timeZone: "Asia/Kolkata",
-                        dateStyle: "medium",
-                        timeStyle: "short",
-                      })}
+                      {toLocalIST(e.at)}
                     </span>
                     <p>
                       {e.byName ?? "System"} · {e.action}
@@ -145,6 +187,51 @@ export function DocumentIntegrityChip({
                     </p>
                   </div>
                 ))
+            )}
+          </div>
+
+          <div className="max-h-72 space-y-2 overflow-y-auto border-t border-border pt-2">
+            <p className="type-label ink-faded">
+              Complete history (append-only, never truncated)
+            </p>
+            {history === undefined ? (
+              <p className="text-sm ink-faded">Loading…</p>
+            ) : history.page.length === 0 ? (
+              <p className="text-sm ink-faded">
+                No archived events yet — events mirror here from now on.
+              </p>
+            ) : (
+              <>
+                {history.page.map((e) => (
+                  <div
+                    key={e._id}
+                    className={`rounded border p-2 text-xs ${
+                      e.action === "integrity_mismatch"
+                        ? "border-red-300 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-300"
+                        : "border-border bg-muted/30"
+                    }`}
+                  >
+                    <span className="type-label ink-faded">
+                      {toLocalIST(e.at)}
+                      {e.version !== undefined ? ` · v${e.version}` : ""}
+                    </span>
+                    <p>
+                      {e.byName ?? "System"} · {e.action}
+                      {e.note ? ` — ${e.note}` : ""}
+                    </p>
+                  </div>
+                ))}
+                {!history.isDone && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="w-full"
+                    onClick={() => setHistoryCursor(history.continueCursor)}
+                  >
+                    Load older events
+                  </Button>
+                )}
+              </>
             )}
           </div>
 

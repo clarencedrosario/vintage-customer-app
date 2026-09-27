@@ -8,6 +8,7 @@
 import { defineTable } from "convex/server";
 import { v } from "convex/values";
 import { DEADLINE_CATEGORIES } from "./constants";
+import { CUSTODY_ACTIONS } from "../lib/evidenceIntegrity";
 
 export const featureFiveTables = {
   // Versioned computation rules. Editing a rule creates a NEW version;
@@ -632,7 +633,9 @@ export const hrTables = {
   // of {accountId, amountPaise}; sum(debits) === sum(credits) is checked
   // before post. Posted rows are immutable; corrections create a new
   // balanced reversal entry. dedupeKey gives retry safety for source-
-  // generated entries (billing/payroll).
+  // generated entries (billing/payroll). originalLineIds freezes which
+  // source rows (e.g. the invoice) a billing journal unwinds — the
+  // cancellation/refund path references exactly what was posted.
   journalEntries: defineTable({
     orgId: v.id("organizations"),
     entryDate: v.string(), // YYYY-MM-DD
@@ -648,6 +651,7 @@ export const hrTables = {
       v.literal("payroll"),
     ),
     sourceId: v.optional(v.string()),
+    originalLineIds: v.optional(v.array(v.id("invoices"))),
     debits: v.array(
       v.object({ accountId: v.id("accounts"), amountPaise: v.number() }),
     ),
@@ -661,6 +665,30 @@ export const hrTables = {
   })
     .index("by_org", ["orgId"])
     .index("by_dedupe", ["dedupeKey"]),
+
+  // -----------------------------------------------------------------
+  // Evidence history — the append-only custody store. The per-document
+  // `custody` array on matterDocuments is a bounded recent-events trail
+  // (oldest fall off past 200 so a hot document cannot grow its row
+  // without bound). EVERY event is ALSO mirrored here, unbounded, and
+  // never updated or deleted: this table is the complete history. Reads
+  // are paginated; per-version integrity history rides the vaultVersions
+  // linkage (each version's hash claims/verifications keep their rows).
+  // -----------------------------------------------------------------
+  documentCustodyEvents: defineTable({
+    orgId: v.id("organizations"),
+    documentId: v.id("matterDocuments"),
+    matterId: v.id("matters"),
+    at: v.number(),
+    byId: v.optional(v.id("users")),
+    byName: v.optional(v.string()),
+    action: v.union(...CUSTODY_ACTIONS.map((a) => v.literal(a))),
+    note: v.optional(v.string()),
+    // Which document version the event belongs to (null = the live row).
+    version: v.optional(v.number()),
+  })
+    .index("by_document", ["documentId"])
+    .index("by_org", ["orgId"]),
 };
 
 // =====================================================================

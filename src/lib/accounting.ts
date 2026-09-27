@@ -204,3 +204,47 @@ export function journalDedupeKey(
 ): string {
   return `${source}:${sourceId}:${slot}`;
 }
+
+/**
+ * Scale original credit lines to a smaller total with ZERO drift: the
+ * deficit left by floor-division is added to the FIRST line, so the sum
+ * of returned amounts equals `target` exactly in integer paise and
+ * every amount stays a positive whole number. Used when a cancellation
+ * or refund must unwind part of a posted invoice (the AR side is one
+ * line; the income/tax credit side must scale to meet it exactly).
+ *
+ * Guarantees (unit-tested):
+ * - result sums to exactly `target`
+ * - every amount is a positive integer (no floats, no zeros)
+ * - deterministic: same inputs → same distribution
+ */
+export function scaleProRataPaise(
+  original: LedgerLine[],
+  target: number,
+): LedgerLine[] {
+  if (!Number.isInteger(target) || target <= 0)
+    throw new Error("Scaled amount must be a positive whole number of paise.");
+  if (original.length === 0)
+    throw new Error("Scaling needs at least one original line.");
+  const total = sideTotal(original);
+  if (target > total)
+    throw new Error(
+      `Cannot scale to ${target}ₚ — original lines total only ${total}ₚ.`,
+    );
+  const scale = target / total;
+  const scaled = original.map((l) => ({
+    ...l,
+    amountPaise: Math.floor(l.amountPaise * scale),
+  }));
+  let deficit = target - sideTotal(scaled);
+  for (const line of scaled) {
+    if (deficit === 0) break;
+    line.amountPaise += 1;
+    deficit -= 1;
+  }
+  if (deficit !== 0)
+    throw new Error(
+      "Pro-rata scaling failed to reach the exact target — refusing to post.",
+    );
+  return scaled;
+}

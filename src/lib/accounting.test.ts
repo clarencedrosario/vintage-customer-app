@@ -8,6 +8,7 @@ import {
   lineIsValid,
   normalBalance,
   profitAndLoss,
+  scaleProRataPaise,
   sideTotal,
   signedMovement,
   trialBalance,
@@ -229,6 +230,50 @@ describe("dateInFiscalYear", () => {
     expect(dateInFiscalYear("2027-03-31", fy)).toBe(true);
     expect(dateInFiscalYear("2027-04-01", fy)).toBe(false);
     expect(dateInFiscalYear("2026-03-31", fy)).toBe(false);
+  });
+});
+
+describe("scaleProRataPaise", () => {
+  const L = (accountId: string, amountPaise: number) => ({ accountId, amountPaise });
+
+  it("scales lines exactly with zero paise drift", () => {
+    // 1/3 splits: 100,000 → 33,333.33 each. Floor gives 33,333 per line
+    // and the FIRST line absorbs the 1ₚ deficit → sums to 100,000.
+    const out = scaleProRataPaise(
+      [L("a", 100000), L("b", 100000), L("c", 100000)],
+      100000,
+    );
+    expect(sideTotal(out)).toBe(100000);
+    expect(out.map((l) => l.amountPaise)).toEqual([33334, 33333, 33333]);
+  });
+
+  it("returns the original amounts when target equals the total", () => {
+    const lines = [L("fees", 100000), L("cgst", 9000), L("sgst", 9000)];
+    const out = scaleProRataPaise(lines, 118000);
+    expect(out.map((l) => l.amountPaise)).toEqual([100000, 9000, 9000]);
+  });
+
+  it("unwinds a half refund exactly", () => {
+    const out = scaleProRataPaise(
+      [L("fees", 99999), L("tax", 10001)],
+      55000,
+    );
+    expect(sideTotal(out)).toBe(55000);
+    for (const l of out) expect(l.amountPaise).toBeGreaterThan(0);
+  });
+
+  it("handles a single-line original", () => {
+    const out = scaleProRataPaise([L("fees", 100000)], 37777);
+    expect(out).toEqual([L("fees", 37777)]);
+  });
+
+  it("rejects targets above the original total, and zero/negative/fractional targets", () => {
+    const lines = [L("fees", 50000)];
+    expect(() => scaleProRataPaise(lines, 50001)).toThrow();
+    expect(() => scaleProRataPaise(lines, 0)).toThrow();
+    expect(() => scaleProRataPaise(lines, -1)).toThrow();
+    expect(() => scaleProRataPaise(lines, 10.5)).toThrow();
+    expect(() => scaleProRataPaise([], 10)).toThrow();
   });
 });
 

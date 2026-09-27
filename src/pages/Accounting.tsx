@@ -338,6 +338,8 @@ export default function Accounting() {
   const tb = useQuery(api.finance.trialBalanceReport);
   const journals = useQuery(api.finance.listJournals, { limit: 50 });
   const seed = useMutation(api.finance.seedChartOfAccounts);
+  const gaps = useQuery(api.finance.billingPostingGaps);
+  const reconcile = useMutation(api.finance.reconcileBillingJournals);
 
   const [journalOpen, setJournalOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
@@ -386,6 +388,111 @@ export default function Accounting() {
           <Plus className="mr-2 h-4 w-4" /> Add account
         </Button>
       </div>
+
+      {gaps !== null && gaps !== undefined && (
+        <Card className="rule-frame mb-6 bg-card">
+          <CardContent className="py-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium">Billing → ledger coverage</p>
+                <p className="type-label mt-0.5 ink-faded">
+                  Invoices and payments without a live journal are listed here
+                  with the reason — nothing about the books is assumed.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                {gaps.summary.invoiceGapCount === 0 &&
+                gaps.summary.paymentGapCount === 0 ? (
+                  <Badge variant="default">All billing events journaled</Badge>
+                ) : (
+                  <Badge variant="destructive">
+                    {gaps.summary.invoiceGapCount} invoice ·{" "}
+                    {gaps.summary.paymentGapCount} payment unposted
+                  </Badge>
+                )}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!gaps.chartSeeded}
+                  onClick={async () => {
+                    try {
+                      const r = await reconcile({});
+                      toast.success(
+                        `Reconciled — ${r.invoiceJournalsPosted} invoice and ${r.paymentJournalsPosted} payment journal(s) posted.`,
+                      );
+                    } catch (err) {
+                      toast.error(
+                        err instanceof Error ? err.message : "Reconcile failed.",
+                      );
+                    }
+                  }}
+                >
+                  Reconcile now
+                </Button>
+              </div>
+            </div>
+
+            {!gaps.chartSeeded && (
+              <p className="mt-3 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+                Chart of accounts not seeded — every sent invoice and captured
+                payment is intentionally unposted (nothing is fabricated).
+                Seed the chart above, then run Reconcile.
+              </p>
+            )}
+            {gaps.chartSeeded && gaps.missingCritical.length > 0 && (
+              <p className="mt-3 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+                Chart is missing required account code(s):{" "}
+                {gaps.missingCritical.join(", ")} — postings stay skipped until
+                these exist.
+              </p>
+            )}
+
+            {gaps.invoicesWithoutJournal.length > 0 && (
+              <div className="mt-3 space-y-1">
+                <p className="type-label ink-faded">
+                  Invoices without a live journal
+                </p>
+                {gaps.invoicesWithoutJournal.map((g) => (
+                  <div
+                    key={g.invoiceId}
+                    className="rounded border border-border bg-muted/30 p-2 text-xs"
+                  >
+                    <span className="font-medium">{g.number}</span> ·{" "}
+                    {formatINR(g.totalMinor / 100)} · {g.status}
+                    <p className="ink-faded">{g.reason}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {gaps.paymentsWithoutJournal.length > 0 && (
+              <div className="mt-3 space-y-1">
+                <p className="type-label ink-faded">
+                  Payments without a journal
+                </p>
+                {gaps.paymentsWithoutJournal.map((g) => (
+                  <div
+                    key={g.paymentId}
+                    className="rounded border border-border bg-muted/30 p-2 text-xs"
+                  >
+                    <span className="font-medium">{g.invoiceNumber}</span> ·{" "}
+                    {formatINR(g.amountMinor / 100)} · {g.mode ?? "payment"} ·{" "}
+                    {g.receivedOn}
+                    <p className="ink-faded">{g.reason}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <p className="type-label mt-3 ink-faded">
+              Not yet supported in the ledger (explicit): statement imports,
+              bank feeds, vendor bills / accounts payable, and debit/credit
+              note entry outside invoice cancellation — these workflows are
+              marked and will not silently post.
+            </p>
+          </CardContent>
+        </Card>
+      )}
 
       <Tabs defaultValue="tb">
         <TabsList>

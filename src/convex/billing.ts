@@ -547,11 +547,20 @@ export const send = mutation({
     });
     // Ledger integration (Phase: accounting foundation). Best-effort with
     // a deterministic dedupe key — without a seeded chart of accounts the
-    // call reports `skipped` and nothing is fabricated; with one, AR/fees
-    // tax postings are recorded idempotently.
-    await ctx.runMutation(internal.finance.postInvoiceJournalInternal, {
+    // call reports `skipped` and nothing is fabricated (the Accounting
+    // page surfaces the gap until reconciled); with one, AR/fees tax
+    // postings are recorded idempotently. Once posted, the journal is
+    // linked back to its source lines so cancellation can unwind
+    // exactly what was posted (never more than what exists).
+    const posting = await ctx.runMutation(internal.finance.postInvoiceJournalInternal, {
       invoiceId: args.invoiceId,
     });
+    if (posting.posted) {
+      await ctx.runMutation(internal.finance.backfillJournalLinesInternal, {
+        journalId: posting.journalId,
+        originalLineIds: [args.invoiceId],
+      });
+    }
     await logEvent(
       ctx,
       invoice.matterId,
@@ -600,7 +609,7 @@ export const recordPayment = mutation({
       throw new Error(`Payment exceeds the balance due (${fmtINR(balance)}).`);
     }
 
-    await ctx.db.insert("payments", {
+    const paymentId = await ctx.db.insert("payments", {
       invoiceId: args.invoiceId,
       orgId: ac.org._id,
       amountMinor: args.amountMinor,
@@ -613,16 +622,11 @@ export const recordPayment = mutation({
       createdAt: Date.now(),
     });
     // Ledger integration: bank Dr / AR Cr, idempotent per payment row.
-    const paymentRow = await ctx.db
-      .query("payments")
-      .withIndex("by_invoice", (q) => q.eq("invoiceId", args.invoiceId))
-      .order("desc")
-      .first();
-    if (paymentRow) {
-      await ctx.runMutation(internal.finance.postPaymentJournalInternal, {
-        paymentId: paymentRow._id,
-      });
-    }
+    // Posts by the INSERTED row id — never "latest row by invoice", so a
+    // concurrent payment cannot make this journal describe the wrong row.
+    await ctx.runMutation(internal.finance.postPaymentJournalInternal, {
+      paymentId,
+    });
 
     const amountPaid = invoice.amountPaidMinor + args.amountMinor;
     const status =
@@ -694,6 +698,18 @@ export const cancelOrCredit = mutation({
           ? `Balance ${fmtINR(balance)} converted to a credit note — ${args.reason.trim()}`
           : `Invoice cancelled — ${args.reason.trim()}`,
       )),
+    });
+    // Ledger unwinding. The invoice journal (AR Dr / income+tax Cr) is
+    // REVERSED (never deleted, immutability rule), and any collected-but-
+    // unrefunded money leaves a matching credit-note journal (Bank/AR
+    // movement), so income and receivables end the day understated by
+    // exactly the cancelled amount — never inflated. Skips silently when
+    // nothing was ever posted (pre-COA invoices) — the gap panel shows
+    // the reconciliation state instead of assuming one.
+    await ctx.runMutation(internal.finance.postInvoiceCreditJournalInternal, {
+      invoiceId: args.invoiceId,
+      reason: args.reason.trim(),
+      actorId: ac.user._id,
     });
     await logEvent(
       ctx,
@@ -1088,7 +1104,7 @@ export const reconcileWebhookInternal = internalMutation({
           `Online payment captured — ${fmtINR(applied)} (provider id ${args.providerPaymentId}).`,
         )),
       });
-      await ctx.db.insert("payments", {
+      const webhookPaymentId = await ctx.db.insert("payments", {
         invoiceId: invoice._id,
         orgId: invoice.orgId,
         amountMinor: applied,
@@ -1101,17 +1117,12 @@ export const reconcileWebhookInternal = internalMutation({
         providerOrderId: args.providerOrderId,
         createdAt: Date.now(),
       });
-      // Ledger integration for provider payments (same as manual ones).
-      const wpRow = await ctx.db
-        .query("payments")
-        .withIndex("by_invoice", (q) => q.eq("invoiceId", invoice._id))
-        .order("desc")
-        .first();
-      if (wpRow) {
-        await ctx.runMutation(internal.finance.postPaymentJournalInternal, {
-          paymentId: wpRow._id,
-        });
-      }
+      // Ledger integration for provider payments (same as manual ones):
+      // posts by the inserted row id, and the per-payment dedupe key
+      // makes webhook redelivery a no-op.
+      await ctx.runMutation(internal.finance.postPaymentJournalInternal, {
+        paymentId: webhookPaymentId,
+      });
       await logEvent(
         ctx,
         invoice.matterId,
@@ -1220,6 +1231,19 @@ export const refundProviderPayment = mutation({
         "payment",
         `Refund issued — ${fmtINR(args.amountMinor)} on ${invoice.number}.`,
       );
+    }
+    // Ledger: unwind collected money exactly — AR is re-debited and
+    // bank credited for the refunded amount (the mirror of the original
+    // payment journal), dedupe-keyed per refund so a retry never
+    // double-posts. Skips when no chart is seeded (visible in the gap
+    // panel, reconcilable later).
+    if (invoice) {
+      await ctx.runMutation(internal.finance.postRefundJournalInternal, {
+        paymentId: args.paymentRowId,
+        amountMinor: args.amountMinor,
+        reason: args.reason?.trim() || "Provider refund",
+        actorId: ac.user._id,
+      });
     }
     await ctx.scheduler.runAfter(0, internal.paymentsProvider.refundPayment, {
       paymentRowId: args.paymentRowId,

@@ -59,14 +59,23 @@ export const addCustodyNote = mutation({
     const note = args.note.trim().slice(0, 400);
     if (!note) throw new Error("Custody note is required.");
 
+    const event = {
+      at: Date.now(),
+      byId: ac.user._id,
+      byName: ac.user.name ?? ac.user.email ?? "Member",
+      action: "note" as const,
+      note,
+    };
     await ctx.db.patch(args.documentId, {
-      custody: appendCustody(doc.custody, {
-        at: Date.now(),
-        byId: ac.user._id,
-        byName: ac.user.name ?? ac.user.email ?? "Member",
-        action: "note",
-        note,
-      }),
+      custody: appendCustody(doc.custody, event),
+    });
+    // Mirror into the append-only store (complete history; the row-level
+    // trail above is a bounded recent-events window).
+    await ctx.db.insert("documentCustodyEvents", {
+      orgId: ac.org._id,
+      documentId: args.documentId,
+      matterId: doc.matterId,
+      ...event,
     });
     await logUserAction(ctx, {
       userId: ac.user._id,
@@ -118,14 +127,23 @@ export const recordVerification = internalMutation({
     if (!doc) return;
     const matter = await ctx.db.get(doc.matterId);
     if (!matter) return;
+    const event = {
+      at: Date.now(),
+      byId: args.byId,
+      byName: args.byName,
+      action: args.ok ? ("integrity_verified" as const) : ("integrity_mismatch" as const),
+      note: args.ok ? undefined : "Stored file hash differs from record.",
+    };
     await ctx.db.patch(args.documentId, {
-      custody: appendCustody(doc.custody, {
-        at: Date.now(),
-        byId: args.byId,
-        byName: args.byName,
-        action: args.ok ? "integrity_verified" : "integrity_mismatch",
-        note: args.ok ? undefined : "Stored file hash differs from record.",
-      }),
+      custody: appendCustody(doc.custody, event),
+    });
+    // Mirror into the append-only store — verification history is never
+    // truncated, per document and per version.
+    await ctx.db.insert("documentCustodyEvents", {
+      orgId: matter.orgId,
+      documentId: args.documentId,
+      matterId: doc.matterId,
+      ...event,
     });
     await ctx.db.insert("auditLog", {
       orgId: matter.orgId,
@@ -140,5 +158,34 @@ export const recordVerification = internalMutation({
         : `Stored hash ${args.observedHash ?? "unavailable"} differs from the recorded hash.`,
       createdAt: Date.now(),
     });
+  },
+});
+
+/**
+ * Paginated COMPLETE custody history for one document, served from the
+ * append-only store (never truncated). Newest first. Access rules are
+ * identical to the summary query above.
+ */
+export const custodyHistory = query({
+  args: {
+    documentId: v.id("matterDocuments"),
+    cursor: v.optional(v.string()),
+    pageSize: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    requireCapability(ac, "document.upload");
+    const doc = await ctx.db.get(args.documentId);
+    if (!doc) return null;
+    const matter = await requireMatter(ctx, ac, doc.matterId);
+    if (!canViewDocument(ac, doc, matter)) return null;
+    return await ctx.db
+      .query("documentCustodyEvents")
+      .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+      .order("desc")
+      .paginate({
+        numItems: Math.min(Math.max(args.pageSize ?? 25, 5), 100),
+        cursor: args.cursor ?? null,
+      });
   },
 });
