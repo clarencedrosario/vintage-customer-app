@@ -25,6 +25,7 @@ import { CalendarDays, ScrollText, Users } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { formatINR } from "@/lib/format";
+import { PayrollPanel } from "@/components/PayrollPanel";
 
 const STATUTORY_LABELS: Record<string, string> = {
   pf: "Provident Fund",
@@ -466,6 +467,8 @@ export default function Hr() {
           </CardContent>
         </Card>
       </div>
+
+      <PayrollPanel />
 
       <AddEmployeeDialog open={addOpen} onOpenChange={setAddOpen} />
       <ApplyLeaveDialog

@@ -79,6 +79,7 @@ const NAV_GROUPS: { heading: string; items: NavItem[] }[] = [
       { to: "/comms", label: "Communications", icon: ScrollText },
       { to: "/billing", label: "Billing & Time", icon: Receipt },
       { to: "/accounting", label: "Accounting", icon: BookOpen },
+      { to: "/hr", label: "Human Resources", icon: Users },
     ],
   },
   {

@@ -951,13 +951,28 @@ export const payrollPrerequisites = query({
       .query("employees")
       .withIndex("by_org", (q) => q.eq("orgId", ac.org._id))
       .collect();
+    // Count payroll-relevant employees with no salary structure row at
+    // all (effective-dated structures are checked per period at run
+    // time; this is the headline readiness number).
+    let employeesWithoutStructures = 0;
+    for (const e of employees) {
+      if (
+        e.status === "offboarded" ||
+        e.status === "rejected_offer" ||
+        e.status === "suspended"
+      )
+        continue;
+      const any = await ctx.db
+        .query("salaryStructures")
+        .withIndex("by_employee", (q) => q.eq("employeeId", e._id))
+        .first();
+      if (!any) employeesWithoutStructures += 1;
+    }
     return {
       statutory,
       missingKinds: statutory.filter((c) => !c.configured).map((c) => c.kind),
       employeeCount: employees.length,
-      // Salary structures per employee arrive with the payroll slice;
-      // that slice owns extending this report.
-      employeesWithoutStructures: null as number | null,
+      employeesWithoutStructures,
     };
   },
 });

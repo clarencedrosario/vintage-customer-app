@@ -1,5 +1,51 @@
 # Implementation & delivery map (section 31)
 
+## Handoff — 27 Sep 2026: five-question audit closed, HR module live, payroll next
+
+**Answers delivered (evidence in ADVOKATE_PROGRESS.md):**
+
+1. **Q1 deployment identity** — one project: moonlit-elk-307
+   (`clarencedrosario:vintage-customer-app`, dev). `cautious-kingfisher-954`
+   appears nowhere in the repo, the earliest checkpoint tar, or the DB export
+   schema — stale report reference, not a second deployment. Env files are
+   platform-blocked to tooling, so the CLI banner + grep + tar analysis is the
+   evidence basis.
+2. **Q2 billing→ledger gaps** — cancellation/refund journals added (idempotent
+   dedupe keys), payment posting race closed (post by inserted id),
+   `billingPostingGaps` + `reconcileBillingJournals` with an Accounting-page
+   gap panel; unsupported workflows honestly listed in the UI.
+3. **Q3 custody** — append-only `documentCustodyEvents` store mirrors every
+   event (the 200-cap in-memory trail no longer loses history), paginated
+   complete-history UI, hash-provenance explainer.
+4. **Q4 HR** — capability matrix confirmed against `accessPolicy.ts` (9 roles,
+   no hr_manager; accountant has payroll.run, not payroll.approve), then
+   implemented: employees with server-side salary-field stripping
+   (`canViewSalaryRecord`), departments, leave lifecycle with pure-math balances
+   (13 tests), attendance, versioned statutory settings with an
+   anti-invented-rates guard, `payrollPrerequisites`. `/hr` route + nav live.
+5. **Q5 CJ GLOBAL** — Section 25 checklist added to ADVOKATE_REQUIREMENTS.md;
+   all five platform-operations items honestly **Not started** (no schema, no
+   routes).
+
+**Payroll slice (delivered same turn):** `src/lib/payrollMath.ts` (23 tests —
+zero-drift proration, LOP flooring, frozen-spec statutory computation,
+balance-refusing journal plan) + `src/convex/payroll.ts` (structures CRUD,
+run lifecycle with frozen `statutoryVersionIds`, separate bank-file/payment
+marking, audited reversal, dedupe-keyed journal posting that REFUSES unmapped
+statutory payables) + `PayrollPanel` UI in `/hr` with statutory/structure
+editors. `employeesWithoutStructures` now real. No statutory rates ship —
+operators enter verified values; payroll refuses to run on missing kinds.
+
+**Verification:** push clean (moonlit-elk-307 dev), `tsc -b` 0 errors,
+**411/411 tests**. **Not yet done:** any browser/E2E pass over these flows.
+
+**Next up:** CJ GLOBAL platform-operations (owner console, employee
+onboarding, customer tickets, AI-to-human escalation). Payroll follow-ups:
+run-time TDS withholding, arrears, explicit join/leave proration inputs,
+payslip PDF export, final settlements.
+
+---
+
 ## HR / Payroll / Accounting expansion — Phase 1: shared foundations (added 26 Sep 2026)
 
 Program status checklist (10 phases, user-requested labels):

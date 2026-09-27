@@ -4,7 +4,191 @@ Durable progress file so development resumes without repeating completed work.
 Companion to `ADVOKATE_REQUIREMENTS.md` (the master checklist). Handoff log also
 maintained in `docs/DELIVERY.md`.
 
-Last checkpoint: **26 September 2026**
+Last checkpoint: **27 September 2026**
+
+---
+
+## Implementation turn — 27 Sep 2026 (five-question audit closed → HR module shipped)
+
+### Q1 — deployment identity (RESOLVED, code-inspection evidence only)
+
+The CLI target and the running preview are ONE project: **moonlit-elk-307**
+(team `clarencedrosario`, project `vintage-customer-app`, dev deployment),
+confirmed twice by the `bunx convex dev --once` banner
+(`clarencedrosario:vintage-customer-app:dev/clarencedrosario (dev)` →
+`https://moonlit-elk-307.convex.cloud`). Evidence that `cautious-kingfisher-954`
+is a stale/erroneous report reference and NOT a second deployment:
+
+- Repo grep for `cautious-kingfisher`: **0 matches**; `moonlit-elk-307`: matches
+  in progress docs only (no hardcoded convex URLs anywhere in `src/`).
+- Earliest checkpoint tar (`backups/source-checkpoint-2026-09-26.tar.gz`, 264
+  files): 0 occurrences of cautious-kingfisher, 3 of moonlit-elk-307.
+- DB export `backups/convex-data-2026-09-26` (ZIP: README + per-table
+  `documents.jsonl`) has a table list that exactly matches THIS repo's schema
+  (documents, statutorySettings, employees, payrollRuns, journalEntries,
+  vaultVersions, hrTables, …) — same project.
+- No migration/switch happened; nothing pointed at a second deployment.
+- Env-file contents are **platform-blocked to tooling** (reads return
+  [BLOCKED]; even terminal commands naming env files are hard-blocked), so Q1
+  could not be answered from env files — CLI banner + grep + tar analysis were
+  used instead.
+
+### Q2 — billing→ledger posting gaps (FIXED + reconciliation tooling)
+
+Audit findings: `updateDraft` is draft-only (posted invoices never edited —
+safe); but `cancelOrCredit` and `refundProviderPayment` posted NO journal, and
+both payment paths selected the "latest row by invoice" (insert/update race).
+Fixes in `finance.ts`/`billing.ts`:
+
+- `postInvoiceCreditJournalInternal` — cancels reverse the original invoice
+  journal (dedupe key `billing:<id>:invoice_cancelled`, stamped via new
+  `journalEntries.originalLineIds` array); credit notes post AR Dr / Bank Cr for
+  collected-unrefunded via `credit_note_issued` (refunds summed from payment
+  rows — invoices have no `refundedMinor` field, so nothing was invented).
+- `postRefundJournalInternal` — key `billing:<payment>:refund:<amount>`;
+  refunds now hit the ledger.
+- Both payment paths insert-then-post **by returned id** — race closed.
+- `billingPostingGaps` query (`finance.view`): unposted invoices/payments with
+  honest reasons; cancelled-reversal rows flagged informational, not gaps.
+- `reconcileBillingJournals` mutation (`finance.manage`): idempotent; refuses
+  missing/incomplete chart; requires codes 1000/1100/4000
+  (`BILLING_CRITICAL_CODES`; `parseBillingKey` helper).
+- UI: Accounting page gap panel — coverage badge, "Reconcile now", amber
+  banners (unseeded / missing codes), per-item reasons, explicit
+  unsupported-workflow note (statement imports, bank feeds, vendor bills/AP,
+  non-cancellation debit/credit notes).
+
+### Q3 — custody trail drop + provenance clarity (FIXED)
+
+Confirmed the 200-cap in-memory custody trail dropped oldest events
+(`appendCustody` `slice(-200)`). Added append-only store `documentCustodyEvents`
+(schemaExtras, by_document + by_org indexes, CUSTODY_ACTIONS vocabulary);
+`addCustodyNote` and `recordVerification` now MIRROR every event into it; new
+paginated `custodyHistory` query (page 5–100, access-checked). DocumentIntegrity
+UI rewritten: hash-provenance explainer (client-declared vs server-verified
+after Verify), complete history with "Load older events". `evidenceVerify`
+re-audited — honest failure reasons (unauthorized / no_file / no_recorded_hash /
+bad_recorded_hash / file_missing / crypto_unavailable), no fabrication.
+
+### Q4 — HR module (prereqs confirmed, then implemented)
+
+Pre-checks confirmed against `accessPolicy.ts`: `hr.view_own` on ALL 9 roles
+(real set: owner, partner, senior_associate, associate, junior, paralegal,
+accountant, administrator, support_staff — **no** hr_manager role exists);
+accountant has `payroll.run` but **not** `payroll.approve`; support_staff
+forbidden-set strips hr.manage / hr.approve / payroll.run / hr.view_salary /
+finance.manage; `canViewSalaryRecord` lives in accessPolicy.ts (hr.ts imports
+it from ./accessPolicy directly).
+
+Implemented:
+
+- **Pure math** `src/lib/hrLeave.ts` + **13 tests** — `daysBetweenInclusive`
+  (UTC, same-day=1), `leaveApplicationError` (±0.5-day half-day tolerance),
+  `balanceFor`, `decrementBalance` (never negative; explicit
+  "Insufficient <type> balance" error; refuses unknown types), `unpaidDaysFor`
+  (LOP split).
+- **Server** `src/convex/hr.ts` — employees CRUD (`stripEmployee` removes
+  salary/PAN/UAN/ESI/bank fields server-side unless `canViewSalaryRecord`;
+  code regex, PAN regex, last-4-only bank, integer paise gross, unique codes),
+  user linking, departments, leave profiles (org policy, not rates),
+  apply/decide/mark-taken/cancel leave (approval freezes unpaidDays; taken
+  leaves immutable; separated employees blocked), attendance upsert per
+  employee-day, `validateStatutorySpec` (per-kind internal-consistency only —
+  **no invented rates**; operators enter verified PF/ESI/PT/TDS/LWF/gratuity
+  values), versioned statutory settings (closes prior row effectiveTo=prevDay),
+  `payrollPrerequisites` query (per-kind configured/current-version as of
+  today IST + employeeCount; `employeesWithoutStructures` placeholder filled by
+  the payroll slice).
+- **Auth tests** `src/convex/hr.access.test.ts` — 8 tests (role matrix +
+  forged-override normalization).
+- **UI** `src/pages/Hr.tsx` + `/hr` route (RequireAuth) + Practice nav entry
+  "Human Resources": employee table with "restricted" salary display,
+  AddEmployeeDialog, leave cards (Approve/Reject/Mark taken),
+  payroll-prerequisites card with statutory badges.
+
+### Q5 — CJ GLOBAL checklist (RECORDED honestly)
+
+Section 25 added to ADVOKATE_REQUIREMENTS.md: owner administration, platform
+employee onboarding, `/owner` `/employee` `/developer` routes, customer ticket
+system, AI-to-human support — **all Not started** (no schema, no routes;
+`invitations.ts` is in-chamber org invites only). Existing portal-facing routes
+(`/portal`, `/staff`, `/login`, `/find-a-lawyer`) noted for contrast.
+
+### Verification (actual results, 27 Sep)
+
+- `bunx convex dev --once` → push OK (10:02 UTC, moonlit-elk-307 dev); Convex
+  typecheck clean. Additive schema only (`journalEntries.originalLineIds`,
+  `documentCustodyEvents`). No git push, no production deployment.
+- `bunx tsc -b --noEmit` → **0 errors**.
+- `bun run test` → **388/388 passed** (363 prior + 13 hrLeave + 8 hr.access + 5
+  scaleProRataPaise, minus 1 folded accounting test).
+- **Evidence honesty:** none of this turn's flows (HR forms, leave approvals,
+  reconciliation button, custody paging, statutory editors) has been clicked
+  through in a browser yet — verification is code inspection + automated suite
+  only. A recorded E2E pass remains outstanding.
+
+### Payroll slice (same turn, following the audit answers)
+
+- **Pure math** `src/lib/payrollMath.ts` + **23 tests** — period bounds
+  (leap-aware), zero-drift `prorateComponents` (first line absorbs floor
+  deficit), employee-favourable `lopDeductionPaise` (floors the deduction),
+  `structureForPeriod` with honest skip reasons (`no_salary_structure`,
+  `not_joined_yet`, `left_before_period`, `empty_salary_structure`),
+  `statutoryForEmployee` applying ONLY frozen spec rows (PF/ESI capped at the
+  wage ceiling, PT highest applicable slab, LWF fixed amounts; absent kinds
+  contribute nothing — no invented rates), `computeEmployeePayslip` (net clamped
+  ≥ 0; fixed deductions do NOT scale with attendance), `runTotals`,
+  `bankFileForRun`, and `payrollJournalPlan` with the exact identity
+  Dr expense = net + mapped payables, refusing to post while any statutory
+  payable is unmapped (`unmappedPaise`). TDD caught two real contract bugs:
+  fixed deductions were being scaled up to gross, and the journal-plan test
+  numbers were internally inconsistent.
+- **Server** `src/convex/payroll.ts` — `saveSalaryStructure` (new
+  effective-dated row each save, history never overwritten; component
+  validation in whole paise), `listSalaryStructures`/`getRun`/
+  `listRuns` with salary stripping via `canViewSalaryRecord` (structures and
+  payslips zeroed to `salaryVisible: false`), `createRun` (per-(org, period)
+  duplicate refused; freezes the exact `statutoryVersionIds`; refuses when any
+  of the six statutory kinds is unconfigured; computes payslips from
+  attendance LOP + approved unpaid leave; skipped employees carry reasons),
+  state machine `submitForReview` → `approveRun` (payroll.approve) →
+  `finalizeRun` (finance.manage; freezes payslips to `final`, posts the
+  balanced dedupe-keyed journal `payroll:<run>:finalized`, refuses on missing
+  seeded accounts or unmapped payables), `generateBankFile` (needs
+  hr.view_salary; separate from payment marking by design),
+  `markPaymentsMade` (requires finalized + bank file exists),
+  `reverseRunByOperator`/`reverseRunInternal` (audited mirrored reversal,
+  ≥3-char reason, payslip rows preserved as history).
+- **Prerequisites filled** — `payrollPrerequisites.employeesWithoutStructures`
+  now counts payroll-relevant employees with no structure row (previously a
+  null placeholder).
+- **UI** `src/components/PayrollPanel.tsx` wired into `/hr` — run list with
+  status/badges, create-run by period, all transition actions, payslip table
+  with per-row "restricted" salary display, bank-file download,
+  payment-marking, reversal flow with mandatory reason, salary-structure
+  editor dialog, and a statutory-settings dialog (per-kind fields; rates
+  entered as % → integer bps, amounts as ₹ → exact paise; no defaults).
+
+### Verification (actual results, 27 Sep, payroll)
+
+- `bunx convex dev --once` → push OK (10:54 UTC, moonlit-elk-307 dev). Additive
+  schema only — the payroll slice uses the existing Phase-1 tables; no schema
+  change this slice.
+- `bunx tsc -b --noEmit` → **0 errors** (after fixing a TS7022 circular
+  inference between the reversal mutation and its internal core by annotating
+  return types).
+- `bun run test` → **25 files, 411/411 passed** (388 + 23 payrollMath).
+- **Evidence honesty:** the payroll flow (create → approve → finalize → bank
+  file → mark paid → reverse) has NOT been clicked through in a browser yet;
+  verification is code inspection + the automated suite only.
+
+### Next
+
+CJ GLOBAL platform-operations slice (Section 25): owner console, employee
+onboarding surface, customer tickets, AI-to-human escalation. Payroll
+enhancements that remain: per-period structure selection edge cases beyond the
+LOP mechanism (explicit join/leave proration input), TDS per-slab application,
+payslip PDF export.
 
 ---
 

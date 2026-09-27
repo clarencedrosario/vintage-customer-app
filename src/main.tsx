@@ -40,6 +40,7 @@ const OfflineCentre = lazy(() => import("./pages/OfflineCentre.tsx"));
 const Health = lazy(() => import("./pages/Health.tsx"));
 const Reports = lazy(() => import("./pages/Reports.tsx"));
 const Accounting = lazy(() => import("./pages/Accounting.tsx"));
+const Hr = lazy(() => import("./pages/Hr.tsx"));
 const Team = lazy(() => import("./pages/Team.tsx"));
 const Settings = lazy(() => import("./pages/Settings.tsx"));
 const ClientPortal = lazy(() => import("./pages/ClientPortal.tsx"));
@@ -346,6 +347,14 @@ createRoot(document.getElementById("root")!).render(
                 element={
                   <RequireAuth>
                     <Accounting />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/hr"
+                element={
+                  <RequireAuth>
+                    <Hr />
                   </RequireAuth>
                 }
               />

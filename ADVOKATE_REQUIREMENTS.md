@@ -19,7 +19,7 @@ Every item carries one of these statuses, applied honestly:
 > No legal workflow has had a recorded E2E browser walkthrough yet; that evidence
 > category is tracked separately in `ADVOKATE_PROGRESS.md`.
 
-Last updated: 26 September 2026. Evidence and test results: `ADVOKATE_PROGRESS.md`.
+Last updated: 27 September 2026 (turn: five-question audit closed; HR module shipped; payroll slice shipped; CJ GLOBAL checklist added). Evidence and test results: `ADVOKATE_PROGRESS.md`.
 
 ---
 
@@ -100,28 +100,28 @@ Last updated: 26 September 2026. Evidence and test results: `ADVOKATE_PROGRESS.m
 - Revocation ≠ retraction of downloaded files — **Implemented and verified** (stated honestly in UI copy)
 
 ## 8. Full HR management
-- Employee profiles (lawyers, associates, paralegals, interns, accountants, support) — **Not started** (schema tables shipped 26 Sep; module logic/UI pending — Phase 2)
-- Departments, branches, designations, managers, employment types — **Not started** (schema ready)
+- Employee profiles (lawyers, associates, paralegals, interns, accountants, support) — **Partially implemented** (26/27 Sep: employees CRUD in `hr.ts` — upsert with code/PAN/bank-last-4 validation, unique codes, user linking; list/get strip salary+PAN+UAN/ESI+bank fields server-side via `canViewSalaryRecord`; `/hr` UI live. Remaining: documents, reviews, offboarding)
+- Departments, branches, designations, managers, employment types — **Partially implemented** (departments add/list + designation/employment-type fields on employee rows; branches & manager hierarchy pending)
 - Recruitment: vacancies, candidates, interviews, offers, onboarding — **Not started** (schema ready)
 - Employment documents, qualifications, contracts, expiry reminders, policy acknowledgements — **Not started** (schema ready)
-- Attendance, shifts, holidays, leave balances/applications/approvals — **Not started** (schema ready)
+- Attendance, shifts, holidays, leave balances/applications/approvals — **Partially implemented** (attendance upsert per employee-day; leave lifecycle apply→decide→mark-taken→cancel with balance decrement + LOP split; pure math in `hrLeave.ts`, 13 tests; shifts & holiday calendar pending)
 - Billable/non-billable timesheets linked to matters & projects — **Partially implemented** (matter time entries live in billing; HR `workLogs` schema ready; project linkage lands with Phase 5)
 - Performance reviews, goals, probation, training — **Not started** (schema ready)
 - Expense claims, receipts, approvals — **Partially implemented** (matter expenses live; HR reimbursements schema ready)
 - Resignation, clearance, offboarding, final settlement, access revocation — **Not started** (schema ready)
-- Employee self-service — **Not started** (schema + capability ready)
-- Salary/confidential HR records restricted to authorized roles — **Implemented and verified** (pure `canViewSalaryRecord` policy + tests; module enforcement lands Phase 2)
+- Employee self-service — **Partially implemented** (own profile via `hr.view_own`; self leave application; separated employees blocked from applying; full portal surface pending)
+- Salary/confidential HR records restricted to authorized roles — **Implemented and verified** (pure `canViewSalaryRecord` policy + 8 authorization tests; module enforcement live in `hr.ts` — sensitive fields stripped server-side unless granted; "restricted" shown in `/hr` UI)
 
 ## 9. Full payroll
-- Configurable salary structures, earnings, allowances, deductions, bonuses, overtime, reimbursements, advances, loans — **Not started** (schema ready)
-- Payroll periods, attendance-based calc, LOP, arrears, joining/leaving proration — **Not started** (schema ready)
-- PF/ESI/PT/TDS workflows with verified effective-dated settings — **Not started** (statutorySettings schema ready with anti-invented-rates guard: empty config ⇒ payroll refuses to run)
-- Previews, validation, approval, finalization, payslips — **Not started** (run lifecycle schema ready)
-- Bank payment exports + payment-status tracking — **Not started** (schema separates file generation from payment marking by design)
+- Configurable salary structures, earnings, allowances, deductions, bonuses, overtime, reimbursements, advances, loans — **Partially implemented** (27 Sep: effective-dated component-wise structures CRUD with whole-paise validation — any named component incl. allowances/advances can be entered; dedicated bonus/overtime/loan workflows pending)
+- Payroll periods, attendance-based calc, LOP, arrears, joining/leaving proration — **Partially implemented** (runs per period; LOP from attendance rows + approved unpaid leave; arrears & explicit join/leave proration inputs pending)
+- PF/ESI/PT/TDS/LWF workflows with verified effective-dated settings — **Partially implemented** (statutory CRUD + versioned freezing done; run-time computation applies frozen PF/ESI/PT/LWF specs — unit-tested; **TDS withholding at run time not yet computed**, config + payable mapping ready; NO rates invented, operators enter verified values)
+- Previews, validation, approval, finalization, payslips — **Implemented and verified** (draft → in_review → approved → finalized enforced server-side with separate payroll.approve / finance.manage gates; payslips frozen at finalize; skip reasons explicit; browser pass still outstanding)
+- Bank payment exports + payment-status tracking — **Implemented and verified** (file generation and payment marking are separate mutations by design; masked account details; hr.view_salary required)
 - Final settlements, payroll reports — **Not started**
-- Balanced accounting entries on finalization — **Not started** (journal schema ready)
-- Audited corrections/reversals — **Not started** (reversal schema ready)
-- Duplicate-run protection, finalized-run immutability — **Not started** (by_org_period dedupe index ready)
+- Balanced accounting entries on finalization — **Implemented and verified** (journal identity Dr expense = net + mapped payables unit-tested; unmapped statutory payables REFUSE posting instead of being dropped; seeded-code mapping; dedupe-keyed idempotent)
+- Audited corrections/reversals — **Implemented and verified** (mirrored reversal entry, ≥3-char reason, payslip history preserved)
+- Duplicate-run protection, finalized-run immutability — **Implemented and verified** (per-(org, period) existence check; finalized rows immutable except audited reversal)
 
 ## 10. Full accounting and legal billing
 - Billing: invoices, GST (CGST/SGST/IGST), payments, Razorpay links, partial payments — **Implemented but unverified** (live payment needs merchant config)
@@ -275,3 +275,19 @@ Last updated: 26 September 2026. Evidence and test results: `ADVOKATE_PROGRESS.m
 - Per-phase: preview, test steps, synthetic data labelling, DB/config changes, tests+results, build status, defects, dependencies, checklist update, handoff — **Implemented and verified** (`ADVOKATE_PROGRESS.md` + `docs/DELIVERY.md` maintained every milestone)
 - Honest status labels — **Enforced by convention in both tracking files**
 - Required test categories (isolation, revocation, sensitive records, reconciliation, retries, regressions, E2E, restore, performance) — **Partially implemented** (isolation/revocation/retry covered by automated tests; restore test & realistic performance runs outstanding)
+
+## 25. CJ GLOBAL — platform operations (checklist added 27 Sep 2026)
+
+Platform-level operations layer, as distinct from the in-chamber practice
+product. Tracked here per this file's honesty rule; statuses are current as of
+the 27 Sep codebase and have **no schema tables yet** — untouched by the 26 Sep
+HR/accounting/custody work.
+
+- Platform owner administration console (all-chamber oversight, `/owner`) — **Not started** (no `/owner` route in `src/main.tsx`)
+- Platform employee onboarding surface (`/employee`) — **Not started** (route absent; `src/convex/invitations.ts` covers in-chamber org member invites only, not a platform-wide employee lifecycle)
+- Developer route (`/developer`) — **Not started** (route absent)
+- Customer support ticketing (submit/triage/resolve across chambers) — **Not started** (no ticket tables, queries, or UI)
+- AI-to-human support escalation — **Not started** (no escalation path from AI surfaces to human operators)
+- Portal-facing routes that DO exist today: `/portal`, `/staff`, `/login`, `/find-a-lawyer` plus the authenticated practice routes
+
+These are the next platform-operations slice after the payroll module.
