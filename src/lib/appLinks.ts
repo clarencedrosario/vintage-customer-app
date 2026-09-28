@@ -3,8 +3,8 @@
 //
 // The app currently runs on the platform preview origin and owns no
 // domain. Every shareable link (platform-workforce invitations, intake
-// completion, owner-console entry points) is therefore composed from this
-// helper:
+// completion, client/employee invites, owner-console entry points) is
+// therefore composed from this helper:
 //   1. VITE_PUBLIC_APP_URL — set it later (project env/Keys config) to
 //      whatever production domain gets purchased/connected; nothing else
 //      changes.
@@ -16,18 +16,42 @@
 // =====================================================================
 
 /**
+ * Test/programmatic override for the configured link base. Non-null makes
+ * appOrigin() behave exactly as if VITE_PUBLIC_APP_URL were set to this
+ * value ("" behaves as unset). Production code never touches this.
+ */
+let _configOverride: string | null = null;
+
+/** Test hook: force the configured link base (null clears the override). */
+export function __setConfiguredBaseForTests(value: string | null): void {
+  _configOverride = value;
+}
+
+function configuredBase(): string {
+  if (_configOverride !== null) return _configOverride;
+  // Read the env var through a narrow cast: this module is also compiled
+  // under the tests tsconfig, which does not load vite/client's
+  // ImportMeta.env declaration (same cast approach as import.meta.glob
+  // elsewhere in the repo). Vite injects import.meta.env statically, so
+  // runtime stubbing never affects it — hence the explicit override hook.
+  const env = (
+    import.meta as unknown as { env?: Record<string, string | undefined> }
+  ).env;
+  return String(env?.VITE_PUBLIC_APP_URL ?? "").trim();
+}
+
+/**
  * The origin that shareable links are built on. Configurable for a future
  * production domain via VITE_PUBLIC_APP_URL; falls back to the current
  * preview origin so the running app always links to itself.
  */
 export function appOrigin(): string {
-  const configured = String(
-    import.meta.env.VITE_PUBLIC_APP_URL ?? "",
-  )
-    .trim()
-    .replace(/\/+$/, "");
+  const configured = configuredBase();
   if (configured) {
-    // Accept values with or without a scheme; normalize to a bare origin.
+    // Scheme check runs on the trimmed value BEFORE any slash stripping,
+    // so a degenerate value like "http://" fails to parse and falls back
+    // instead of mutating into a bogus host. Trailing slashes, paths,
+    // query and hash are normalized away by URL parsing itself.
     const withScheme = /^https?:\/\//i.test(configured)
       ? configured
       : `https://${configured}`;

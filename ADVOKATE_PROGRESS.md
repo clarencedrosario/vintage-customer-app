@@ -65,6 +65,11 @@ remains unchanged and correct for its own purpose.
 - `bunx convex dev --once` → **push OK** (moonlit-elk-307 dev).
 - `bunx tsc -b --noEmit` → **0 errors**.
 - `bun run test` → **27 files, 449/449 passed** (445 prior + 4 workforce).
+  Subsequent addendum: 14 unit tests for the link-base helper
+  (`appLinks.test.ts`) — configured-base precedence, origin normalization,
+  unparseable-config fallback, live-origin read at call time, path joining —
+  which caught and pinned a fix for a degenerate `"http://"` config producing
+  a bogus origin. Latest suite: **28 files, 463/463**; tsc 0 errors; push OK.
 - **Browser: unverified** — no E2E pass of invite/accept/console flows yet.
 - **Owner activation: still pending** the user's OTP sign-in + activation
   click on /owner (mailbox-side step; negative gate proof stands).
