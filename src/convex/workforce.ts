@@ -15,6 +15,8 @@ import {
   type MutationCtx,
 } from "./_generated/server";
 import { getCurrentUser } from "./users";
+import { getAuthSessionId } from "@convex-dev/auth/server";
+import { internalMfaState, requireInternalMfa } from "./twofactor";
 import { invitationTokenHash, freshInviteSalt } from "../lib/invitationFlow";
 import type { Doc } from "./_generated/dataModel";
 import {
@@ -79,10 +81,17 @@ export async function platformActorOf(
 }
 
 async function requireWorkforceManager(ctx: QueryCtx | MutationCtx) {
+  // Workforce administration is owner-only AND internal-MFA-gated.
+  // ORDER MATTERS: the ownership check runs first so non-internal callers
+  // get the ownership denial — the MFA requirement is only ever addressed
+  // to actual internal accounts, never leaked to customers.
   const actor = await platformActorOf(ctx);
   if (!actor || !canManageWorkforce(actor)) {
     throw new Error("Platform workforce administration requires the platform owner.");
   }
+  // The session must have completed the TOTP/recovery-code challenge
+  // before any roster change (invite, role change, suspend, revoke).
+  await requireInternalMfa(ctx);
   return actor;
 }
 
@@ -324,6 +333,13 @@ export const listInvitations = query({
 export const myPlatformIdentity = query({
   args: {},
   handler: async (ctx) => {
-    return platformActorOf(ctx);
+    const actor = await platformActorOf(ctx);
+    if (!actor) return null;
+    const mfa = await internalMfaState(
+      ctx.db,
+      { _id: actor.userId as never },
+      await getAuthSessionId(ctx),
+    );
+    return { ...actor, internalMfa: mfa };
   },
 });

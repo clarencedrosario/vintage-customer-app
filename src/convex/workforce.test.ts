@@ -13,6 +13,8 @@ import { convexTest } from "convex-test";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { PLATFORM_CAPABILITY_SETS } from "./platformWorkforce";
+import { totpCodeAt } from "./twofactor";
+import { sha256Hex } from "./crypto";
 
 // convex-test needs to import the function modules exactly like a
 // deployment does; the modules map mirrors the functions directory.
@@ -26,6 +28,49 @@ const modules: Record<string, () => Promise<unknown>> = (import.meta as unknown 
 // created with _id X is simulated with subject X.
 const asUser = (t: ReturnType<typeof convexTest>, userId: string) =>
   t.withIdentity({ subject: userId, tokenIdentifier: `test:${userId}` });
+
+// Internal platform accounts must complete the internal-MFA session
+// challenge before gated operations; subject "userId|sessionId" binds the
+// identity to a real auth session (see internalMfa.test.ts).
+const asSession = (
+  t: ReturnType<typeof convexTest>,
+  userId: string,
+  sessionId: string,
+) =>
+  t.withIdentity({
+    subject: `${userId}|${sessionId}`,
+    tokenIdentifier: `test:${userId}`,
+  });
+
+/** Seed a complete internal-MFA enrollment and satisfy the session challenge. */
+async function enrollAndVerify(
+  t: ReturnType<typeof convexTest>,
+  userId: string,
+  sessionId: string,
+) {
+  const secret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
+  await asUser(t, "system").run(async (ctx) => {
+    await ctx.db.insert("twoFactor", {
+      userId: userId as never,
+      secret,
+      enabled: true,
+      createdAt: Date.now(),
+      confirmedAt: Date.now(),
+    });
+    for (const code of ["recovery-a1", "recovery-b2"]) {
+      await ctx.db.insert("recoveryCodes", {
+        userId: userId as never,
+        codeHash: sha256Hex(code),
+        createdAt: Date.now(),
+      });
+    }
+  });
+  const caller = asSession(t, userId, sessionId);
+  await caller.mutation(api.twofactor.verifyForSession, {
+    code: totpCodeAt(secret),
+  });
+  return caller;
+}
 
 async function createTestUser(
   t: ReturnType<typeof convexTest>,
@@ -103,9 +148,13 @@ describe("CJ GLOBAL workforce — real backend lifecycle", () => {
       });
     });
 
-    const owner = asUser(t, ownerId);
-    const agent = asUser(t, agentId);
-    const dev = asUser(t, devId);
+    // Internal platform callers must be MFA-enrolled with a challenged
+    // session (required for every gated operation below — the negative
+    // cases live in internalMfa.test.ts). The chamber-owner identity below
+    // deliberately stays sessionless: customers never face internal MFA.
+    const owner = await enrollAndVerify(t, ownerId, "sess-owner");
+    const agent = await enrollAndVerify(t, agentId, "sess-agent");
+    const dev = await enrollAndVerify(t, devId, "sess-dev");
     const chamberOwner = asUser(t, chamberOwnerId);
 
     // --- 1. Only the platform owner can invite ----------------------

@@ -384,16 +384,43 @@ function OrgSwitcher({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
-/** Discreet top-bar entry to the platform consoles — only for platform
- *  admins (/platform subscriptions/chambers + /owner support ops) and CJ
- *  GLOBAL workforce employees (/owner with capability-reduced sections).
- *  Customers and chamber-only users see nothing here. */
+/**
+ * Top-bar authority-gated platform navigation. Three disjoint audiences,
+ * resolved server-side; everyone else (customers, chamber-only accounts,
+ * signed-out visitors) sees nothing here:
+ *  - the activated platform owner (isPlatformAdmin): Headset → /owner plus
+ *    the Shield → /platform subscription console;
+ *  - the verified, eligible bootstrap account BEFORE activation: Headset →
+ *    /owner (leading to its activation card) — driven by the server-side
+ *    eligibility query, never by email matching in the browser;
+ *  - active CJ GLOBAL workforce employees: "Open team console" → /owner,
+ *    which renders their capability-reduced sections and gates actions on
+ *    their internal-MFA session challenge.
+ */
 function PlatformLink() {
   const amAdmin = useQuery(api.platform.amIPlatformAdmin);
+  const eligibility = useQuery(api.platform.myOwnerActivationEligibility);
   const platformIdentity = useQuery(api.workforce.myPlatformIdentity);
+
+  const isOwner = !!amAdmin;
+  const isEligibleBootstrap = !!eligibility?.eligible;
   const isWorkforce = !!platformIdentity?.platformRole;
-  const showOwnerConsole = !!amAdmin || isWorkforce;
-  if (!showOwnerConsole) return null;
+
+  if (!isOwner && !isEligibleBootstrap && !isWorkforce) return null;
+
+  if (isWorkforce) {
+    return (
+      <NavLink
+        to="/owner"
+        title="Open team console"
+        aria-label="Open team console"
+        className="flex size-8 items-center justify-center rounded-md text-slate-500 hover:bg-muted hover:text-foreground"
+      >
+        <Headset className="size-4" aria-hidden="true" />
+      </NavLink>
+    );
+  }
+
   return (
     <>
       <NavLink
@@ -404,7 +431,7 @@ function PlatformLink() {
       >
         <Headset className="size-4" aria-hidden="true" />
       </NavLink>
-      {amAdmin && (
+      {isOwner && (
         <NavLink
           to="/platform"
           title="Platform console"

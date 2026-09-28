@@ -13,7 +13,12 @@
 // configured VITE_PUBLIC_APP_URL and is what these tests drive.
 // =====================================================================
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { appLink, appOrigin, __setConfiguredBaseForTests as setBase } from "./appLinks";
+import {
+  appLink,
+  appOrigin,
+  safeInternalPath,
+  __setConfiguredBaseForTests as setBase,
+} from "./appLinks";
 
 const LIVE_ORIGIN = window.location.origin; // jsdom default: http://localhost:3000
 
@@ -100,5 +105,41 @@ describe("appLink", () => {
   it("always returns an absolute URL — never a bare relative path", () => {
     setBase(null);
     expect(appLink("/owner")).toMatch(/^https?:\/\//);
+  });
+});
+
+describe("safeInternalPath — post-auth redirect guard (open-redirect safe)", () => {
+  it("allows plain internal paths", () => {
+    expect(safeInternalPath("/owner")).toBe("/owner");
+    expect(safeInternalPath("/accept-platform-invite?token=abc")).toBe(
+      "/accept-platform-invite?token=abc",
+    );
+    expect(safeInternalPath("/login?invite=t")).toBe("/login?invite=t");
+  });
+
+  it("refuses absolute URLs to other origins", () => {
+    expect(safeInternalPath("https://evil.example/steal")).toBe("/dashboard");
+    expect(safeInternalPath("http://evil.example/steal")).toBe("/dashboard");
+  });
+
+  it("refuses scheme-relative protocol-smuggling URLs", () => {
+    expect(safeInternalPath("//evil.example/steal")).toBe("/dashboard");
+    expect(safeInternalPath("\\\\evil.example/steal")).toBe("/dashboard");
+  });
+
+  it("refuses other schemes and control characters", () => {
+    expect(safeInternalPath("javascript:alert(1)")).toBe("/dashboard");
+    expect(safeInternalPath("data:text/html,hi")).toBe("/dashboard");
+    expect(safeInternalPath("/x\\\\evil.example")).toBe("/dashboard");
+  });
+
+  it("treats null/empty as the fallback", () => {
+    expect(safeInternalPath(null)).toBe("/dashboard");
+    expect(safeInternalPath(undefined)).toBe("/dashboard");
+    expect(safeInternalPath("")).toBe("/dashboard");
+  });
+
+  it("honors a custom fallback (e.g. portal homes)", () => {
+    expect(safeInternalPath("https://evil.example", "/portal")).toBe("/portal");
   });
 });

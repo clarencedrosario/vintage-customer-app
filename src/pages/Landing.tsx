@@ -5,7 +5,6 @@ import {
   CalendarClock,
   FileText,
   Gavel,
-  Headset,
   Scale,
   Search,
   Users,
@@ -99,7 +98,7 @@ export default function Landing() {
             Research. Intelligence — your entire legal practice in one
             intelligent workspace.
           </p>
-          <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
+          <div className="mt-8 flex items-center justify-center gap-3">
             <Button
               size="lg"
               asChild
@@ -119,17 +118,6 @@ export default function Landing() {
               <Link to="/find-a-lawyer">
                 <Search className="size-4" aria-hidden="true" />
                 Find a Lawyer
-              </Link>
-            </Button>
-            <Button
-              size="lg"
-              asChild
-              variant="outline"
-              className="gap-2 border-sidebar-border bg-transparent px-8 text-slate-200 hover:bg-white/5 hover:text-white"
-            >
-              <Link to="/owner">
-                <Headset className="size-4" aria-hidden="true" />
-                Open owner console
               </Link>
             </Button>
           </div>

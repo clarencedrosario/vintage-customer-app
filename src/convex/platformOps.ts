@@ -27,8 +27,10 @@ import {
   type MutationCtx,
 } from "./_generated/server";
 import { getCurrentUser } from "./users";
+import { getAuthSessionId } from "@convex-dev/auth/server";
 import { getAccessContext } from "./access";
 import { platformActorOf } from "./workforce";
+import { internalMfaState, requireInternalMfa } from "./twofactor";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   TICKET_PRIORITIES,
@@ -89,6 +91,10 @@ async function requirePlatformCapability(
   if (!actor.isPlatformAdmin && !actor.capabilities.includes(cap)) {
     throw new Error(`This platform action requires ${cap}.`);
   }
+  // Internal platform accounts (owner + workforce) must have completed the
+  // internal-MFA session challenge. Capability is checked first so
+  // non-internal callers keep receiving the capability error.
+  await requireInternalMfa(ctx);
 }
 
 /** Non-throwing variant for visibility decisions. */
@@ -97,7 +103,17 @@ async function hasPlatformCapability(
   cap: string,
 ): Promise<boolean> {
   const actor = await platformActorOf(ctx);
-  return !!actor && (actor.isPlatformAdmin || actor.capabilities.includes(cap));
+  if (!actor || !(actor.isPlatformAdmin || actor.capabilities.includes(cap))) {
+    return false;
+  }
+  // Capability-holding internal accounts read platform tickets only after
+  // their session completed the MFA challenge; everyone else is unchanged.
+  const state = await internalMfaState(
+    ctx.db,
+    { _id: actor.userId as never },
+    await getAuthSessionId(ctx),
+  );
+  return state.satisfied;
 }
 
 /**
@@ -115,6 +131,7 @@ async function operatorForCapability(
   if (!actor.isPlatformAdmin && !actor.capabilities.includes(cap)) {
     throw new Error(`This platform action requires ${cap}.`);
   }
+  await requireInternalMfa(ctx);
   const user = await actorOf(ctx);
   if (!user) throw new Error("Sign in required.");
   return user;

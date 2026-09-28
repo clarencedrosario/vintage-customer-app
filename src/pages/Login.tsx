@@ -17,11 +17,7 @@ import { Suspense, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { useMutation, useQuery } from "convex/react";
-
-function resolveRedirectAfterAuth(returnTo: string | null): string {
-  if (returnTo?.startsWith("/") && !returnTo.startsWith("//")) return returnTo;
-  return "/dashboard";
-}
+import { safeInternalPath as resolveRedirectAfterAuth } from "@/lib/appLinks";
 
 /** OTP codes can also be 6-hex recovery codes typed into the same box. */
 function Login() {

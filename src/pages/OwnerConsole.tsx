@@ -404,6 +404,9 @@ export default function OwnerConsole() {
   const [reopenReason, setReopenReason] = useState("");
   const [rebuilding, setRebuilding] = useState(false);
   const [activating, setActivating] = useState(false);
+  const [challengeCode, setChallengeCode] = useState("");
+  const [challengeBusy, setChallengeBusy] = useState(false);
+  const verifyMfa = useMutation(api.twofactor.verifyForSession);
 
   const act = async (fn: () => Promise<unknown>, ok: string) => {
     try {
@@ -422,6 +425,87 @@ export default function OwnerConsole() {
     ...(amAdmin ? OWNER_PLATFORM_CAPS : []),
     ...(identity?.capabilities ?? []),
   ]);
+
+  // Internal accounts (owner + workforce) must complete the per-session
+  // MFA challenge before ANY console content renders. The sign-in OTP is
+  // authentication, not a second factor — this is the second factor.
+  const needsMfaChallenge =
+    identity?.internalMfa?.enrolled === true &&
+    identity.internalMfa.satisfied === false;
+  const mfaIncomplete =
+    identity !== null &&
+    identity !== undefined &&
+    (identity.internalMfa === undefined ||
+      identity.internalMfa.enrollmentExists === true) &&
+    identity.internalMfa?.enrolled !== true;
+
+  if (isPlatformIdentity && needsMfaChallenge) {
+    return (
+      <ChamberShell subtitle="CJ Global" title="Operations console">
+        <Card>
+          <CardContent className="space-y-4 pt-6">
+            <p className="flex items-start gap-2 text-sm text-muted-foreground">
+              <ShieldAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+              Two-factor challenge required for this session. Enter the 6-digit
+              code from your authenticator app, or one of your recovery codes.
+            </p>
+            <div className="flex gap-2">
+              <Input
+                value={challengeCode}
+                onChange={(e) => setChallengeCode(e.target.value)}
+                placeholder="123456 or recovery code"
+                className="max-w-[240px] font-mono"
+              />
+              <Button
+                size="sm"
+                disabled={challengeBusy || challengeCode.trim().length === 0}
+                onClick={async () => {
+                  setChallengeBusy(true);
+                  try {
+                    await verifyMfa({ code: challengeCode.trim() });
+                    setChallengeCode("");
+                    window.location.reload();
+                  } catch (err) {
+                    toast.error(
+                      err instanceof Error ? err.message : "Verification failed.",
+                    );
+                  } finally {
+                    setChallengeBusy(false);
+                  }
+                }}
+              >
+                Verify
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              No authenticator set up yet? Enroll under Settings → Security —
+              the emailed sign-in code does not count as a second factor.
+            </p>
+          </CardContent>
+        </Card>
+      </ChamberShell>
+    );
+  }
+
+  if (isPlatformIdentity && mfaIncomplete) {
+    return (
+      <ChamberShell subtitle="CJ Global" title="Operations console">
+        <Card>
+          <CardContent className="space-y-3 pt-6">
+            <p className="flex items-start gap-2 text-sm text-muted-foreground">
+              <ShieldAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+              Two-factor authentication is required for platform accounts.
+              Complete enrollment under Settings → Security (authenticator app
+              plus recovery codes), then return here.
+            </p>
+            <Button asChild size="sm" variant="outline">
+              <Link to="/settings">Open Settings → Security</Link>
+            </Button>
+          </CardContent>
+        </Card>
+      </ChamberShell>
+    );
+  }
 
   if (amAdmin === undefined || identity === undefined) {
     return (

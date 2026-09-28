@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import type { QueryCtx } from "./_generated/server";
+import type { QueryCtx, MutationCtx } from "./_generated/server";
 import { getCurrentUser } from "./users";
 import { base32Decode, base32Encode, hmacSha1, sha256Hex } from "./crypto";
 import { getAuthSessionId } from "@convex-dev/auth/server";
@@ -37,6 +37,17 @@ function totpAt(secret: Uint8Array, atMs: number): string {
   return String(bin % 1_000_000).padStart(6, "0");
 }
 
+type InternalMfaState = {
+  /** A TOTP enrollment row exists (may be half-finished). */
+  enrollmentExists: boolean;
+  /** TOTP enabled AND a live recovery-code set exists. */
+  enrolled: boolean;
+  /** Enrolled internal accounts always face the challenge. */
+  challengeNeeded: true | false;
+  /** This auth session has completed the challenge. */
+  satisfied: boolean;
+};
+
 /** Verify a 6-digit code, tolerating one step of clock drift. */
 function verifyTotp(secret: string, code: string, atMs = Date.now()): boolean {
   const key = base32Decode(secret);
@@ -46,6 +57,15 @@ function verifyTotp(secret: string, code: string, atMs = Date.now()): boolean {
     }
   }
   return false;
+}
+
+/**
+ * Exported for tests and tooling only: the TOTP code a given base32 secret
+ * produces at a point in time (drift 0). Never used for verification inside
+ * the app — verifyTotp stays the single authority.
+ */
+export function totpCodeAt(secret: string, atMs = Date.now()): string {
+  return totpAt(base32Decode(secret), atMs);
 }
 
 async function enrollmentFor(db: QueryCtx["db"], userId: Id<"users">) {
@@ -227,6 +247,95 @@ export const verifyForSession = mutation({
     }
   },
 });
+
+/**
+ * INTERNAL-ACCOUNT MFA STATE (computed, not stored).
+ *
+ * A user is internally enrolled once their TOTP enrollment row exists AND
+ * their recovery-code set is non-empty: both legs are created in one
+ * enrollment transaction, so a half-enrolled account (secret confirmed but
+ * recovery codes never stored) is impossible through the UI flow and reads
+ * as not-yet-enrolled. Internal accounts with an incomplete enrollment are
+ * refused on challenge; everyone else gets a false.
+ *
+ * Deliberately NOT a stored "isInternal" flag: internal staff and owners
+ * both come and go through existing audited mechanisms (workforce
+ * suspension, role changes, owner flag), and any flag would drift. Internal
+ * status is derived per request from the audited state that already exists.
+ */
+export async function internalMfaState(
+  db: QueryCtx["db"],
+  user: { _id: Id<"users"> },
+  sessionId: string | null,
+): Promise<InternalMfaState> {
+  const rec = await enrollmentFor(db, user._id);
+  if (!rec)
+    return {
+      enrollmentExists: false,
+      enrolled: false,
+      challengeNeeded: false,
+      satisfied: false,
+    };
+  const codes = await db
+    .query("recoveryCodes")
+    .withIndex("by_user", (q) => q.eq("userId", user._id))
+    .collect();
+  const enrolled = !!rec.enabled && codes.length > 0;
+  if (!enrolled)
+    return {
+      enrollmentExists: true,
+      enrolled: false,
+      challengeNeeded: false,
+      satisfied: false,
+    };
+  let satisfied = false;
+  if (sessionId) {
+    const sess = await db
+      .query("twoFactorSessions")
+      .withIndex("by_session", (q) => q.eq("sessionId", sessionId))
+      .unique();
+    satisfied = !!sess;
+  }
+  return { enrollmentExists: true, enrolled: true, challengeNeeded: true, satisfied };
+}
+
+/**
+ * SERVER-SIDE GATE for internal platform surfaces (owner console, workforce
+ * management, platform operations mutations).
+ *
+ * Policy for internal platform accounts (owner flag or active workforce
+ * role): TOTP-based MFA with recovery codes is REQUIRED, and each session
+ * must complete the challenge before any internal mutation. The emailed
+ * sign-in OTP is an authentication mechanism, NOT a second factor — it
+ * proves mailbox possession at login time and never satisfies this gate.
+ *
+ * Three refusals, each with its own recovery instruction:
+ *  1. not enrolled          → enroll first (Settings → Security);
+ *  2. half-finished         → complete enrollment (secret confirmed but
+ *     recovery codes never stored);
+ *  3. enrolled, unsatisfied → enter a TOTP or recovery code (challenge UI).
+ */
+export async function requireInternalMfa(
+  ctx: QueryCtx | MutationCtx,
+): Promise<void> {
+  const user = await getCurrentUser(ctx);
+  if (!user || user.isAnonymous) throw new Error("Sign in required.");
+  const sessionId = await getAuthSessionId(ctx);
+  const state = await internalMfaState(ctx.db, user, sessionId);
+  if (state.enrollmentExists && !state.enrolled) {
+    throw new Error(
+      "Finish two-factor enrollment (Settings → Security) before using the platform console.",
+    );
+  }
+  if (!state.enrolled) {
+    throw new Error(
+      "Two-factor enrollment is required for platform accounts (Settings → Security).",
+    );
+  }
+  if (!state.satisfied) {
+    throw new Error("Two-factor challenge required for this session.");
+  }
+}
 
 /** Has the current session satisfied two-factor? */
 export const sessionSatisfied = query({

@@ -13,6 +13,14 @@
 //      preview.
 // In-app navigation (React Router <Link> / navigate) stays RELATIVE and
 // never uses this helper.
+//
+// REBUILD REQUIREMENT: VITE_PUBLIC_APP_URL is injected by Vite at BUILD
+// time (it becomes a literal inside the shipped JS bundle). Changing it —
+// via the platform env/Keys UI or .env — takes effect only after the
+// frontend is REBUILT and REDEPLOYED. Server-side Convex env vars (set via
+// `bunx convex env set`) are unrelated and need no rebuild. In practice:
+// connect the production domain → set VITE_PUBLIC_APP_URL → redeploy the
+// frontend; then all newly generated shareable links use the new origin.
 // =====================================================================
 
 /**
@@ -70,4 +78,32 @@ export function appOrigin(): string {
 /** Absolute URL for an in-app path, e.g. appLink("/owner"). */
 export function appLink(path: string): string {
   return `${appOrigin()}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+/**
+ * Post-authentication redirect guard (open-redirect safe).
+ *
+ * Distinct concern from appLink(): auth redirects must stay RELATIVE,
+ * same-origin paths — an absolute or scheme-relative value in `?returnTo=`
+ * would send the freshly authenticated session elsewhere. Shareable links
+ * (appLink) are the opposite: always absolute, built on appOrigin().
+ * Returns the fallback (default "/dashboard") for anything not a plain
+ * internal path.
+ */
+export function safeInternalPath(
+  value: string | null | undefined,
+  fallback = "/dashboard",
+): string {
+  // Browsers normalize "\\" to "/" in URLs, so ANY backslash is treated as
+  // hostile ("/x\\evil.example" must never masquerade as a path). Genuine
+  // router paths in this app contain no backslashes.
+  if (
+    value &&
+    value.startsWith("/") &&
+    !value.startsWith("//") &&
+    !value.includes("\\")
+  ) {
+    return value;
+  }
+  return fallback;
 }
