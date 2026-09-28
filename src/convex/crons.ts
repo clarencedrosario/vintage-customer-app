@@ -51,4 +51,17 @@ crons.daily(
   {},
 );
 
+// Daily legal-source sweep (26.8): scheduler-triggered ingestion tick.
+// Opens run rows per registered source (with duplicate prevention) and
+// records a legalSweepLogs execution row (trigger=schedule) — the record
+// that distinguishes scheduled runs from manual retries. No automated
+// fetcher is configured: opened runs are completed by explicit
+// authenticated ingestion (scripts/ingest-legal-text.mjs).
+crons.daily(
+  "legal-source-ingestion-sweep",
+  { hourUTC: 18, minuteUTC: 30 }, // 00:00 Asia/Kolkata
+  internal.legalIntel.scheduledSweep,
+  {},
+);
+
 export default crons;

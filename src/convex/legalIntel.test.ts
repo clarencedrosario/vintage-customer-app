@@ -15,7 +15,7 @@ import { describe, expect, it, beforeEach } from "vitest";
 import { convexTest } from "convex-test";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
-import { checkCitation, extractCitations } from "../lib/legalIntel";
+import { checkCitation, extractCitations, detectUncitedAssertions } from "../lib/legalIntel";
 
 const modules: Record<string, () => Promise<unknown>> = (import.meta as unknown as {
   glob: (p: string) => Record<string, () => Promise<unknown>>;
@@ -281,6 +281,19 @@ describe("Advokate Legal Intelligence — real backend slice", () => {
     expect(cites[0]!.quote).toMatch(/punished with death/);
     expect(cites[1]!.stableKey).toBe("in:statute:bns-2023");
     expect(cites[1]!.anchor).toBe("§ 103");
+  });
+
+  it("un-cited assertion detector flags substantive claims with no citation marker", () => {
+    const withCitation =
+      "Whoever commits murder shall be punished under [in:statute:ipc-1860 § 302] as the stored text provides.";
+    const withoutCitation =
+      "The accused shall be liable to life imprisonment because the courts have consistently held that murder attracts the maximum sentence in every such case before the trial court.";
+    expect(detectUncitedAssertions(withCitation)).toEqual([]);
+    const flagged = detectUncitedAssertions(withoutCitation);
+    expect(flagged.length).toBe(1);
+    expect(flagged[0]).toMatch(/liable to life imprisonment/);
+    // Procedural/labelled sentences are not flagged.
+    expect(detectUncitedAssertions("Missing information: the incident date.")).toEqual([]);
   });
 
   it("ingest pipeline: dedupe, freshness, and failure handling on real run rows", async () => {

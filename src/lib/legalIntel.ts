@@ -387,6 +387,34 @@ export function extractCitations(text: string): CitationToVerify[] {
   return out;
 }
 
+/**
+ * Un-cited assertion detection (26.6, turn 7): a generated research answer
+ * must not leave substantive claims ("shall", "must", "is liable", court
+ * holdings…) hanging without a citation marker. This flags sentences that
+ * contain substantive language but no [source] marker / stable key. Pure —
+ * unit-tested; the runner runs it next to extractCitations.
+ */
+export function detectUncitedAssertions(text: string): string[] {
+  const sentences = text
+    .replace(/\s+/g, " ")
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const SUBSTANTIVE =
+    /\b(shall|must|may not|is liable|are liable|liable to|governs|governed|prescribed|prohibits|prohibited|void|valid|barred|time[- ]barred|entitled|acquitted|convicted|held|holds|held that|overruled|reversed|mandatory|offence|punishable|sentence of)\b/i;
+  const CITED =
+    /\[(?:[^\]]+)?in:[a-z0-9][^\]]*\]|\[[^\]]+p\.\s*\d+[^\]]*\]|in:[a-z0-9][a-z0-9:\-]*|\bpara \d|§\s*\d/;
+  const flags: string[] = [];
+  for (const s of sentences) {
+    if (s.length < 25) continue;
+    if (/^(for example|note:|assumption:|⚠|warning:)/i.test(s)) continue;
+    if (!SUBSTANTIVE.test(s)) continue;
+    if (CITED.test(s)) continue;
+    flags.push(s.slice(0, 300));
+  }
+  return flags.slice(0, 20);
+}
+
 /** Validate one citation against the stored corpus. Pure. */
 export function checkCitation(
   citation: CitationToVerify,

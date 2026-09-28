@@ -730,35 +730,84 @@ export const verifyCitations = mutation({
 export const runIngestionSweep = action({
   args: { maxSources: v.optional(v.number()) },
   handler: async (ctx, args) => {
-    // Actions cannot use the query-side getCurrentUser helper; derive the
-    // identity through the auth layer and verify operator status in a
-    // query (never trust the JWT claims alone).
+    // Actions have no db handle: derive identity via the auth layer and
+    // verify operator status in a query (never trust JWT claims alone).
     const { getAuthUserId } = await import("@convex-dev/auth/server");
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Platform operator access required.");
     const op = await ctx.runQuery(internal.legalIntel.operatorCheck, { userId });
     if (!op.isOperator) throw new Error("Platform operator access required.");
-    const limit = Math.min(args.maxSources ?? 50, 200);
-    const sources = await ctx.runQuery(internal.legalIntel.allSourceIds, {});
-    let opened = 0;
-    let skipped = 0;
-    const runIds: string[] = [];
-    for (const s of sources.slice(0, limit)) {
-      const r = await ctx.runMutation(internal.legalIntel.openRun, { sourceId: s._id });
-      if (r.opened) {
-        opened += 1;
-        runIds.push(String(r.runId));
-      } else {
-        skipped += 1;
-      }
-    }
+    const r: { opened: number; skipped: number; runIds: string[] } =
+      await ctx.runMutation(internal.legalIntel.sweepOnce, { trigger: "manual" });
     return {
-      opened,
-      skipped,
-      runIds,
-      note: "Runs are state machine rows only. This deployment has no automated fetcher configured: a scheduled action cannot silently rewrite verified law text. Each run is completed by an explicit authenticated ingestion (scripts/ingest-legal-text.mjs) which records updated/failed against the open run — duplicate prevention above keeps retried sweeps from double-enqueueing a source.",
+      ...r,
+      note: "Runs are state machine rows only. This deployment has no automated fetcher configured: a scheduled action cannot silently rewrite verified law text. Each run is completed by an explicit authenticated ingestion (scripts/ingest-legal-text.mjs) which records updated/failed against the open run — duplicate prevention keeps retried sweeps from double-enqueueing a source.",
     };
   },
+});
+
+/**
+ * Sweep core shared by the manual action and the scheduler: opens runs for
+ * every registered source WITH duplicate prevention (a source with an
+ * unfinished run is skipped) and records one legalSweepLogs row per
+ * execution — the execution record that shows who/what triggered it.
+ */
+async function sweepCore(ctx: MutationCtx, trigger: "schedule" | "manual") {
+  const sources = await ctx.db.query("legalSources").collect();
+  let opened = 0;
+  let skipped = 0;
+  const runIds: Id<"ingestionRuns">[] = [];
+  for (const s of sources.slice(0, 200)) {
+    const unfinished = await ctx.db
+      .query("ingestionRuns")
+      .withIndex("by_source", (q) => q.eq("sourceId", s._id))
+      .collect();
+    if (unfinished.some((r) => r.finishedAt === undefined)) {
+      skipped += 1;
+      continue;
+    }
+    const runId = await ctx.db.insert("ingestionRuns", {
+      sourceId: s._id,
+      startedAt: Date.now(),
+      attempts: (unfinished.sort((a, b) => b.startedAt - a.startedAt)[0]?.attempts ?? 0) + 1,
+      triggeredBy: trigger,
+    });
+    opened += 1;
+    runIds.push(runId);
+  }
+  await ctx.db.insert("legalSweepLogs", {
+    triggeredAt: Date.now(),
+    trigger,
+    opened,
+    skipped,
+    sourceCount: Math.min(sources.length, 200),
+    runIds,
+    note:
+      trigger === "schedule"
+        ? "Scheduler-triggered (crons.ts). No automated fetcher is configured: opened runs are completed by explicit authenticated ingestion; skipped = dedupe."
+        : "Manually triggered by a platform operator.",
+  });
+  return { opened, skipped, runIds };
+}
+
+/** Manual sweep (operator-gated action) — same core as the scheduled path. */
+export const sweepOnce = internalMutation({
+  args: { trigger: v.union(v.literal("schedule"), v.literal("manual")) },
+  handler: async (ctx, args) => {
+    const r = await sweepCore(ctx, args.trigger);
+    return { ...r, runIds: r.runIds.map(String) };
+  },
+});
+
+/**
+ * Scheduler entry (26.8): fires from crons.ts on a fixed cadence. No
+ * identity exists on a cron — this is the SCHEDULED trigger path, and each
+ * execution writes a legalSweepLogs row (trigger=schedule) so the record
+ * shows the run was scheduler-triggered, not a manual retry.
+ */
+export const scheduledSweep = internalMutation({
+  args: {},
+  handler: async (ctx) => sweepCore(ctx, "schedule"),
 });
 
 /**

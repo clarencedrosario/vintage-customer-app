@@ -1196,6 +1196,20 @@ export const legalIntelTables = {
     bodyChunk: v.string(),
     createdAt: v.number(),
   }).index("by_run", ["runKey", "seq"]),
+
+  // Scheduler-triggered sweep executions (26.8): one row per actual run of
+  // the scheduled handler, with what it opened/skipped. This is the
+  // execution RECORD that distinguishes a scheduler-triggered run from a
+  // manual retry — the cron fires it and the row proves it happened.
+  legalSweepLogs: defineTable({
+    triggeredAt: v.number(),
+    trigger: v.union(v.literal("schedule"), v.literal("manual")),
+    opened: v.number(),
+    skipped: v.number(),
+    sourceCount: v.number(),
+    runIds: v.optional(v.array(v.id("ingestionRuns"))),
+    note: v.optional(v.string()),
+  }).index("by_time", ["triggeredAt"]),
 };
 
 export const platformOpsTables = {

@@ -527,8 +527,12 @@ export const runJob = internalAction({
     // every check is persisted, and a failed report prepends a blocking
     // banner so the answer can never present itself as verified.
     if (payload.kind === "legal_research") {
-      const { extractCitations, checkCitation } = await import("../lib/legalIntel");
+      const { extractCitations, checkCitation, detectUncitedAssertions } = await import("../lib/legalIntel");
       const citations = extractCitations(result.text).slice(0, 10);
+      // Substantive sentences with NO citation marker are themselves
+      // validation failures: they are persisted as failed checks so the
+      // answer cannot be presented as verified.
+      const uncited = detectUncitedAssertions(result.text);
       if (citations.length > 0) {
         const checks: Array<{
           stableKey: string;
@@ -558,17 +562,67 @@ export const runJob = internalAction({
             ok: chk.ok,
           });
         }
+        for (const sentence of uncited) {
+          checks.push({
+            stableKey: "(no citation given)",
+            quote: sentence,
+            sourceExists: false,
+            textIngested: false,
+            anchorValid: false,
+            quoteVerified: false,
+            problem:
+              "Substantive assertion without any citation marker — must be cited to a verified source or removed.",
+            ok: false,
+          });
+        }
         const report = await ctx.runMutation(internal.legalIntel.attachCitationChecks, {
           jobId: args.jobId,
           checks,
         });
-        if (report.status === "needs_citation_review") {
+        if (report && report.status === "needs_citation_review") {
           const failures = report.failed
             .map((f) => `- ${f.stableKey}: ${f.problem}`)
             .join("\n");
           result.text =
             `⚠ CITATION VALIDATION FAILED — this draft is marked needs_citation_review and MUST NOT be treated as verified.\n${failures}\n\n---\n\n${result.text}`;
         }
+      } else if (uncited.length > 0) {
+        // Citations exist nowhere but substantive claims do — same gate.
+        result.text =
+          `⚠ CITATION VALIDATION FAILED — ${uncited.length} substantive assertion(s) carry no citation marker (see validation rows). This draft MUST NOT be treated as verified.\n\n---\n\n${result.text}`;
+        await ctx.runMutation(internal.legalIntel.attachCitationChecks, {
+          jobId: args.jobId,
+          checks: uncited.map((sentence) => ({
+            stableKey: "(no citation given)",
+            quote: sentence,
+            sourceExists: false,
+            textIngested: false,
+            anchorValid: false,
+            quoteVerified: false,
+            problem:
+              "Substantive assertion without any citation marker — must be cited to a verified source or removed.",
+            ok: false,
+          })),
+        });
+      } else {
+        // No citations and no substantive assertions: nothing to validate,
+        // but record that the answer was NOT citation-validated.
+        await ctx.runMutation(internal.legalIntel.attachCitationChecks, {
+          jobId: args.jobId,
+          checks: [
+            {
+              stableKey: "(no citations extracted)",
+              sourceExists: false,
+              textIngested: false,
+              anchorValid: false,
+              quoteVerified: false,
+              problem:
+                "No citations were extracted from this answer — it has not passed source validation and must be treated as unverified.",
+              ok: false,
+            },
+          ],
+        });
+        result.text = `⚠ NOT CITATION-VALIDATED — the answer contained no extractable citations; treat as unverified.\n\n---\n\n${result.text}`;
       }
     }
 
