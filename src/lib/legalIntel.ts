@@ -180,6 +180,24 @@ export function resolveApplicability(
         .join("; ")}). Confirm the savings & transitional provisions before stating which code governs — pending proceedings and past conduct may remain under the former law.`,
     );
   }
+  // A succeeding code in the SAME family that commences shortly AFTER the
+  // matter date: the former law governs the conduct date, but the matter's
+  // CURRENT stage may have moved to the new code under savings rules —
+  // this is exactly the question that must not be answered by date alone.
+  const succeeding = pool.filter(
+    (p) =>
+      p.stableKey !== governing.stableKey &&
+      p.inForceFrom !== undefined &&
+      p.inForceFrom > onDate &&
+      p.inForceFrom <= addDays(onDate, 730),
+  );
+  if (succeeding.length > 0) {
+    reviewFlags.push(
+      `A succeeding statute in this family commences after the matter date (${succeeding
+        .map((s) => `${s.title} w.e.f. ${s.inForceFrom}`)
+        .join("; ")}). The former law governs the conduct date, but savings/transitional provisions may place this matter's current stage under the new code — verify the procedural stage before advising.`,
+    );
+  }
   if (
     governing.inForceFrom &&
     onDate >= governing.inForceFrom &&
@@ -342,15 +360,20 @@ function normText(t: string): string {
 export function extractCitations(text: string): CitationToVerify[] {
   const out: CitationToVerify[] = [];
   const seen = new Set<string>();
-  const re = /\[?(in:[a-z0-9][a-z0-9:\-]*)([^\]\n]{0,60})\]?([^\n]{0,300})/g;
+  const re = /\[?(in:[a-z0-9][a-z0-9:\-]*)([^\]\n]{0,40})\]?/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
     const stableKey = m[1];
-    const tail = `${m[2] ?? ""} ${m[3] ?? ""}`;
+    const bracketTail = m[2] ?? "";
+    // Look ahead only up to the next citation/bracket so one citation's
+    // window can never swallow the next one.
+    const rest = text.slice(m.index + m[0].length);
+    const stop = rest.search(/in:[a-z0-9]|\[/);
+    const window = rest.slice(0, stop < 0 ? 260 : stop);
     const anchorM =
-      /§\s*([0-9]{1,3}[A-Z]?)/.exec(tail) ??
-      /(?:\bs|\bsection)\s+([0-9]{1,3}[A-Z]?)/i.exec(m[2] ?? "");
-    const quoteM = /[\u201C"]([^\u201D\"]{20,400})[\u201D"]/.exec(tail);
+      /§\s*([0-9]{1,3}[A-Z]?)/.exec(`${bracketTail} ${window.slice(0, 24)}`) ??
+      /\b(?:s|section)\s+([0-9]{1,3}[A-Z]?)/i.exec(bracketTail);
+    const quoteM = /[\u201C"]([^\u201D\"]{12,400})[\u201D"]/.exec(window);
     const dedupe = `${stableKey}|${anchorM?.[1] ?? ""}`;
     if (seen.has(dedupe)) continue;
     seen.add(dedupe);

@@ -323,12 +323,12 @@ describe("Advokate Legal Intelligence — real backend slice", () => {
       return v;
     });
     await op.mutation(api.legalIntel.recordIngestionResult, {
-      runId: r1.runId,
+      runId: r1.runId!,
       outcome: "updated",
       newVersionId: versionId,
     });
     const after = await t.run(async (ctx) => {
-      const run = await ctx.db.get(r1.runId);
+      const run = await ctx.db.get(r1.runId!);
       const source = await ctx.db.get(bsaId);
       return { run, source };
     });
@@ -341,11 +341,11 @@ describe("Advokate Legal Intelligence — real backend slice", () => {
       ctx.runMutation(internal.legalIntel.openRun, { sourceId: bsaId }),
     );
     await op.mutation(api.legalIntel.recordIngestionResult, {
-      runId: r3.runId,
+      runId: r3.runId!,
       outcome: "failed",
       error: "simulated upstream failure (test)",
     });
-    const failedRun = await t.run((ctx) => ctx.db.get(r3.runId));
+    const failedRun = await t.run((ctx) => ctx.db.get(r3.runId!));
     expect(failedRun?.outcome).toBe("failed");
     expect(failedRun?.error).toMatch(/simulated upstream failure/);
     expect(failedRun?.lastSuccessfulAt).toBeUndefined();

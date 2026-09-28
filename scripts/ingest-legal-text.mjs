@@ -118,12 +118,10 @@ for (const rec of manifest) {
   }
 }
 
-// POCSO 2012: official text NOT obtainable in this environment — record the
-// failure against a real ingestion run (failure handling path).
-try {
-  const openRes = run("legalIntel:openRun", { sourceId: "pocso-placeholder" });
-  console.log("unexpected", openRes);
-} catch { /* expected: needs real id; handled below via dedicated run */ }
+// POCSO 2012 (in:statute:pocso-2012) is deliberately NOT attempted here:
+// its official text was not obtainable (India Code HTTP 504 etc.). Its
+// failure is recorded as a real ingestion run row via recordResultCli —
+// see ADVOKATE_PROGRESS.md turn-6 for the executed demonstration.
 
 console.log(JSON.stringify({ succeededCount: results.succeeded.length, failed: results.failed }, null, 2));
 console.log("INGEST_DONE");

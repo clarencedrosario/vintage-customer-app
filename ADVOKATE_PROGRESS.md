@@ -1107,3 +1107,158 @@ and `docs/DELIVERY.md` (module-by-module history).
 
 Checkpoint before starting: create `backups/source-checkpoint-<date>.tar.gz`
 (excluding `backups/`) and record results in this file.
+
+---
+
+# Turn 6 — 28 Sep 2026: Legal Intelligence source-backed workflow (9 demands)
+
+## Evidence tiers (the 5 required distinctions)
+
+| Tier | Status | Evidence |
+|---|---|---|
+| 1. Infrastructure implemented | **DONE** | Schema tables, applicability engine, ingestion state machine, citation validator, answer contract — all shipped + unit/backend tested (see below). |
+| 2. Source metadata registered | **DONE** | 10 sources (8 statutes incl. POCSO + 2 SCI judgments) with publisher, sourceUrl, collectionDate, commencement, code family; India coverage row; 51-country European register with defined inclusion criteria. |
+| 3. Text ingested and searchable | **DONE for 7 statutes + 2 bounded judgments; POCSO FAILED honestly** | Live deployment (moonlit-elk-307) holds real ingested text with section anchors; see per-source table below. |
+| 4. Source-backed generation tested | **PARTIAL — automated pipeline only** | No-LLM end-to-end checks ran over the real corpus on the live deployment; the LLM step could NOT be demonstrated (no OPENAI_API_KEY on this deployment — runner honestly errors rather than fabricating). Backend citation validation is wired into the runner for when the key is added. Browser verification NOT run this turn. |
+| 5. Legal accuracy independently reviewed | **NOT DONE — never simulated** | No qualified lawyer has reviewed any mapping, applicability flag, or answer. Cross-refs are `verified` (evidence-checked) NOT `lawyer_reviewed`; eval cases carry no reviewer names. |
+
+## Demand-by-demand record
+
+**1. Actual statute text ingested (successes/failures separate).**
+
+Successes (7) — all with immutable v2 versions, section-boundary anchors,
+PDF sha256 provenance, publisher, retrieval URL, collection date:
+
+| Source | Sections | Official source actually used |
+|---|---|---|
+| IPC 1860 | 511/511 (incl. repeal ranges as omitted anchors) | MHA reprint (mha.gov.in PDF) |
+| CrPC 1973 | 483/484 (s.484 omitted in source) | MHA (mha.gov.in PDF) |
+| Evidence Act 1872 | 167/167 | India Code text; India Code host returned HTTP 504 on every attempt — retrieved via a verified byte-identical reproduction (lawvisionattorneys.com), provenance records BOTH |
+| BNS 2023 | 358/358 | Gazette of India (Extraordinary) PDF via MHA |
+| BNSS 2023 | 531/531 | Gazette of India PDF via MHA |
+| BSA 2023 | 170/170 | Gazette of India PDF via MHA |
+| Constitution of India | 385 article anchors | Official Government of India edition (s3waas CDN), as-amended edition dated in provenance |
+
+Failure (1): **POCSO 2012** — official full text NOT obtainable: India Code
+bitstream host HTTP 504 (repeated, also via indiacode.gov.in mirror), India
+Code deep links hang, India.gov.in JS shell has no links, WCD/NCPCR/mission
+vatsalya/eGazette unreachable or wrong content, MHA copy is an advisory
+letter (not the Act), third-party bare-act PDFs are login-walled. NO text
+was invented: the row keeps its labelled stub, a real ingestion run row
+records `failed` with the specific reason + review note, and the backend
+citation validator blocks any quote from this source (checked in tests).
+
+Section integrity evidence: sequential-window parser (repeal-range aware),
+quote-fidelity spot checks against stored text (IPC §302, BNS §103/§318/§358,
+BNSS §531, BSA §170 — savings provisions located in the corpus), anomalies
+array in the extraction manifest. One wrong earlier draft of the review-flag
+text cited "s.356 BNSS / s.167 BSA" as savings sections; the corpus check
+showed those are NOT savings provisions (trial-in-absentia / production of
+documents) and the flag now cites the VERIFIED sections (s.531(2)(a) BNSS /
+s.170(2) BSA) — an example of the corpus catching its own errors.
+
+**2. Question → jurisdiction/dates → retrieval → answer → clickable passage.**
+`researchDryRun` (internal, no LLM) demonstrates the full chain on the live
+deployment with REAL ingested text:
+- 2024-03-01 + penal family → IPC governs (reason string includes
+  commencement), pinpoint § 302 retrieved with heading "Punishment for
+  murder" and a quote-verifying passage offset (clickable), era review
+  flags fire, IPC↔BNS cross-refs listed as research aids.
+- 2024-08-15 + § 103 → BNS governs, § 103 retrieved with verbatim text.
+- France → refusal contract fires inside the same pipeline.
+Tests: `legalIntel.test.ts` "automated end-to-end check…" (ingests a real
+excerpt, asserts anchor, quote, applicability, flags, refusal). NOT claimed:
+LLM-written answers (tier 4), browser pass.
+
+**3. Temporal applicability (no blanket July-2024 switch).**
+`resolveApplicability` resolves within the CODE FAMILY and now returns
+`reviewFlags`: repeal-era savings around the date; a succeeding code
+commencing shortly after the matter date (current stage may have moved under
+savings); the within-2-years transitional window naming the verified savings
+sections; mapped no-equivalent provisions; special acts never displace the
+general code (tested: POCSO does not displace IPC). Flags are surfaced, not
+resolved: unresolved applicability is always labelled for lawyer review.
+
+**4. IPC↔BNS mappings as research aids.**
+All 6 rows carry reviewStatus (`verified` — evidence-checked, NOT
+`lawyer_reviewed`), evidenceNote quoting/deriving from ingested text,
+evidenceUrl, and for the `no_equivalent` row (124A) `nearestProvisions`
+naming BNS s 152 — explicitly distinguishing "no direct textual equivalent"
+from "no potentially relevant provision" in the notes. The applicability
+engine surfaces them alongside the era-correct code without substitution.
+
+**5. Citation validation in backend code.**
+Pure `checkCitation` (existence / pinpoint-vs-section-boundaries /
+whitespace-normalized quote fidelity with offset) + `extractCitations`;
+runner wires them for legal_research after generation: checks persisted to
+`legalCitationChecks`, any failure flips status to `needs_citation_review`
+and prepends a blocking banner before the result is presented. Tested:
+fabricated source, wrong pinpoint, invented quote, un-ingested source — all
+blocked. Whether a verified passage SUPPORTS the claim is explicitly left as
+a separate legal judgement (lawyer review), never automated.
+
+**6. One actual scheduled incremental-ingestion run demonstrated.**
+Real run rows on the live deployment (verified by readback):
+- `openRun` twice on BSA → first `{opened:true}`, second
+  `{opened:false,skipped:true}` (duplicate prevention).
+- POCSO run opened then closed `failed` with the specific reason, review
+  note set, `lastSuccessfulAt` stays unset.
+- BSA text re-staged and ingested with `closeRunId` → run closed
+  `updated` at attempts=2, new version v3, `collectionDate` and
+  `lastSuccessfulAt` updated through the state machine.
+- `runIngestionSweep` now fail-honest: documents that no automated fetcher
+  is configured (runs are completed by authenticated ingestion, never by a
+  scheduler silently rewriting law text), reports opened/skipped, and is
+  operator-gated. Backend tests cover dedupe, freshness update and failure
+  recording on real rows.
+
+**7. Bounded real judgments.**
+Two SCI judgments retrieved as full PDFs from official government hosts
+(NARCOORD gov.in; AP High Court portal) and ingested as bounded
+paragraph/page-anchored excerpts: Tofan Singh v. State of Tamil Nadu (29 Oct
+2020; 43 paragraph anchors; no reporter citation printed on the document so
+none invented — recorded by appeal number + date) and K.M. Nanavati v. State
+of Maharashtra (24 Nov 1961; page anchors; 1961 judgments are not
+paragraph-numbered). Court, bench, decided date, citations-as-printed,
+source URL and PDF sha256 preserved. `treatment` deliberately UNSET: no
+precedent-treatment claim is made without a treatment source. India coverage
+`judgments` → `partial` (2 bounded excerpts, not a corpus).
+
+**8. European register + inclusion criteria.**
+Criteria now defined (ADVOKATE_REQUIREMENTS §26.4): broadly recognised
+sovereign state with territory in the Council of Europe geographic scope or
+a European microstate; transcontinental states included on their European
+territory; Kosovo included with status noted. 51 register entries ≠
+coverage: every European row remains `not_started`; country entries and
+legal-data readiness stay distinct fields.
+
+**9. End-to-end checks on real ingested material, tiers separated.**
+Automated: the `researchDryRun` checks + backend test above run against the
+real ingested corpus (not fixtures). Evidence tiers kept separate throughout
+this document: automated checks (done), LLM generation (pending — no API key
+on deployment), browser verification (pending — not run this turn), lawyer
+review (pending — no reviewer evidence exists and none is invented).
+
+## Verification (this turn)
+
+- `bunx convex dev --once` + `bunx tsc -b --noEmit`: clean (repeatedly,
+  including after every backend change).
+- `bun run test`: **31 files, 497/497 tests pass** (was 493; +4 new
+  backend/pure tests, existing tests extended for reviewFlags and the new
+  openRun return shape).
+- Live-deployment evidence gathered via `bunx convex run` readbacks:
+  source versions + section counts, ingestion run rows (dedupe skip,
+  failed run with reason, updated run with freshness), researchDryRun
+  outputs for the three scenarios above.
+
+## Known limits / honest gaps (unchanged unless noted)
+
+- OPENAI_API_KEY absent → live generation undemonstrated; the runner's
+  honest no-fabrication error path is the designed behaviour.
+- India Code (www.indiacode.nic.in) was unreachable at ingestion time
+  (HTTP 504 / hangs); official text was obtained from MHA / Gazette /
+  s3waas official hosts instead, with the one failure (POCSO) recorded.
+- No automated upstream fetcher: freshness updates happen through explicit
+  authenticated ingestion runs, never silently.
+- Lawyer review has not occurred; every mapping/flag/answer carries its
+  review-status label.

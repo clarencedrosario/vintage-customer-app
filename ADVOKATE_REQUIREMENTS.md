@@ -19,7 +19,7 @@ Every item carries one of these statuses, applied honestly:
 > No legal workflow has had a recorded E2E browser walkthrough yet; that evidence
 > category is tracked separately in `ADVOKATE_PROGRESS.md`.
 
-Last updated: 28 September 2026 (turn 5: **Advokate Legal Intelligence made the flagship workstream** — new §26 with jurisdiction-aware matter context, authoritative-source infrastructure, Indian vertical slice (verified retrieval → source-linked answer), European coverage register, verifiable-answer contract, ingestion/evaluation scaffolding; §18 legal-research rows superseded where noted). Owner activation and the invite→accept→console browser pass remain PENDING until they actually succeed. Evidence: `ADVOKATE_PROGRESS.md`.
+Last updated: 28 September 2026 (turn 6: **Legal Intelligence source-backed workflow demonstrated** — real statute text ingested for 7 of 8 registered Indian sources with section anchors + PDF-hash provenance (POCSO honestly failed: India Code HTTP 504), bounded SCI judgments ingested from gov.in PDFs, backend citation validation wired into the runner with needs_citation_review gating, ingestion run state machine demonstrated live incl. duplicate prevention + failure recording + freshness update, European register inclusion criteria defined, automated end-to-end research checks over real ingested material. Turn 5: new §26 with jurisdiction-aware matter context, authoritative-source infrastructure, Indian vertical slice, European coverage register, verifiable-answer contract, ingestion/evaluation scaffolding). Live LLM generation and browser verification remain PENDING (no OPENAI_API_KEY on the deployment; no browser pass run); qualified legal review has NOT occurred and is never simulated. Evidence: `ADVOKATE_PROGRESS.md`.
 
 ---
 
@@ -334,17 +334,41 @@ topics and jurisdictions expand in measured phases.
   instructions: runner contract forbids instruction-following from source
   content (prompt rule + eval case).
 
-### 26.3 Indian legal coverage — **Implemented and verified (seed set; expansion staged)**
+### 26.3 Indian legal coverage — **Implemented and verified (7 of 8 sources INGESTED with real text; POCSO failed honestly)**
 - Core seeded legislation: Constitution of India; IPC 1860; CrPC 1973;
   Evidence Act 1872; BNS 2023; BNSS 2023; BSA 2023; POCSO 2012 — each with
   official or authoritative source metadata, commencement where recorded,
-  and `inForceFrom` fields. **Honest scope**: seed = the scaffold plus these
-  statutes; section-level full-text ingestion, state legislation, tax,
-  family, employment and commercial texts are STAGED, not present.
+  and `inForceFrom` fields.
+- **Real text ingested 28 Sep 2026 (turn 6) — successes and failures
+  separate:** IPC 1860 (511 sections, MHA reprint), CrPC 1973 (483 sections,
+  MHA — s.484 omitted in source), Evidence Act 1872 (167, India Code text
+  via verified reproduction after India Code HTTP 504), BNS 2023 (358,
+  Gazette of India via MHA), BNSS 2023 (531, Gazette via MHA), BSA 2023
+  (170, Gazette via MHA), Constitution (385 articles, official s3waas
+  edition). Every version keeps the original body, section-boundary
+  anchors, PDF sha256 provenance, publisher, retrieval URL and collection
+  date. **FAILURE:** POCSO 2012 — official text not obtainable (India Code
+  bitstream host HTTP 504 on repeated attempts; deep links hang; MHA copy
+  is an advisory letter, not the Act). Its registry row stays a labelled
+  stub; citations from it are blocked by the backend validator; a failed
+  ingestion run with reason + review note is recorded. State legislation,
+  tax, family, employment and commercial texts are STAGED, not present.
 - Historical versions preserved (`legalSourceVersions`; IPC stays in force
   for pre-01-Jul-2024 conduct under savings provisions — `applicability`
-  logic resolves old vs new codes by the governing legal date and records
-  WHY).
+  logic resolves old vs new codes by the governing legal date within the
+  relevant CODE FAMILY and records WHY).
+- **Temporal applicability is reasoned, never a blanket date switch (turn
+  6):** `resolveApplicability` returns `reviewFlags` for lawyer review —
+  repeal-era savings around the matter date, a succeeding code commencing
+  shortly after the matter date (current procedural stage may already sit
+  under the new code), the within-two-years-of-commencement transitional
+  window (s.358(2) BNS general savings; s.531(2)(a) BNSS and s.170(2) BSA
+  pending-proceedings savings — section numbers verified against the
+  INGESTED text, correcting a prior wrong section reference), mapped
+  no-equivalent provisions, and special acts never displacing the general
+  code. Flags surface in the workspace and the research answer; unresolved
+  applicability is always labelled for lawyer review rather than silently
+  resolved by one date.
 - **IPC↔BNS cross-references are verified mappings, not blind substitution**:
   `legalCrossRefs` rows carry mappingKind (renumbered/renumbered_reworded/
   substantive_change/split/merged/no_equivalent), notes for changed wording
@@ -353,17 +377,28 @@ topics and jurisdictions expand in measured phases.
   replacing. Common abbreviations normalize gently with the official title
   shown (`normalizeCitation` — "ipc" → "Indian Penal Code, 1860").
 
-### 26.4 All-European-country coverage — **Implemented and verified (register + honest states); content ingestion staged**
+### 26.4 All-European-country coverage — **Implemented and verified (register + explicit inclusion criteria); content ingestion staged**
 - `legalCountryCoverage`: one row per country with per-domain statuses
   (legislation, judgments, procedure, tax, payroll, drafting) =
   not_started | partial | verified — a country appearing in a selector does
   NOT imply AI support; the workspace renders unsupported/stale states.
-- All European countries registered incl. EU/non-EU distinction; instruments
-  tagged national | subnational | eu_regulation | eu_directive | echre
-  (CoE/ECHR kept distinct from EU institutions) | other. Legal systems
+- **Inclusion criteria (defined 28 Sep 2026, turn 6):** the register lists a
+  sovereign state when (a) it is broadly recognised as such, AND (b) it has
+  a territory wholly or partly within the Council of Europe's geographical
+  scope (Europe incl. the South Caucasus and Türkiye) or is a European
+  microstate. Transcontinental states (Russia, Türkiye, Kazakhstan,
+  Azerbaijan, Georgia) are included on their European territory; Kosovo is
+  included with its partially-recognised status noted. The count of
+  registered countries (51 incl. Kosovo) is a REGISTER fact, NOT a coverage
+  claim: every European row is `not_started` for legal-data readiness until
+  real ingestion happens country by country. Country entries and legal-data
+  readiness are deliberately kept distinct.
+- Instruments tagged national | subnational | eu_regulation | eu_directive |
+  echre (CoE/ECHR kept distinct from EU institutions) | other. Legal systems
   within a country supported via stateOrProvince granularity. Seed: India
-  verified-for-seed-topics; European rows honestly `not_started` pending
-  lawful ingestion.
+  legislation/procedure/drafting `partial` (7 statutes + 2 SCI judgments
+  ingested; POCSO pending — see §26.8/progress log); European rows honestly
+  `not_started` pending lawful ingestion.
 
 ### 26.5 Lawyer workflows — **Implemented and verified (slice: research + source search + applicability + cross-jurisdiction separation)**
 - Natural-language research (existing `prepareLegalResearch`, now
@@ -384,16 +419,34 @@ topics and jurisdictions expand in measured phases.
   application to facts, contrary authority/uncertainty, missing information,
   clickable sources with section/paragraph anchors, source freshness +
   coverage limitations. Enforced in the `legal_research` runner prompt.
-- **Citation verification**: `verifyCitations` checks every cited source
-  exists (by stable key) and quoted spans actually occur in the stored
-  version text (normalized whitespace); failures are surfaced as unverified,
-  never silently dropped. Fabricated citations/sections/quotations are
-  prohibited by contract and tested (`legalIntel.test.ts`).
+- **Citation verification (BACKEND CODE, turn 6 — not only the prompt)**:
+  the runner extracts cited stable keys, pinpoints and quotations from the
+  generated text (`extractCitations`, unit-tested), re-reads the STORED
+  source text via `storedSourceForCheck`, and runs the pure
+  `checkCitation` validator: source existence, pinpoint/anchor validity
+  against section boundaries, and quote fidelity (whitespace-normalized)
+  with the passage offset for the clickable link. Every check is persisted
+  (`legalCitationChecks`, `citationReportForJob`); any failure flips the
+  answer to `needs_citation_review` with a blocking banner prepended before
+  the result is ever presented as verified. `verifyCitations` remains the
+  interactive path. Whether a verified passage SUPPORTS the claim is a
+  separate legal judgement — labelled for lawyer review, never automated.
 - **Refusal with honesty**: when insufficient reliable sources exist the
   contract requires saying so and offering verified material only — never a
   confident unsupported answer (runner rule + eval case).
 
-### 26.7 Precedent & judgment treatment — **Partially implemented (register + provenance); subsequent-treatment ingestion staged**
+### 26.7 Precedent & judgment treatment — **Partially implemented (register + provenance + BOUNDED REAL JUDGMENTS ingested); subsequent-treatment ingestion staged**
+- **Bounded real judgments (28 Sep 2026):** two Supreme Court of India
+  judgments retrieved as full PDFs from official government hosts and
+  ingested as paragraph/page-anchored bounded excerpts with court, bench,
+  decided date, citations as printed in the retrieved document, source URL
+  and PDF sha256: Tofan Singh v. State of Tamil Nadu (29 Oct 2020,
+  NARCORD/gov.in copy; 43 paragraph anchors — reporter citation not printed
+  on the document, so none was invented) and K.M. Nanavati v. State of
+  Maharashtra (24 Nov 1961, AP High Court portal copy; 4 page anchors —
+  1961 judgments are not paragraph-numbered). India coverage `judgments`
+  status honestly moved to `partial` (bounded excerpts of 2 judgments, NOT
+  a case-law corpus).
 - Judgments are first-class `legalSources` with court, bench, date,
   citation, procedural posture fields and binding/persuasive determination
   per jurisdiction rules (pure helper provided; per-country binding rules
@@ -405,15 +458,24 @@ topics and jurisdictions expand in measured phases.
   submissions vs narrative vs AI interpretation separated in the answer
   contract. Automated subsequent-treatment ingestion is STAGED.
 
-### 26.8 Continuous updates — **Implemented and verified (scheduler + review queue); live source feeds staged**
+### 26.8 Continuous updates — **Implemented and verified (run state machine DEMONSTRATED on the live deployment); live source feeds staged**
 - `ingestionRuns` (per source: detected change, retries, failure alerts to
   platform audit, version creation, index refresh timestamp, review queue
   for uncertain changes, lastSuccessfulAt) + `runIngestionSweep` scheduled
-  action scaffold and `recordIngestionResult`. Change-detection fetchers
-  per upstream official source are STAGED (needs lawful source agreements);
-  the pipeline, limits, audit and staleness surfacing are live. No real-time
-  completeness is promised; stale/unavailable sources warn in UI. Historical
-  research reproducible via saved versions + the governing legal date.
+  action and `recordIngestionResult`/`recordResultCli`. Change-detection
+  fetchers per upstream official source are STAGED (needs lawful source
+  agreements); the pipeline, limits, audit and staleness surfacing are live.
+  No real-time completeness is promised; stale/unavailable sources warn in
+  UI. Historical research reproducible via saved versions + the governing
+  legal date.
+- **Demonstrated 28 Sep 2026 (real run rows, live deployment):** real
+  statute text ingested for 7 of 8 registered sources (v2 immutable
+  versions + freshness timestamps), POCSO 2012 recorded as FAILED with a
+  specific reason and review note (India Code host HTTP 504; no text
+  fabricated), BSA re-ingest closed a scheduled run at attempts=2 after
+  openRun duplicate prevention skipped the racing second enqueue
+  (skipped=true), and freshness (`collectionDate`, `lastSuccessfulAt`)
+  updated only through the run state machine — not by table existence.
 
 ### 26.9 Confidentiality & human review — **Implemented and verified (enforced via existing permission model)**
 - Permissions enforced BEFORE retrieval and generation (same
@@ -438,7 +500,7 @@ topics and jurisdictions expand in measured phases.
 - Drafts and inferred conclusions labelled; unsupported coverage states
   explicit — never a generic chat box.
 
-### 26.11 Quality evaluation — **Implemented and verified (harness + seed set); lawyer-reviewed sets pending**
+### 26.11 Quality evaluation — **Implemented and verified (harness + seed set + automated E2E on real ingested text); lawyer-reviewed sets pending**
 - `legalEvalCases` + runner structure measuring: citation accuracy (only
   real seeds cited), source support, jurisdiction/historical applicability
   (IPC-vs-BNS by date), adverse-authority recognition, missing-fact
@@ -446,6 +508,16 @@ topics and jurisdictions expand in measured phases.
   (prompt-injection-in-document case). Adversarial cases included:
   outdated statutes, conflicting decisions, wrong-country questions,
   user-supplied false citations, unavailable sources.
+- **Automated end-to-end check on REAL ingested material (28 Sep 2026):**
+  `researchDryRun` (internal, no LLM) drives jurisdiction → governing date
+  → retrieval of actual provisions (pinpoint anchors) → era applicability
+  with review flags → grounded answer with passage offsets → `checkCitation`
+  verification, over the deployed corpus. Verified live: pre-BNS date
+  retrieves IPC § 302 with a quote-verifying passage; post-BNS date
+  retrieves BNS § 103; France refuses inside the same pipeline. Evidence
+  tiers stay separated: this is AUTOMATED evidence; LLM generation
+  (OPENAI_API_KEY absent on the deployment) and browser verification are
+  PENDING; qualified legal review is PENDING and is never simulated.
 - **Software tests passing ≠ legal accuracy.** Results are published as
   internal readiness evidence; NO "smartest AI" claims. Lawyer-reviewed
   evaluation sets per enabled jurisdiction: PENDING (operator work).
