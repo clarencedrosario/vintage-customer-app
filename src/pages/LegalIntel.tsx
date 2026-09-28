@@ -98,6 +98,27 @@ export default function LegalIntel() {
     activeDate ? { country: activeCountry, onDate: activeDate } : "skip",
   );
 
+  // Automated research check (demand #2): question → jurisdiction/date →
+  // retrieval of real provisions → grounded answer → clickable passages.
+  // No LLM involved: the template answer is assembled from RETRIEVED text
+  // only and every passage verifies against the stored corpus.
+  const [question, setQuestion] = useState("");
+  const [anchorHint, setAnchorHint] = useState("");
+  const [openPassage, setOpenPassage] = useState<string | null>(null);
+  const research = useQuery(
+    api.legalIntel.researchCheck,
+    activeDate
+      ? {
+          country: activeCountry,
+          onDate: activeDate,
+          // question is deliberately NOT an arg: it is echoed for the
+          // record only and never changes retrieval, so typing must not
+          // re-run the pipeline.
+          anchorHint: anchorHint.trim() || undefined,
+        }
+      : "skip",
+  );
+
   const activeCov = (coverage ?? []).find((c) => c.country === activeCountry);
   const jurisdictionConfirmed = context?.jurisdiction.confirmed ?? false;
   const supportedLegislation =
@@ -290,6 +311,106 @@ export default function LegalIntel() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Automated research check — real ingested text, no LLM */}
+      <Card className="rule-frame mt-6 bg-card">
+        <CardHeader className="pb-2">
+          <CardTitle className="font-serif text-lg flex items-center gap-2">
+            <Search className="size-4" aria-hidden="true" />
+            Research check — question to source-backed passage
+          </CardTitle>
+          <CardDescription>
+            Runs the retrieval→applicability→citation pipeline over the stored,
+            verified corpus (no language model). Every passage below is shown
+            from the stored text and validated; era and transitional questions
+            are flagged for lawyer review, never auto-resolved.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Input
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+              placeholder="Legal question, e.g. punishment for murder for conduct on 2024-03-01"
+            />
+            <Input
+              value={anchorHint}
+              onChange={(e) => setAnchorHint(e.target.value)}
+              placeholder="Pinpoint (e.g. § 302) — optional"
+              className="sm:w-[220px]"
+            />
+          </div>
+          {!activeDate && (
+            <p className="text-sm text-muted-foreground">
+              Pick a matter (or set the governing legal date above) to run the
+              check — the date decides which era of law is retrieved.
+            </p>
+          )}
+          {research && (
+            <div className="space-y-3">
+              <div className="rounded-md border border-border bg-muted/40 p-3 text-sm">
+                <p className="font-medium">Answer (template-assembled from retrieved sources only)</p>
+                <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed">{research.answer}</p>
+                <p className="mt-2 text-[11px] text-muted-foreground">{research.generatedBy}</p>
+              </div>
+              <div className="space-y-2">
+                <p className="text-xs font-medium text-muted-foreground">
+                  Retrieved passages — click to inspect the stored text around the anchor
+                </p>
+                {research.retrieved.map((passage) => {
+                  const open = openPassage === passage.stableKey + passage.anchor;
+                  return (
+                    <div key={passage.stableKey + passage.anchor} className="rounded-md border border-border">
+                      <button
+                        type="button"
+                        onClick={() => setOpenPassage(open ? null : passage.stableKey + passage.anchor)}
+                        className="flex w-full items-center justify-between gap-2 p-2.5 text-left hover:bg-accent/40"
+                      >
+                        <span className="text-sm font-medium">
+                          {passage.title} · {passage.anchor}
+                          <span className="ml-2 font-normal text-muted-foreground">{passage.heading}</span>
+                        </span>
+                        {passage.checkOk ? (
+                          <Badge variant="outline" className="shrink-0 text-emerald-700">verified</Badge>
+                        ) : (
+                          <Badge variant="outline" className="shrink-0 text-amber-700">unverified</Badge>
+                        )}
+                      </button>
+                      {open && (
+                        <div className="border-t border-border bg-muted/30 p-3">
+                          <pre className="max-h-60 overflow-auto whitespace-pre-wrap text-xs leading-relaxed">
+                            {passage.quote}
+                          </pre>
+                          <p className="mt-2 text-[11px] text-muted-foreground">
+                            Stored version, offset {passage.offset} · anchor {passage.anchor}
+                            {passage.problem ? ` · validation: ${passage.problem}` : ""}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                {research.retrieved.length === 0 && research.contract.refusalRequired && (
+                  <p className="flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+                    <AlertTriangle className="size-4 shrink-0" aria-hidden="true" />
+                    Refusal recorded — no verified sources for this jurisdiction/date. The pipeline will not substitute memory for sources.
+                  </p>
+                )}
+              </div>
+              {research.applicability?.reviewFlags && research.applicability.reviewFlags.length > 0 && (
+                <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+                  <p className="font-medium">For lawyer review — unresolved applicability</p>
+                  <ul className="mt-1 list-disc space-y-1 pl-4">
+                    {research.applicability.reviewFlags.map((f) => (
+                      <li key={f.slice(0, 40)}>{f}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Verified source search — works with AI generation unavailable */}
       <Card className="rule-frame mt-6 bg-card">

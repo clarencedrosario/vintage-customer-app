@@ -1262,3 +1262,18 @@ review (pending — no reviewer evidence exists and none is invented).
   authenticated ingestion runs, never silently.
 - Lawyer review has not occurred; every mapping/flag/answer carries its
   review-status label.
+
+## Workspace surface for the demand-2 chain (added this turn, post-record)
+
+The `/legal-intel` page now carries a **Research check** panel backed by a
+signed-in `researchCheck` query wrapping the same pipeline as the internal
+dry-run: question + optional pinpoint → answer assembled from retrieved
+sources only → expandable per-passage cards showing the STORED text with
+version offset, anchor and a verified/unverified badge → era review flags
+listed for lawyer review → refusal banner for unsupported jurisdictions.
+This makes the demand-2 chain executable from the browser without an LLM
+key. Recorded limitation: the visual browser pass of this NEW panel has not
+been performed yet (typecheck + full test suite are green); an operator
+should open `/legal-intel`, pick a matter/date, run a check with a pinpoint
+(e.g. § 302), expand a passage card, and confirm the refusal banner with a
+non-India country — then the browser tier of demand 2 is observed evidence.

@@ -1391,19 +1391,20 @@ export const citationReportForJob = query({
 // Automated end-to-end research check (26.12) — NO LLM involved.
 // Drives the full pipeline over REAL ingested text: jurisdiction →
 // governing date → retrieval → era applicability → grounded claims with
-// passage offsets → citation validation. This is the automated evidence
-// tier; LLM generation and browser verification are tracked separately.
+// passage offsets → citation validation. Exposed BOTH as an internal
+// query (tests, CLI evidence) and a signed-in public query (workspace
+// panel) sharing one implementation.
 // ---------------------------------------------------------------------
-export const researchDryRun = internalQuery({
-  args: {
-    country: v.string(),
-    onDate: v.string(),
-    family: v.optional(v.string()),
-    question: v.optional(v.string()),
-    /** Optional pinpoint, e.g. "§ 302" — retrieves THAT provision. */
-    anchorHint: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
+type DryRunArgs = {
+  country: string;
+  onDate: string;
+  family?: string;
+  question?: string;
+  /** Optional pinpoint, e.g. "§ 302" — retrieves THAT provision. */
+  anchorHint?: string;
+};
+
+async function runDryRun(ctx: QueryCtx, args: DryRunArgs) {
     const provisions = (
       await ctx.db
         .query("legalSources")
@@ -1473,7 +1474,9 @@ export const researchDryRun = internalQuery({
         title: p.title,
         anchor,
         heading: sec?.heading ?? "(document head)",
-        offset: check.quoteOffset >= 0 ? check.quoteOffset : start,
+        // RAW-body offset (usable for slicing/clicking); checkCitation's
+        // offset is in whitespace-normalized space and not usable here.
+        offset: start,
         quote,
         checkOk: check.ok,
         problem: check.problem,
@@ -1523,6 +1526,30 @@ export const researchDryRun = internalQuery({
       contract,
       generatedBy: "template (no LLM) — automated pipeline evidence",
     };
+}
+
+export const researchDryRun = internalQuery({
+  args: {
+    country: v.string(),
+    onDate: v.string(),
+    family: v.optional(v.string()),
+    question: v.optional(v.string()),
+    anchorHint: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => runDryRun(ctx, args),
+});
+
+/** Signed-in wrapper for the workspace research panel. */
+export const researchCheck = query({
+  args: {
+    country: v.string(),
+    onDate: v.string(),
+    family: v.optional(v.string()),
+    anchorHint: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireSignedIn(ctx);
+    return runDryRun(ctx, args);
   },
 });
 
