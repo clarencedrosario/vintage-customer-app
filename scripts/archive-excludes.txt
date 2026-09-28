@@ -1,0 +1,30 @@
+# tar -X exclude list for advokate source archives (demand 1).
+# Secrets/credentials/keys are NEVER archived; platform policy routes all
+# key management through the dashboard's Keys/API-keys UI.
+node_modules
+.git
+.gitignore
+.env
+.env.*
+*.env
+*.pem
+*.key
+secrets*
+credentials*
+dist
+.vite
+coverage
+.turbo
+.convex
+bunx-cache
+*.tar.gz
+*.zip
+# Prior checkpoints and DATABASE SNAPSHOTS — never archive data exports
+# (customer data + contradicts "archive ≠ database records")
+backups
+convex-data-*
+# Anything that looks like a private snapshot or data dump
+*snapshot*
+*dump*
+*.sqlite
+*.db

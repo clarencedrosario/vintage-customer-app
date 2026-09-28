@@ -1277,3 +1277,125 @@ been performed yet (typecheck + full test suite are green); an operator
 should open `/legal-intel`, pick a matter/date, run a check with a pinpoint
 (e.g. § 302), expand a passage card, and confirm the refusal banner with a
 non-India country — then the browser tier of demand 2 is observed evidence.
+
+---
+
+# Turn 7 — 28 Sep 2026: status precision, corpus integrity audit, delivery package
+
+## Corrected overall status (supersedes turn-6 framing)
+
+- Corpus ingestion and automated citation checks are complete for a
+  LIMITED collection — the 7 ingested Indian sources + 2 bounded
+  judgments, nothing more.
+- Model-backed answers: PENDING (no OPENAI_API_KEY on the deployment;
+  secure setup + post-config verification checklist in
+  docs/LEGAL_INTEL_MODEL_SETUP.md).
+- Browser verification: PENDING (exact manual steps in
+  docs/BROWSER_VERIFICATION.md; not yet executed).
+- Scheduled-update verification: partially demonstrated — the cron
+  trigger fired and wrote execution records (below), but there is no
+  automated fetcher, so automatic content updates remain STAGED.
+- Legal accuracy review: PENDING — no qualified lawyer has reviewed
+  anything; never simulated.
+- Section/anchor counts do NOT prove text completeness or current
+  consolidation; per-source caveats flagged in ADVOKATE_REQUIREMENTS §26.3.
+
+## 5-tier status (the required distinctions)
+
+| Tier | Status |
+| --- | --- |
+| 1. Infrastructure implemented | DONE (schema, seeds, pipeline, validator, scheduler, workspace panel) |
+| 2. Source metadata registered | DONE (8 India sources incl. 2 judgments; 51 European register rows w/ inclusion criteria) |
+| 3. Text ingested and searchable | DONE for 7 statutes as a LIMITED collection (v3/v4 after turn-7 audit); POCSO not obtained (attempt log preserved); judgments ingested as bounded excerpts |
+| 4. Source-backed generation tested | PENDING (no LLM key; template-backed pipeline evidence only) |
+| 5. Legal accuracy independently reviewed | PENDING (never simulated) |
+
+## 1. Corpus integrity audit (demand 3) — real defects found and fixed
+
+Anchor-coverage audit of the deployed corpus exposed three extraction
+defects that turn-6 counts had hidden:
+
+1. Constitution anchors pointed at the table of contents. The s3waas
+   edition opens with "ARRANGEMENT OF ARTICLES" whose entries repeat
+   headings verbatim (incl. article 1's), so the body gate opened on the
+   TOC and the article 21/31A/103 anchors resolved to TOC lines. Fixed by
+   gating on the operative "1. ... Union." em-dash content marker;
+   article 21 now anchors at offset 60511 on operative text.
+2. Same-number lettered sections were missing as anchors. IPC 124A,
+   498A, 304B; Constitution 31A-31D, 243A-243Z, 371A-371J, 394A — the
+   detector required num > lastAccepted, rejecting lettered chains at
+   the same number. Fixed (plus print variants "371B ." and "371-I.");
+   Constitution now 480 anchors (was 385), IPC 555 (was 511), CrPC 497,
+   IEA 171.
+3. CrPC section 329 was lost to out-of-order column flow in the MHA
+   print (section 330's heading line precedes 329's text; the monotonic
+   ratchet rejected 329 forever). Fixed with a bounded backwards window;
+   the 13 out-of-order recoveries are recorded as anomalies in
+   docs/evidence/legal-corpus-manifest.json.
+
+All 7 statutes re-ingested as NEW immutable versions (v3; BSA v4).
+Post-fix verification on the live deployment: quote-fidelity checks pass
+on Constitution articles 21 and 371A, CrPC 329, IPC 498A and 124A
+(stored text read back). Document tails checked — no truncation. NOT
+claimed: completeness of schedules/provisos/explanations as separately
+verified units; currency of consolidation.
+
+## 2. POCSO precise status (demand 4)
+
+Eleven retrieval attempts logged with URLs and raw errors
+(docs/evidence/pocso-attempt-log.txt); outcome recorded on the source
+row (statusNote) as "NOT OBTAINED FROM SOURCES ATTEMPTED — retrieval
+NOT exhaustive", not "unavailable anywhere". No text ingested; nothing
+fabricated; validator blocks its citations until real text arrives.
+
+## 3. Scheduler-triggered run (demand 7) — trigger + execution record
+
+- crons.ts: legal-source-ingestion-sweep, daily 00:00 IST ->
+  internal.legalIntel.scheduledSweep.
+- The scheduler fired on the live deployment: 2026-09-28T18:30:52Z
+  (legalSweepLogs row: trigger=schedule, opened=10, sourceCount=10).
+- Second scheduled-path execution 19:04:46Z: opened=0, skipped=10 —
+  duplicate prevention on unfinished runs.
+- scheduledSweep/sweepCore writes legalSweepLogs (trigger, opened/skipped,
+  runIds) — the execution record distinguishing scheduled from manual.
+  Honest scope: rows are OPENED by schedule and CLOSED by authenticated
+  ingestion; no automated fetcher exists.
+
+## 4. Uncited-assertion detection (demand 5)
+
+detectUncitedAssertions (pure, lib-tested) flags substantive sentences
+("shall/must/liable/punishable/held that...") lacking any citation
+marker; wired into the runner beside the citation checks. Scope stated
+in docs: these checks prove the answer cites real stored text and leaves
+no naked claims — NOT that cited passages legally support the
+conclusions (a lawyer judgement).
+
+## 5. Delivery package (demands 1, 2, 6, 8)
+
+- Source archive: advokate-source-archive-20260928.tar.gz (313 entries;
+  excludes node_modules/.git/dotenv-style files/keys/dist AND the
+  backups/ DB snapshots; verified by scripts/verify-archive.mjs — zero
+  leaks). Contains code, schema, lockfile, scripts, tracking docs and
+  docs/evidence/ manifests. Contains NO database records and NO stored
+  PDFs.
+- Migration manifest: docs/LEGAL_CORPUS_MIGRATION.md — what an archive
+  is/isn't, table-level export/import (incl. bunx convex export snapshot
+  route), originals re-download + sha256 verification, index rebuild by
+  schema push, preferred pipeline-rebuild route, configuration
+  re-creation. Deployment untouched.
+- Model configuration: docs/LEGAL_INTEL_MODEL_SETUP.md — keys never in
+  chat/archives; secure env-only setup; 8-step post-config test
+  checklist including refusals, fabricated-quote failure, pinpoint
+  failure, uncited-assertion flag.
+- Browser verification: docs/BROWSER_VERIFICATION.md — exact manual
+  steps for the signed-in workflow; status stays PENDING until executed.
+
+## 6. Verification (this turn)
+
+- bunx convex dev --once + bunx tsc -b --noEmit: clean (after every
+  backend edit).
+- bun run test: 31 files, 498/498 tests pass (one date-boundary flake
+  fixed by deriving the IST calendar date instead of hardcoding
+  2026-09-28).
+- Live checks: scheduler execution records read back; POCSO statusNote
+  written; 5/5 pinpoint+quote probes verified on re-ingested corpus.

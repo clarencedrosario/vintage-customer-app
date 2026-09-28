@@ -1,0 +1,13 @@
+POCSO 2012 retrieval attempt log — 2026-09-28 (turn 7). Every URL tried this turn AND last turn, with outcome.
+1. https://www.indiacode.nic.in/bitstream/123456789/2079/1/AA2012-32.pdf — HTTP 504 gateway timeout (28 Sep both turns; curl exit 28 / 504)
+2. https://indiacode.gov.in/bitstream/123456789/2079/1/AA2012-32.pdf — HTTP 200 but returns 6.7KB HTML app shell (JS SPA), not the PDF
+3. https://api.sci.gov.in/sankalan/pdf/central/322012.pdf — HTTP 200 with 0 bytes (empty body)
+4. https://www.wcd.gov.in/act-and-rules/protection-children-sexual-offences-act-2012 — 6.6KB HTML shell, no PDF link in markup
+5. https://missionvatsalya.wcd.gov.in/public/pdf/children-related-law/POCSOAct2012.pdf — HTTP 403 (118-byte error)
+6. https://ncpcr.gov.in/showfile.php?lid=906 — 16-byte "File not found" style response
+7. https://www.legislative.gov.in/sites/default/files/{A2012-32.pdf,A2012-32_0.pdf,2012_32.pdf,POCSO2012.pdf} — all HTTP 404
+8. https://web.archive.org/web/2id_/... (India Code URL) — HTTP 403; archive.org availability API 429/temporarily offline
+9. https://www.advocatekhoj.com/library/bareacts/... — bare-acts index reachable; POCSO PDF behind account login (no direct PDF)
+10. indiankanoon.org — Cloudflare interstitial (403), no text served
+11. India Code deep section URLs (show-data) — connection hangs until timeout (30-110s)
+OUTCOME: NOT OBTAINED FROM SOURCES ATTEMPTED (official hosts); retrieval NOT exhaustive — other official mirrors may exist. No text ingested; nothing fabricated.

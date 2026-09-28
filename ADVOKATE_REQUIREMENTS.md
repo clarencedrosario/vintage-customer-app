@@ -19,7 +19,7 @@ Every item carries one of these statuses, applied honestly:
 > No legal workflow has had a recorded E2E browser walkthrough yet; that evidence
 > category is tracked separately in `ADVOKATE_PROGRESS.md`.
 
-Last updated: 28 September 2026 (turn 6: **Legal Intelligence source-backed workflow demonstrated** — real statute text ingested for 7 of 8 registered Indian sources with section anchors + PDF-hash provenance (POCSO honestly failed: India Code HTTP 504), bounded SCI judgments ingested from gov.in PDFs, backend citation validation wired into the runner with needs_citation_review gating, ingestion run state machine demonstrated live incl. duplicate prevention + failure recording + freshness update, European register inclusion criteria defined, automated end-to-end research checks over real ingested material. Turn 5: new §26 with jurisdiction-aware matter context, authoritative-source infrastructure, Indian vertical slice, European coverage register, verifiable-answer contract, ingestion/evaluation scaffolding). Live LLM generation and browser verification remain PENDING (no OPENAI_API_KEY on the deployment; no browser pass run); qualified legal review has NOT occurred and is never simulated. Evidence: `ADVOKATE_PROGRESS.md`.
+Last updated: 28 September 2026 (turn 7: **status precision + corpus integrity audit** — anchor-coverage audit found and fixed real extraction defects (Constitution anchors had pointed at the table of contents; same-number lettered sections such as IPC 124A/498A and Constitution 371A–371J were missing as anchors; CrPC § 329 was lost to out-of-order column flow) and re-ingested all 7 obtainable statutes as new immutable versions; scheduler-triggered ingestion now runs from the deployment's cron with persisted execution records; uncited-assertion detection added next to the citation validator; POCSO recorded precisely as "not obtained from sources attempted" with the full URL/error attempt log; source archive + migration manifest + secure model-configuration instructions + manual browser-verification checklist delivered as documents. Turn 6: real statute text ingested for 7 of 8 registered Indian sources with section anchors + PDF-hash provenance (POCSO honestly failed), bounded SCI judgments, backend citation validation with needs_citation_review gating, run state machine demonstrated, European register inclusion criteria, automated end-to-end research checks. **Status is a LIMITED collection:** corpus ingestion and automated citation checks are complete for the ingested slice only; model-backed answers, browser verification, and qualified legal review remain PENDING; section/anchor counts do NOT certify completeness or currency of consolidation). Evidence: `ADVOKATE_PROGRESS.md`, `docs/LEGAL_CORPUS_MIGRATION.md`, `docs/LEGAL_INTEL_MODEL_SETUP.md`, `docs/BROWSER_VERIFICATION.md`.
 
 ---
 
@@ -334,25 +334,45 @@ topics and jurisdictions expand in measured phases.
   instructions: runner contract forbids instruction-following from source
   content (prompt rule + eval case).
 
-### 26.3 Indian legal coverage — **Implemented and verified (7 of 8 sources INGESTED with real text; POCSO failed honestly)**
+### 26.3 Indian legal coverage — **Implemented and verified (7 of 8 sources INGESTED with real text as a LIMITED collection; POCSO precisely recorded; anchor audit completed turn 7)**
 - Core seeded legislation: Constitution of India; IPC 1860; CrPC 1973;
   Evidence Act 1872; BNS 2023; BNSS 2023; BSA 2023; POCSO 2012 — each with
   official or authoritative source metadata, commencement where recorded,
   and `inForceFrom` fields.
-- **Real text ingested 28 Sep 2026 (turn 6) — successes and failures
-  separate:** IPC 1860 (511 sections, MHA reprint), CrPC 1973 (483 sections,
-  MHA — s.484 omitted in source), Evidence Act 1872 (167, India Code text
-  via verified reproduction after India Code HTTP 504), BNS 2023 (358,
-  Gazette of India via MHA), BNSS 2023 (531, Gazette via MHA), BSA 2023
-  (170, Gazette via MHA), Constitution (385 articles, official s3waas
-  edition). Every version keeps the original body, section-boundary
-  anchors, PDF sha256 provenance, publisher, retrieval URL and collection
-  date. **FAILURE:** POCSO 2012 — official text not obtainable (India Code
-  bitstream host HTTP 504 on repeated attempts; deep links hang; MHA copy
-  is an advisory letter, not the Act). Its registry row stays a labelled
-  stub; citations from it are blocked by the backend validator; a failed
-  ingestion run with reason + review note is recorded. State legislation,
-  tax, family, employment and commercial texts are STAGED, not present.
+- **Real text ingested and re-audited 28 Sep 2026 (turns 6–7) — successes
+  and failures separate.** Turn-7 anchor audit found three REAL extraction
+  defects in the turn-6 corpus and fixed them in the extractor, then
+  re-ingested every statute as NEW immutable versions (never overwritten):
+  (a) the Constitution edition's "Arrangement of Articles" table of contents
+  had captured many article anchors (offsets pointed at TOC lines, not
+  operative text) — fixed with an operative-line body gate; (b) all
+  same-number lettered sections were missing as anchors (IPC 124A, 498A,
+  304B…; Constitution 31A–31D, 243A–243Z, 371A–371J, 394A…) because the
+  detector rejected a lettered section at the same number — fixed;
+  (c) CrPC § 329 was lost to out-of-order column flow in the MHA print
+  (§ 330's heading line precedes § 329's text) — fixed with a bounded
+  backwards window and every out-of-order recovery recorded as an anomaly.
+  Current ingested state (v3/v4 versions, PDF sha256 provenance preserved):
+  IPC 1860 — 555 anchors to § 511; CrPC 1973 — 497 anchors to § 484;
+  Evidence Act 1872 — 171 anchors to § 167; BNS 2023 — 358; BNSS 2023 —
+  531; BSA 2023 — 170; Constitution — 480 anchors to § 395 (repealed
+  articles absent = correct for a consolidated edition). Document tails
+  checked — no truncation. **LIMITED-COLLECTION CAVEATS (deliberately not
+  claimed):** anchor/section counts do NOT prove text completeness or that
+  these are the current official consolidations; schedules, provisos and
+  explanations are ingested as body text but NOT separately verified as
+  complete; Constitution article suffixes were normalized to the printed
+  variants. **FAILURE (precise):** POCSO 2012 — text NOT OBTAINED FROM
+  SOURCES ATTEMPTED (not "unavailable anywhere"): eleven documented attempts
+  across India Code (504, JS app shell, hanging deep links), SCI Sankalan
+  API (0 bytes), WCD/mission-Vatsalya/NCPCR (shell/403/file-not-found),
+  legislative.gov.in (404), web.archive.org (403/429), and login-walled or
+  Cloudflare-gated mirrors — full log in
+  `docs/evidence/pocso-attempt-log.txt`; retrieval NOT exhaustive, official
+  mirrors may exist. Its registry row carries the attempt summary in
+  `statusNote`; citations from it are BLOCKED by the validator; no text
+  fabricated. State legislation, tax, family, employment and commercial
+  texts are STAGED, not present.
 - Historical versions preserved (`legalSourceVersions`; IPC stays in force
   for pre-01-Jul-2024 conduct under savings provisions — `applicability`
   logic resolves old vs new codes by the governing legal date within the
@@ -431,6 +451,15 @@ topics and jurisdictions expand in measured phases.
   the result is ever presented as verified. `verifyCitations` remains the
   interactive path. Whether a verified passage SUPPORTS the claim is a
   separate legal judgement — labelled for lawyer review, never automated.
+- **Uncited assertions are flagged too (turn 7):** `detectUncitedAssertions`
+  (pure, unit-tested, wired into the runner beside the citation checks)
+  flags substantive sentences — "shall/must/liable/punishable/held that…"
+  — that carry NO citation marker, so an answer cannot pass with verified
+  citations in one paragraph and unsupported legal claims in another.
+  Scope honesty: existence + quote-fidelity + uncited-assertion checks
+  together establish the answer cites REAL stored text and leaves no naked
+  substantive claims; they do NOT establish that any cited passage legally
+  supports the conclusion — that remains a lawyer judgement.
 - **Refusal with honesty**: when insufficient reliable sources exist the
   contract requires saying so and offering verified material only — never a
   confident unsupported answer (runner rule + eval case).
@@ -476,6 +505,19 @@ topics and jurisdictions expand in measured phases.
   openRun duplicate prevention skipped the racing second enqueue
   (skipped=true), and freshness (`collectionDate`, `lastSuccessfulAt`)
   updated only through the run state machine — not by table existence.
+- **Scheduler-triggered execution DEMONSTRATED (turn 7, real trigger +
+  real records):** `crons.ts` registers
+  `legal-source-ingestion-sweep` (daily 00:00 IST →
+  `internal.legalIntel.scheduledSweep`); the scheduler FIRED it on the live
+  deployment at 2026-09-28T18:30:52Z opening 10 run rows, and a second
+  scheduled-path execution at 19:04Z demonstrated duplicate prevention
+  (opened=0, skipped=10). Every execution writes a `legalSweepLogs` row
+  (trigger=schedule|manual, opened/skipped counts, run ids) — the record
+  that distinguishes a scheduler-triggered run from a manual retry.
+  **Honest scope:** no automated fetcher exists; a scheduled run OPENS run
+  rows (deduped) which are CLOSED by explicit authenticated ingestion.
+  Automatic change-detection updates remain STAGED pending lawful source
+  agreements; scheduled retries alone are not claimed as automatic updates.
 
 ### 26.9 Confidentiality & human review — **Implemented and verified (enforced via existing permission model)**
 - Permissions enforced BEFORE retrieval and generation (same
