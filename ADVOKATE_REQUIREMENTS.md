@@ -19,7 +19,7 @@ Every item carries one of these statuses, applied honestly:
 > No legal workflow has had a recorded E2E browser walkthrough yet; that evidence
 > category is tracked separately in `ADVOKATE_PROGRESS.md`.
 
-Last updated: 28 September 2026 (turn: CJ GLOBAL internal workforce shipped — platform roles support_agent/support_supervisor/developer, invite→accept→suspend lifecycle, capability-gated platform operations, real-backend 4-identity integration tests; chamber Team & Access formally separated from the platform workforce). Evidence and test results: `ADVOKATE_PROGRESS.md`.
+Last updated: 28 September 2026 (turn 4: internal MFA made REQUIRED for platform accounts — OTP clarified as authentication only; "Open owner console" removed from the public landing hero; top-bar nav authority-gated owner/eligible-bootstrap/workforce; returnTo redirects hardened and unit-tested separately from shareable links; VITE_PUBLIC_APP_URL documented as build-time/redeploy-required). Owner activation and the invite→accept→console browser pass remain PENDING until they actually succeed. Evidence: `ADVOKATE_PROGRESS.md`.
 
 ---
 
@@ -245,7 +245,7 @@ Last updated: 28 September 2026 (turn: CJ GLOBAL internal workforce shipped — 
 - Deletions/revocations/membership changes propagate — **Implemented and verified** (per-request re-derivation)
 
 ## 21. Security, data ownership, and reliability
-- MFA and session/device management — **Implemented and verified** (2FA challenge gate on console routes; login history)
+- MFA and session/device management — **Implemented and verified; REQUIRED for internal platform accounts** (28 Sep: TOTP + single-use hashed recovery codes; `requireInternalMfa` gates platform-ops mutations, workforce administration, and internal staff ticket reads; per-session challenge; the emailed sign-in OTP is authentication, NOT a second factor; customers and chamber accounts exempt — capability/ownership is checked before MFA so refusals never leak to non-internal callers; proven by real-backend tests in `internalMfa.test.ts` and the MFA-bound `workforce.test.ts` lifecycle)
 - Server-side object-level authorization, cross-firm isolation — **Implemented and verified** (pure policy + denial tests)
 - Secure credential storage, no secrets in browser — **Implemented and verified** (server-side keys via Convex env; Keys tab is operator-managed)
 - Encryption in transit and at rest via supported infrastructure — **Implemented and verified** (Convex managed transport/storage; no custom crypto claimed)

@@ -319,7 +319,7 @@ describe("CJ GLOBAL workforce — real backend lifecycle", () => {
       verified: true,
       platformAdmin: true,
     });
-    const owner = asUser(t, ownerId);
+    const owner = await enrollAndVerify(t, ownerId, "sess-own-unv");
     await owner.mutation(api.workforce.inviteEmployee, {
       email: "unverified@cjglobal.test",
       role: "support_agent",
@@ -343,7 +343,7 @@ describe("CJ GLOBAL workforce — real backend lifecycle", () => {
       verified: true,
       platformAdmin: true,
     });
-    const owner = asUser(t, ownerId);
+    const owner = await enrollAndVerify(t, ownerId, "sess-own-tok");
     await owner.mutation(api.workforce.inviteEmployee, {
       email: "right@cjglobal.test",
       role: "support_agent",

@@ -8,6 +8,88 @@ Last checkpoint: **28 September 2026**
 
 ---
 
+## Implementation turn — 28 Sep 2026 (4): internal MFA required; public CTA removed; honest pending register
+
+### MFA for internal platform accounts — REQUIRED (correction of record)
+
+Earlier walkthroughs described MFA as optional and leaned on the sign-in OTP.
+Corrected and now enforced in code:
+
+- **The emailed OTP is authentication, not a second factor.** It proves
+  mailbox possession once, at login. Internal-MFA is a separate TOTP factor
+  (authenticator app) plus single-use recovery codes, challenged per session.
+- **Scope**: every account holding the platform-owner flag or an active
+  workforce role. Customers and chamber-only users are untouched (proven:
+  a sessionless chamber-owner identity completes all customer flows in the
+  tests).
+- **Enforcement** (`twofactor.requireInternalMfa` + computed
+  `internalMfaState`): enrollment = TOTP enabled AND a non-empty recovery
+  set (half-finished enrollment is refused with a complete-enrollment
+  message); each session must pass the challenge (live TOTP or one unused
+  recovery code). Gates: all platform-ops capability mutations, internal
+  staff ticket reads, and workforce administration. Capability/ownership is
+  checked BEFORE MFA so refusals never leak internal requirements to
+  customers.
+- **Recovery**: 8 single-use codes issued at enrollment, hashed at rest,
+  consumed on use; `disable` requires a current code; sessions survive via
+  `twoFactorSessions`. Enrollment UI already existed (Settings → Security);
+  /owner now renders a challenge card and an enrollment-needed card.
+- **Tests (real backend)**: `internalMfa.test.ts` (3) — sessionless and
+  unchallenged sessions refused, OTP-alone refusal, live-TOTP unlock,
+  half-enrollment refusal, recovery code single-use + second-code success.
+  `workforce.test.ts` lifecycle now runs owner/agent/developer through
+  enrolled + challenged sessions (invite → accept → gates → suspend →
+  revoke all hold). `appLinks.test.ts` grew to 20 (redirect guard:
+  `//host`, absolute URLs, `javascript:`/`data:`, backslash smuggling — a
+  real gap the test caught, fixed in `safeInternalPath`).
+- **Suite after this turn: 29 files, 472/472 passed** (463 prior + 3
+  internal-MFA + 6 redirect-guard); tsc 0 errors; convex push OK
+  (moonlit-elk-307 dev).
+
+### Navigation corrections
+
+- Landing hero: "Open owner console" REMOVED (internal administration must
+  not sit among customer sign-up/sign-in CTAs). /owner remains directly
+  reachable at `<preview-origin>/owner`; the activation card still renders
+  for the eligible verified account.
+- Top bar (server-resolved, three disjoint audiences): activated owner →
+  "Open owner console" + /platform Shield; verified eligible bootstrap
+  account pre-activation → "Open owner console"; workforce employees →
+  "Open team console" → their capability-reduced /owner workspace.
+  Customers/chamber-only users: no platform nav.
+
+### Domain configuration (documented, not executed)
+
+`VITE_PUBLIC_APP_URL` is a build-time Vite injection: changing it requires
+a **frontend rebuild + redeploy** (platform env/Keys → set value →
+republish). Server-side Convex env vars need no rebuild. Redirects
+(`?returnTo=`) are validated independently of shareable links
+(`safeInternalPath` vs `appLink`); configured values are URL-parsed with
+fallback to the live origin.
+
+### Preview URL
+
+Not determinable from this environment (env/config access is
+platform-blocked). Open the Freebuff preview UI and use its origin; append
+`/owner`. No link is invented here.
+
+### PENDING — do not mark complete until they succeed
+
+1. **Owner activation** — requires the user's real OTP sign-in with
+   `clarencedrosario@gmail.com`, the activation click, and MFA enrollment
+   (now required before console use).
+2. **Invite → accept → console browser pass** — needs at least one real
+   invitation accepted by a signed-in, verified employee account in the
+   preview.
+
+### Customer workflows
+
+Unchanged: client/staff portals, SupportCentre ticketing, billing, chamber
+console, notifications. No internal-MFA requirement touches customer or
+chamber accounts.
+
+---
+
 ## Implementation turn — 28 Sep 2026 (CJ GLOBAL internal workforce + capability-gated operations)
 
 ### Correction of record: chamber Team & Access ≠ CJ GLOBAL workforce

@@ -1,5 +1,57 @@
 # Implementation & delivery map (section 31)
 
+## Handoff — 28 Sep 2026 (3): MFA required for internal accounts; landing CTA removed; pending items kept honest
+
+- **Landing page reverted**: "Open owner console" is REMOVED from the public
+  hero — internal administration does not sit among customer registration and
+  sign-in buttons. Direct access to `<preview-origin>/owner` is unchanged,
+  and the server keeps rendering the activation card for the eligible
+  account. The top-bar entry is now authority-gated three ways (resolved
+  server-side, never by client email matching): activated platform owner →
+  "Open owner console" (+ /platform Shield); the verified eligible bootstrap
+  account BEFORE activation → "Open owner console" (leading to its
+  activation card); active workforce employees → "Open team console" →
+  /owner (capability-reduced workspace). Customers and chamber-only users
+  see no platform navigation.
+- **MFA is REQUIRED for internal platform accounts** (owner flag or active
+  workforce role). The earlier "optional" wording was wrong and is
+  retracted. Implementation: TOTP enrollment + 8 single-use recovery codes
+  (Settings → Security; codes hashed at rest); `requireInternalMfa` gates
+  every platform-ops capability mutation, the workforce-administration
+  mutations, and internal staff's ticket reads; the /owner console renders
+  a challenge card until the session completes it. **The emailed sign-in
+  OTP is authentication, NOT a second factor** — it proves mailbox
+  possession once at login and never satisfies the internal challenge.
+  Refusal order is capability-first so MFA errors never leak to customers.
+  Proven by real-backend tests (`internalMfa.test.ts` 3 tests;
+  `workforce.test.ts` now runs its lifecycle through enrolled, challenged
+  sessions; a sessionless chamber-owner identity still completes all
+  customer flows — customers face no internal MFA).
+- **Redirects vs shareable links, separated and tested**: post-auth
+  redirects (`?returnTo=`) go through `safeInternalPath` (relative
+  same-origin paths only; `//host`, `https://host`, scheme smuggling, and
+  any backslash refused — browsers treat `\\` as `/`), while shareable
+  links go through `appLink` (always absolute, built on the configured or
+  live origin). 20 unit tests cover both, plus configured-URL validation
+  (unparseable values fall back to the live origin instead of producing a
+  bogus host).
+- **`VITE_PUBLIC_APP_URL` requires a frontend rebuild/redeploy**: Vite
+  injects it into the JS bundle at BUILD time, so changing the env value
+  takes effect only after the frontend is rebuilt and republished (set it
+  via the platform env/Keys config, then redeploy). Server-side Convex env
+  vars are unrelated and need no rebuild. Until a domain exists, leave it
+  unset — links then use the live preview origin.
+- **Preview link**: not determinable from this environment (no env/config
+  access). Open the Freebuff preview and note its origin; append `/owner`
+  for the console. No URL is invented here.
+- **STILL PENDING (until they actually succeed, not before)**: owner
+  activation (requires the user's OTP sign-in + activation click + MFA
+  enrollment) and the invite → accept → console browser pass. Automated
+  evidence: tsc 0 errors; **29 files, 472/472 tests**; push OK.
+- **Customer workflows preserved**: client/staff portals, ticketing,
+  billing, and all chamber surfaces are untouched; internal MFA applies
+  only to platform-owner and workforce accounts.
+
 ## Handoff — 28 Sep 2026 (2): preview-origin links; production domain stays configurable
 
 - **No domain is owned** and advokate.in is unavailable. **No URL in the app

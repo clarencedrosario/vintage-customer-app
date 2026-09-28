@@ -433,10 +433,9 @@ export default function OwnerConsole() {
     identity?.internalMfa?.enrolled === true &&
     identity.internalMfa.satisfied === false;
   const mfaIncomplete =
+    isPlatformIdentity === true &&
     identity !== null &&
     identity !== undefined &&
-    (identity.internalMfa === undefined ||
-      identity.internalMfa.enrollmentExists === true) &&
     identity.internalMfa?.enrolled !== true;
 
   if (isPlatformIdentity && needsMfaChallenge) {
