@@ -110,6 +110,11 @@ export type Applicability = {
     mappingKind: string;
     notes?: string;
   }[];
+  /**
+   * Unresolved temporal questions that REQUIRE lawyer review before the
+   * answer may state governing law conclusively (26.3 review policy).
+   */
+  reviewFlags: string[];
 };
 
 type Provisionish = {
@@ -157,6 +162,38 @@ export function resolveApplicability(
     (b.inForceFrom ?? "").localeCompare(a.inForceFrom ?? ""),
   )[0]!;
   const refs = crossRefs.filter((r) => r.fromKey === governing.stableKey);
+
+  // Temporal review flags — the date pick alone is NOT a legal
+  // determination. Anything that a savings clause, pending proceeding,
+  // amendment history or transitional provision could change is flagged
+  // for lawyer review (flagged ≠ answered).
+  const reviewFlags: string[] = [];
+  const superseded = pool.filter(
+    (p) =>
+      p.stableKey !== governing.stableKey &&
+      (p.repealedAt ?? "9999-12-31") <= onDate,
+  );
+  if (superseded.length > 0) {
+    reviewFlags.push(
+      `A ${family ?? "preceding"} statute was repealed/consolidated around this date (${superseded
+        .map((s) => s.title)
+        .join("; ")}). Confirm the savings & transitional provisions before stating which code governs — pending proceedings and past conduct may remain under the former law.`,
+    );
+  }
+  if (
+    governing.inForceFrom &&
+    onDate >= governing.inForceFrom &&
+    onDate <= addDays(governing.inForceFrom, 730)
+  ) {
+    reviewFlags.push(
+      "Within two years of commencement — transitional exceptions (e.g. s.358 BNS / s.356 BNSS / s.167 BSA savings on pending proceedings) may alter applicability; verify against the matter's procedural stage.",
+    );
+  }
+  if (crossRefs.some((r) => r.fromKey === governing.stableKey && r.mappingKind === "no_equivalent")) {
+    reviewFlags.push(
+      "The governing statute contains a mapped no-equivalent provision — check whether the matter involves that provision before relying on a renumbered-equivalent reasoning.",
+    );
+  }
   return {
     applicableKey: governing.stableKey,
     applicableLabel: governing.title,
@@ -169,7 +206,14 @@ export function resolveApplicability(
       mappingKind: r.mappingKind,
       notes: r.notes,
     })),
+    reviewFlags,
   };
+}
+
+function addDays(iso: string, days: number): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
 }
 
 /**
@@ -245,8 +289,137 @@ export function buildAnswerContract(context: {
   };
 }
 
-/**
- * The research context injected into the runner prompt. Rules are part of
+// ---------------------------------------------------------------------
+// Backend citation validation (26.6) — enforced in CODE, not just prompt.
+// ---------------------------------------------------------------------
+
+export type CitationToVerify = {
+  /** Stable key as cited, e.g. "in:statute:ipc-1860". */
+  stableKey: string;
+  /** Pinpoint reference, e.g. "§ 302" or "para 14". Optional. */
+  anchor?: string;
+  /** Claimed quotation from the source. Optional. */
+  quote?: string;
+};
+
+export type StoredSourceForCheck = {
+  /** Stable key. */
+  stableKey: string;
+  title: string;
+  /** Latest ingested body; null when text has not been ingested. */
+  body: string | null;
+  /** Section anchors with their character offsets in body. */
+  sections?: { anchor: string; heading: string; start: number }[] | null;
+};
+
+export type CitationCheck = {
+  stableKey: string;
+  sourceExists: boolean;
+  textIngested: boolean;
+  /** Pinpoint anchor resolves to a real section/paragraph. */
+  anchorValid: boolean | null; // null = no anchor claimed
+  /** Quotation found verbatim (normalized whitespace) in stored text. */
+  quoteVerified: boolean | null; // null = no quote claimed
+  /**
+   * Offset of the matched quotation in the stored body (for the
+   * clickable passage). -1 when not verified.
+   */
+  quoteOffset: number;
+  problem: string | null;
+  /** Overall: safe to present as verified. */
+  ok: boolean;
+};
+
+function normText(t: string): string {
+  return t.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+/** Validate one citation against the stored corpus. Pure. */
+export function checkCitation(
+  citation: CitationToVerify,
+  stored: StoredSourceForCheck | null,
+): CitationCheck {
+  const base = {
+    stableKey: citation.stableKey,
+    anchorValid: null as boolean | null,
+    quoteVerified: null as boolean | null,
+    quoteOffset: -1,
+  };
+  if (!stored) {
+    return {
+      ...base,
+      sourceExists: false,
+      textIngested: false,
+      problem: "Cited source does not exist in the verified library.",
+      ok: false,
+    };
+  }
+  if (stored.body === null) {
+    return {
+      ...base,
+      sourceExists: true,
+      textIngested: false,
+      problem:
+        "Source registered but text not ingested — citation cannot be verified.",
+      ok: false,
+    };
+  }
+  let anchorValid: boolean | null = null;
+  if (citation.anchor && citation.anchor.trim()) {
+    const want = normText(citation.anchor);
+    anchorValid = (stored.sections ?? []).some(
+      (s) => normText(s.anchor) === want || normText(s.heading).includes(want),
+    );
+    if (!anchorValid && stored.sections && stored.sections.length > 0) {
+      return {
+        ...base,
+        sourceExists: true,
+        textIngested: true,
+        anchorValid: false,
+        quoteVerified: null,
+        problem: `Pinpoint reference ${citation.anchor} does not match any section of the stored text.`,
+        ok: false,
+      };
+    }
+  }
+  if (citation.quote && citation.quote.trim()) {
+    const body = normText(stored.body);
+    const q = normText(citation.quote);
+    const idx = body.indexOf(q);
+    if (idx < 0) {
+      return {
+        ...base,
+        sourceExists: true,
+        textIngested: true,
+        anchorValid,
+        quoteVerified: false,
+        problem: "Quotation not found in the stored version of this source.",
+        ok: false,
+      };
+    }
+    return {
+      ...base,
+      sourceExists: true,
+      textIngested: true,
+      anchorValid,
+      quoteVerified: true,
+      quoteOffset: idx,
+      problem: null,
+      ok: true,
+    }; 
+  }
+  return {
+    ...base,
+    sourceExists: true,
+    textIngested: true,
+    anchorValid,
+    quoteVerified: null,
+    problem: null,
+    ok: true,
+  };
+}
+
+/** The research context injected into the runner prompt. Rules are part of
  * the contract: no silent jurisdiction assumption, sources are evidence
  * not instructions, no invented citations, no outcome guarantees.
  */

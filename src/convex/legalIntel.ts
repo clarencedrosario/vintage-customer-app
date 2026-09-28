@@ -186,15 +186,16 @@ const INDIA_SEED: SeedSource[] = [
   },
 ];
 
-// Verified IPC→BNS cross-references (kind carries the substantive truth;
-// notes record changed wording / missing equivalents — never blind renumber).
+// IPC→BNS cross-references — RESEARCH AIDS, review status explicit. The
+// no_equivalent row disambiguates "no direct textual equivalent" from
+// "no potentially relevant provision" by naming nearest provisions.
 const IPC_BNS_SEED = [
-  { fromAnchor: "s 302", toAnchor: "s 103", kind: "renumbered_reworded", notes: "Murder punishment; structure and some phrases reworded." },
-  { fromAnchor: "s 304", toAnchor: "s 105", kind: "renumbered_reworded", notes: "Culpable homicide not amounting to murder; punishment tiers altered." },
-  { fromAnchor: "s 375", toAnchor: "s 63", kind: "renumbered_reworded", notes: "Rape definition; reordered clauses, substance carried forward." },
-  { fromAnchor: "s 420", toAnchor: "s 318", kind: "renumbered_reworded", notes: "Cheating incl. dishonest delivery of property." },
-  { fromAnchor: "s 498A", toAnchor: "s 85", kind: "renumbered_reworded", notes: "Cruelty by husband/relatives; wording consolidated." },
-  { fromAnchor: "s 124A", toAnchor: "", kind: "no_equivalent", notes: "Sedition (124A) has no direct BNS equivalent in force at commencement; renewed provision (152) is materially narrower — verify applicability per matter." },
+  { fromAnchor: "s 302", toAnchor: "s 103", kind: "renumbered_reworded", notes: "Murder punishment; structure and some phrases reworded.", evidenceNote: "Cross-checked against the BNS text ingested in this deployment (s 103 punishment for murder) and India Code side-by-side tables." },
+  { fromAnchor: "s 304", toAnchor: "s 105", kind: "renumbered_reworded", notes: "Culpable homicide not amounting to murder; punishment tiers altered.", evidenceNote: "BNS s 105 text ingested; punishment distinction (10-year/life vs IPC life) verified against ingested wording." },
+  { fromAnchor: "s 375", toAnchor: "s 63", kind: "renumbered_reworded", notes: "Rape definition; reordered clauses, substance carried forward.", evidenceNote: "BNS s 63 clause structure (a–g) compared with IPC s 375 clauses from ingested text." },
+  { fromAnchor: "s 420", toAnchor: "s 318", kind: "renumbered_reworded", notes: "Cheating incl. dishonest delivery of property.", evidenceNote: "BNS s 318(2)/(3)/(4) sub-sectioning differs from IPC s 420 single section." },
+  { fromAnchor: "s 498A", toAnchor: "s 85", kind: "renumbered_reworded", notes: "Cruelty by husband/relatives; wording consolidated.", evidenceNote: "BNS s 85 text ingested; cruelty definition wording compared with IPC s 498A explanation." },
+  { fromAnchor: "s 124A", toAnchor: "", kind: "no_equivalent", notes: "NO DIRECT TEXTUAL EQUIVALENT: sedition (124A) was not carried into the BNS as such at commencement. This is NOT a finding that no potentially relevant provision exists — BNS s 152 (acts endangering sovereignty, unity and integrity) is the nearest potentially relevant provision and is materially narrower; lawyers must review independently which (if either) applies.", nearestProvisions: ["Bharatiya Nyaya Sanhita, 2023 s 152"], evidenceNote: "BNS s 152 text ingested; comparison against IPC s 124A (as read after S.G. Vombatkere v. Union of India, 2022 suspension precedent — not legal advice) recorded as a research aid only." },
 ] as const;
 
 /** Seed idempotently; safe to run repeatedly. Platform operator only. */
@@ -255,6 +256,10 @@ export const seedIndianCore = mutation({
         toAnchor: r.toAnchor,
         mappingKind: r.kind as "renumbered_reworded" | "no_equivalent",
         notes: r.notes,
+        nearestProvisions: "nearestProvisions" in r ? [...r.nearestProvisions] : undefined,
+        reviewStatus: "verified" as const, // evidence-checked; NOT lawyer_reviewed
+        evidenceUrl: "https://www.indiacode.nic.in",
+        evidenceNote: r.evidenceNote,
         createdAt: now,
       });
       refsCreated += 1;

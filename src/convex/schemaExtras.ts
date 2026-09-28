@@ -1089,7 +1089,9 @@ export const legalIntelTables = {
 
   // Verified cross-reference mappings between provisions across codes
   // (e.g. IPC→BNS). Deliberately NOT a blind renumber table: carries the
-  // kind of change, differences and missing-equivalent notes.
+  // kind of change, differences and missing-equivalent notes. RESEARCH
+  // AIDS ONLY: never a conclusive legal determination — every mapping
+  // carries review status and, where available, supporting evidence.
   legalCrossRefs: defineTable({
     fromKey: v.string(), // source stableKey + provision anchor
     toKey: v.string(),
@@ -1097,6 +1099,20 @@ export const legalIntelTables = {
     toAnchor: v.string(),
     mappingKind: v.union(...LEGAL_CROSS_REF_KINDS.map((k) => v.literal(k))),
     notes: v.optional(v.string()), // changed wording / missing equivalents
+    // For no_equivalent rows: "no direct textual equivalent" is distinct
+    // from "no potentially relevant provision" — this names the closest
+    // potentially relevant provision(s) a lawyer should review.
+    nearestProvisions: v.optional(v.array(v.string())),
+    // Review lifecycle: draft → verified (with evidence) → lawyer_reviewed.
+    reviewStatus: v.union(
+      v.literal("draft"),
+      v.literal("verified"),
+      v.literal("lawyer_reviewed"),
+    ),
+    evidenceUrl: v.optional(v.string()), // official side-by-side / gazette
+    evidenceNote: v.optional(v.string()),
+    reviewedBy: v.optional(v.string()),
+    reviewedAt: v.optional(v.number()),
     createdAt: v.number(),
   })
     .index("by_from", ["fromKey", "fromAnchor"])
@@ -1150,6 +1166,25 @@ export const legalIntelTables = {
     lastResult: v.optional(v.string()),
     createdAt: v.number(),
   }).index("by_jurisdiction", ["jurisdiction"]),
+
+  // Backend citation validation results — one row per checked citation in
+  // a generated legal_research answer. Written by the runner AFTER
+  // generation so no unsupported claim can be presented as verified:
+  // the job's status flips to needs_citation_review when any check fails.
+  // aiJobs.citationReport is derived at render time from these rows.
+  legalCitationChecks: defineTable({
+    jobId: v.id("aiJobs"),
+    stableKey: v.string(), // cited source stableKey
+    provision: v.optional(v.string()), // pinpoint anchor, e.g. "§ 103"
+    quote: v.optional(v.string()), // quotation the model attributed
+    sourceExists: v.boolean(),
+    textIngested: v.boolean(),
+    anchorValid: v.boolean(),
+    quoteVerified: v.boolean(),
+    problem: v.optional(v.string()), // set when NOT ok
+    ok: v.boolean(),
+    createdAt: v.number(),
+  }).index("by_job", ["jobId"]),
 };
 
 export const platformOpsTables = {
