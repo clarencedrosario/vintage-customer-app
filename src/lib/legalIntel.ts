@@ -115,6 +115,9 @@ export type Applicability = {
 type Provisionish = {
   stableKey: string;
   title: string;
+  /** Era family ("penal" | "procedure" | "evidence" | ...) — transitions
+   * resolve within a family; special acts never displace the general code. */
+  codeFamily?: string;
   inForceFrom?: string;
   repealedAt?: string;
   country: string;
@@ -140,12 +143,16 @@ export function resolveApplicability(
   provisions: Provisionish[],
   crossRefs: CrossRefish[],
   onDate: string,
+  family?: string,
 ): Applicability | null {
-  const inForce = provisions.filter(
+  const pool = family
+    ? provisions.filter((p) => p.codeFamily === family)
+    : provisions;
+  const inForce = pool.filter(
     (p) => (p.inForceFrom ?? "0000-01-01") <= onDate && !(p.repealedAt && p.repealedAt <= onDate),
   );
   if (inForce.length === 0) return null;
-  // Latest-commencing provision in force on the date governs.
+  // Latest-commencing provision in force on the date governs the family.
   const governing = [...inForce].sort((a, b) =>
     (b.inForceFrom ?? "").localeCompare(a.inForceFrom ?? ""),
   )[0]!;
@@ -155,7 +162,7 @@ export function resolveApplicability(
     applicableLabel: governing.title,
     reason: `In force on ${onDate}${
       governing.inForceFrom ? ` (commenced ${governing.inForceFrom})` : ""
-    }${governing.repealedAt ? "" : ""}`,
+    }${family ? `, ${family} law family` : ""}`,
     crossRefs: refs.map((r) => ({
       toKey: r.toKey,
       toAnchor: r.toAnchor,

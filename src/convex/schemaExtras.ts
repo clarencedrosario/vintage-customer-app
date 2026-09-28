@@ -1023,6 +1023,11 @@ export const legalIntelTables = {
   legalSources: defineTable({
     stableKey: v.string(), // e.g. "in:statute:ipc-1860" — citation anchor
     title: v.string(), // OFFICIAL title (abbreviations normalize to this)
+    // Code family: era transitions (old code → new code) resolve WITHIN a
+    // family (penal, procedure, evidence); special acts (POCSO) and the
+    // constitution are their own families and never displace the general
+    // code in applicability decisions.
+    codeFamily: v.optional(v.string()),
     kind: v.union(
       v.literal("constitution"),
       v.literal("statute"),

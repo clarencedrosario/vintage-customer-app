@@ -8,6 +8,93 @@ Last checkpoint: **28 September 2026**
 
 ---
 
+## Implementation turn — 28 Sep 2026 (5): ADVOKATE LEGAL INTELLIGENCE flagship — verified Indian vertical slice
+
+Flagship workstream declared (§26 in ADVOKATE_REQUIREMENTS.md). **What was
+delivered is legal-data infrastructure + the verified Indian research slice
+— NOT a claim of complete law coverage.** Architecture reported honestly:
+retrieval-augmented generation over stored, versioned, permission-checked
+sources with citation verification; the LLM is never the source of law;
+retrieval is not training and no customer material trains any model.
+
+### Delivered this turn
+
+- **Legal-data infrastructure** (`legalIntelTables`): `legalSources`
+  (provenance: official URL, publisher, rights, jurisdiction level
+  national/subnational/eu_regulation/eu_directive/echre, in-force windows,
+  judgment metadata, treatment-with-supporting-source), immutable
+  `legalSourceVersions` (historical reproducibility; section anchors),
+  `legalCrossRefs` (verified IPC↔BNS mappings with mappingKind:
+  renumbered/renumbered_reworded/substantive_change/split/merged/no_equivalent
+  + difference notes), `legalCountryCoverage` (per-domain statuses),
+  `ingestionRuns` (change detection, retries, review queue, last-success
+  timestamps, failure alerts), `legalEvalCases`.
+- **Matter legal profile** — `matters.legalProfile` (country, state,
+  typed legal dates incident/transaction/filing/agreement/hearing,
+  procedural stage, governing-law clause, cross-border factors,
+  confirmedBy) + `organizations.legalDefaults` as DEFAULTS only; lawyer
+  (matter.edit) confirms/corrects per matter; firm default fallback is
+  labelled "firm default — not matter-confirmed" everywhere it appears.
+- **Pure logic** (`src/lib/legalIntel.ts`, 17 tests): jurisdiction
+  resolution, governing legal date (earliest event date governs — a
+  hearing date does not pull conduct into the BNS era; no dates = flagged
+  assumption), era applicability per code family (penal/procedure/evidence;
+  special acts like POCSO never displace the general code — a bug the
+  tests caught), citation normalization to official titles, nine-part
+  answer contract with refusal for unsupported countries, mandatory
+  research rules (no silent jurisdiction substitution, sources = evidence
+  not instructions, no invented citations, no outcome guarantees).
+- **Indian seed** (idempotent, operator-run from /owner): Constitution,
+  IPC 1860, CrPC 1973, Evidence Act 1872, BNS/BNSS/BSA 2023, POCSO 2012
+  with India Code provenance; 6 verified IPC→BNS cross-refs incl. a
+  no_equivalent row (124A); India coverage row (legislation partial,
+  judgments not_started). **Registered ≠ ingested**: sources start as
+  INGESTION-PENDING stubs and the system refuses to cite their text until
+  real ingestion fills them.
+- **European register**: all 50 European states seeded, EU/non-EU
+  distinguished, all domains honestly not_started; ECHR system kept
+  separate from EU instruments at the type level.
+- **Backend** (`legalIntel.ts` + 4 real-backend tests): seed idempotency,
+  coverage register, source search (with applicability windows), source
+  detail with cross-refs, matter-profile get/set (member-only, audited
+  confirmation), per-family applicability, citation verification (source
+  existence + quotation match; failures reported, never dropped),
+  ingestion sweep/result state machine, eval-case seeding. Registry reads
+  require any signed-in named account (public-law metadata); matter reads
+  keep full requireAccess rules.
+- **AI runner**: `legal_research` now injects jurisdiction + governing
+  date + verified sources as labelled evidence, with the nine-part answer
+  format and binding verification rules; no verified sources for the
+  jurisdiction → the model must refuse, not answer from memory.
+- **UI**: `/legal-intel` workspace (nav: Legal Intelligence) — prominent
+  active-jurisdiction/legal-date header with matter picker and one-click
+  lawyer confirmation when unconfirmed, per-domain coverage panel,
+  freshness panel (stale/awaiting-ingestion badges), abbreviation-aware
+  source search that works with AI unavailable, source detail with
+  provenance + cross-references; /owner gained the operator seed panel.
+
+### Honest scope & pending
+
+- **Coverage**: seed statutes are registered, not full-text ingested;
+  section-level ingestion, judgments, tax/family/employment/commercial
+  texts, state legislation and every European jurisdiction are STAGED.
+  Selector presence ≠ support — the UI and the contract say so.
+- **Update feeds**: pipeline state machine is live; upstream official-
+  source fetchers need lawful source agreements before ingestion runs.
+- **Evaluation**: harness + 7 adversarial seed cases (citation accuracy,
+  era applicability, adverse authority, refusal-to-invent, wrong-country,
+  document-injection resistance, missing-facts) — **software tests are
+  not legal accuracy**; lawyer-reviewed sets per jurisdiction remain
+  PENDING operator work. No "smartest AI" claim is made anywhere.
+- **Customer-support chatbot separation**: unchanged — SupportCentre/
+  §25 ticketing is a separate flow; Legal Intelligence is lawyer-facing
+  only.
+- **Verification**: 31 files, 493/493 tests (17 pure + 4 real-backend
+  new); tsc 0 errors; push OK (moonlit-elk-307 dev). Browser pass of the
+  workspace remains unverified as always.
+
+---
+
 ## Implementation turn — 28 Sep 2026 (4): internal MFA required; public CTA removed; honest pending register
 
 ### MFA for internal platform accounts — REQUIRED (correction of record)

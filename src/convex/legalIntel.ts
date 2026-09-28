@@ -56,6 +56,23 @@ async function requireOperator(
   return user!;
 }
 
+/**
+ * Registry reads (coverage, sources, applicability, citation checks) hold
+ * PUBLIC LAW metadata only — no firm-confidential material — so any
+ * signed-in named account may read them, including platform operators who
+ * hold no chamber membership. Matter-scoped reads below still go through
+ * requireAccess + requireMatter.
+ */
+async function requireSignedIn(
+  ctx: QueryCtx | MutationCtx,
+): Promise<Doc<"users">> {
+  const user = await getCurrentUser(ctx);
+  if (!user || user.isAnonymous) {
+    throw new Error("Sign in required.");
+  }
+  return user;
+}
+
 // ---------------------------------------------------------------------
 // Seeding — the verified Indian core (idempotent, platform-side)
 // ---------------------------------------------------------------------
@@ -64,6 +81,7 @@ type SeedSource = {
   stableKey: string;
   title: string;
   kind: "constitution" | "statute" | "code";
+  codeFamily?: string;
   inForceFrom?: string;
   repealedAt?: string;
   sourceUrl: string;
@@ -82,6 +100,7 @@ const INDIA_SEED: SeedSource[] = [
     stableKey: "in:constitution",
     title: "Constitution of India",
     kind: "constitution",
+    codeFamily: "constitution",
     inForceFrom: "1950-01-26",
     sourceUrl: "https://www.india.gov.in/my-government/constitution-india",
     publisher: "Government of India",
@@ -92,6 +111,7 @@ const INDIA_SEED: SeedSource[] = [
     stableKey: "in:statute:ipc-1860",
     title: "Indian Penal Code, 1860",
     kind: "code",
+    codeFamily: "penal",
     inForceFrom: "1862-01-01",
     sourceUrl: "https://www.indiacode.nic.in",
     publisher: "India Code (Legislative Department)",
@@ -102,6 +122,7 @@ const INDIA_SEED: SeedSource[] = [
     stableKey: "in:statute:crpc-1973",
     title: "Code of Criminal Procedure, 1973",
     kind: "code",
+    codeFamily: "procedure",
     inForceFrom: "1974-04-01",
     sourceUrl: "https://www.indiacode.nic.in",
     publisher: "India Code (Legislative Department)",
@@ -112,6 +133,7 @@ const INDIA_SEED: SeedSource[] = [
     stableKey: "in:statute:evidence-1872",
     title: "Indian Evidence Act, 1872",
     kind: "statute",
+    codeFamily: "evidence",
     inForceFrom: "1872-09-01",
     sourceUrl: "https://www.indiacode.nic.in",
     publisher: "India Code (Legislative Department)",
@@ -122,6 +144,7 @@ const INDIA_SEED: SeedSource[] = [
     stableKey: "in:statute:bns-2023",
     title: "Bharatiya Nyaya Sanhita, 2023",
     kind: "code",
+    codeFamily: "penal",
     inForceFrom: "2024-07-01",
     sourceUrl: "https://www.indiacode.nic.in",
     publisher: "India Code (Legislative Department)",
@@ -132,6 +155,7 @@ const INDIA_SEED: SeedSource[] = [
     stableKey: "in:statute:bnss-2023",
     title: "Bharatiya Nagarik Suraksha Sanhita, 2023",
     kind: "code",
+    codeFamily: "procedure",
     inForceFrom: "2024-07-01",
     sourceUrl: "https://www.indiacode.nic.in",
     publisher: "India Code (Legislative Department)",
@@ -142,6 +166,7 @@ const INDIA_SEED: SeedSource[] = [
     stableKey: "in:statute:bsa-2023",
     title: "Bharatiya Sakshya Adhiniyam, 2023",
     kind: "statute",
+    codeFamily: "evidence",
     inForceFrom: "2024-07-01",
     sourceUrl: "https://www.indiacode.nic.in",
     publisher: "India Code (Legislative Department)",
@@ -152,6 +177,7 @@ const INDIA_SEED: SeedSource[] = [
     stableKey: "in:statute:pocso-2012",
     title: "Protection of Children from Sexual Offences Act, 2012",
     kind: "statute",
+    codeFamily: "special-act",
     inForceFrom: "2012-11-14",
     sourceUrl: "https://www.indiacode.nic.in",
     publisher: "India Code (Legislative Department)",
@@ -185,18 +211,11 @@ export const seedIndianCore = mutation({
         .withIndex("by_stable_key", (q) => q.eq("stableKey", s.stableKey))
         .unique();
       if (existing) continue;
-      const versionId = await ctx.db.insert("legalSourceVersions", {
-        sourceId: undefined as never, // patched below (needs source id first)
-        version: 1,
-        body: `[INGESTION PENDING] ${s.title}\n\nOfficial source: ${s.sourceUrl}\nPublisher: ${s.publisher}\n\nSection-level text for this source has not been ingested in this deployment yet. Advokate will not cite sections from this source until ingestion completes. This stub exists so provenance, coverage status and the pipeline are wired before content arrives — never to fabricate content.\n\nRegistry note: ${s.notes}`,
-        collectedAt: todayISO(),
-        ingestedById: user?._id,
-        createdAt: now,
-      });
       const sourceId = await ctx.db.insert("legalSources", {
         stableKey: s.stableKey,
         title: s.title,
         kind: s.kind,
+        codeFamily: s.codeFamily,
         country: "in",
         jurisdictionLevel: "national",
         inForceFrom: s.inForceFrom,
@@ -205,11 +224,18 @@ export const seedIndianCore = mutation({
         publisher: s.publisher,
         sourceUrl: s.sourceUrl,
         collectionDate: todayISO(),
-        latestVersion: versionId,
         createdAt: now,
         updatedAt: now,
       });
-      await ctx.db.patch(versionId, { sourceId });
+      const versionId = await ctx.db.insert("legalSourceVersions", {
+        sourceId,
+        version: 1,
+        body: `[INGESTION PENDING] ${s.title}\n\nOfficial source: ${s.sourceUrl}\nPublisher: ${s.publisher}\n\nSection-level text for this source has not been ingested in this deployment yet. Advokate will not cite sections from this source until ingestion completes. This stub exists so provenance, coverage status and the pipeline are wired before content arrives — never to fabricate content.\n\nRegistry note: ${s.notes}`,
+        collectedAt: todayISO(),
+        ingestedById: user?._id,
+        createdAt: now,
+      });
+      await ctx.db.patch(sourceId, { latestVersion: versionId });
       created += 1;
     }
 
@@ -298,7 +324,7 @@ export const seedEuropeanCoverage = mutation({
 export const coverage = query({
   args: {},
   handler: async (ctx) => {
-    await requireAccess(ctx);
+    await requireSignedIn(ctx);
     const rows = await ctx.db.query("legalCountryCoverage").collect();
     return rows.sort((a, b) => {
       if (a.inEurope !== b.inEurope) return a.inEurope ? 1 : -1;
@@ -311,7 +337,7 @@ export const coverage = query({
 export const freshness = query({
   args: {},
   handler: async (ctx) => {
-    await requireAccess(ctx);
+    await requireSignedIn(ctx);
     const sources = await ctx.db.query("legalSources").collect();
     const runs = await ctx.db.query("ingestionRuns").collect();
     const lastBySource = new Map<string, { at: number; outcome: string }>();
@@ -365,7 +391,7 @@ export const searchSources = query({
     onDate: v.optional(v.string()), // YYYY-MM-DD applicability filter
   },
   handler: async (ctx, args) => {
-    await requireAccess(ctx);
+    await requireSignedIn(ctx);
     const needle = args.q.trim().toLowerCase();
     const onDate = args.onDate ?? todayISO();
     const rows = await ctx.db.query("legalSources").collect();
@@ -415,7 +441,7 @@ export const searchSources = query({
 export const getSource = query({
   args: { stableKey: v.string() },
   handler: async (ctx, args) => {
-    await requireAccess(ctx);
+    await requireSignedIn(ctx);
     const s = await ctx.db
       .query("legalSources")
       .withIndex("by_stable_key", (q) => q.eq("stableKey", args.stableKey))
@@ -556,9 +582,12 @@ export const applicability = query({
     country: v.string(),
     onDate: v.string(), // YYYY-MM-DD
     query: v.optional(v.string()),
+    // "penal" | "procedure" | "evidence" | ... — era transitions resolve
+    // within a family; omit for an overview across families.
+    family: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireAccess(ctx);
+    await requireSignedIn(ctx);
     const country = args.country.trim().toLowerCase();
     const sources = await ctx.db
       .query("legalSources")
@@ -568,29 +597,34 @@ export const applicability = query({
       (s) => (s.kind === "code" || s.kind === "statute") && !s.court,
     );
     const crossRefs = await ctx.db.query("legalCrossRefs").collect();
-    const byKey = new Map(codes.map((c) => [c.stableKey, c]));
     const resolved = resolveApplicability(
       codes.map((c) => ({
         stableKey: c.stableKey,
         title: c.title,
+        codeFamily: c.codeFamily ?? undefined,
         inForceFrom: c.inForceFrom ?? undefined,
         repealedAt: c.repealedAt ?? undefined,
         country: c.country,
       })),
       crossRefs,
       args.onDate,
+      args.family,
     );
     const cov = await ctx.db
       .query("legalCountryCoverage")
       .withIndex("by_country", (q) => q.eq("country", country))
       .unique();
+    // Support is derived from the COVERAGE REGISTER, not asserted: a
+    // country with no verified legislation is refused by the contract.
+    const supported =
+      !!cov && (cov.legislation === "verified" || cov.legislation === "partial");
     const contract = buildAnswerContract({
       country,
       jurisdictionLabel: countryName(country),
       legalDate: args.onDate,
       legalDateBasis: "requested date",
       dateIsAssumption: false,
-      supportedCountries: [country],
+      supportedCountries: supported ? [country] : [],
     });
     return {
       resolved,
@@ -626,7 +660,7 @@ export const verifyCitations = mutation({
     ),
   },
   handler: async (ctx, args) => {
-    await requireAccess(ctx);
+    await requireSignedIn(ctx);
     const results = [] as {
       stableKey: string;
       sourceExists: boolean;
@@ -822,7 +856,7 @@ export const ingestSourceText = mutation({
 export const listEvalCases = query({
   args: { jurisdiction: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    await requireAccess(ctx);
+    await requireSignedIn(ctx);
     const rows = args.jurisdiction
       ? await ctx.db
           .query("legalEvalCases")
