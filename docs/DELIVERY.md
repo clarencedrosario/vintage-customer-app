@@ -1,5 +1,42 @@
 # Implementation & delivery map (section 31)
 
+## Handoff — 28 Sep 2026: CJ GLOBAL internal workforce shipped; conflation corrected
+
+- **Correction (recorded honestly):** earlier handoffs labelled the chamber
+  *Team & Access* feature (`invitations.inviteStaff`, `workspace.setMemberRole`,
+  `workspace.suspendMember`) as satisfying the CJ GLOBAL "workforce" request.
+  That was a conflation — Team & Access manages **chamber members inside one
+  law firm**, not CJ GLOBAL's own platform staff. The platform now has a real,
+  separate internal workforce system (below).
+- **Internal workforce (platform-level, chamber-independent)** — new
+  `platformEmployees` + `platformInvitations` tables (no orgId anywhere) and
+  `workforce.ts`: owner invites by email → one-time token link
+  (`/accept-platform-invite?token=…`, 14-day TTL, supersedes live invites) →
+  the invitee signs in (email-verified account required, email must match) →
+  platformEmployees row created/reactivated in-transaction. Owner-only
+  suspend/unsuspend/role-change; revoke kills the token. Roles are exactly
+  `support_agent | support_supervisor | developer` — **ownership is NOT a
+  role**: it stays the audited `isPlatformAdmin` flag, and no workforce
+  function can set it.
+- **Capability-gated operations (real-backend tested)** — `platformOps.ts`
+  mutations moved from the blanket `isPlatformAdmin` check to per-capability
+  authority (`operatorForCapability`): agents claim/reply/resolve/set-priority,
+  supervisors add handoff view/diagnostics, developers get read-only queue +
+  rebuild but cannot reply to customers. `getTicket` now lets queue-capable
+  staff read the ticket they work. The pure model lives in
+  `platformWorkforce.ts`; 4 real-backend integration tests
+  (`workforce.test.ts`) run the full lifecycle across owner/agent/developer/
+  chamber-owner identities and prove each refusal by its error.
+- **Console + nav** — `/owner` WorkforcePanel (invite form with one-time
+  copyable link, pending invites with revoke, roster with role/suspend
+  controls) and capability-gated sections; the top-bar Headset link now also
+  appears for workforce identities (titled "Open owner console"), never for
+  customers or chamber-only users.
+- **Verification:** push OK (moonlit-elk-307 dev), `tsc -b` 0 errors,
+  **27 files, 449/449 tests** (445 prior + 4 workforce integration).
+  **Browser unverified** — no E2E pass of the invite/accept/console flow yet.
+  Owner activation still pending the user's OTP sign-in.
+
 ## Handoff — 27 Sep 2026: owner activation shipped (verified gate, activation pending user sign-in)
 
 - **Configured**: `PLATFORM_OWNER_EMAIL=clarencedrosario@gmail.com` set on the
@@ -17,11 +54,13 @@
   the emailed 6-digit OTP → click **Activate platform ownership** (audited) →
   console loads. 2FA challenge applies per the console-route gate; enroll via
   Settings → two-factor.
-- **Team & Access** verified implemented + capability-tested (invite with seat
-  gating, role set with last-owner protection, suspend/reactivate effective
-  immediately; owner/administrator hold team.invite+team.manage,
-  accountant/support_staff do not; support_staff cannot be normalized into
-  administration).
+- **Team & Access (chamber-level)** verified implemented + capability-tested
+  (invite with seat gating, role set with last-owner protection,
+  suspend/reactivate effective immediately; owner/administrator hold
+  team.invite+team.manage, accountant/support_staff do not; support_staff
+  cannot be normalized into administration). NOTE: this is the in-chamber
+  member system — it does NOT manage CJ GLOBAL platform staff; see the 28 Sep
+  handoff above for the real internal workforce.
 - **Support workflow**: policy-level sequence automated (445/445); **browser
   unverified** — 8-step manual script recorded in ADVOKATE_PROGRESS.md.
 - **Rebuild**: operator-only, explicit scan limits (REBUILD_MAX_TICKETS=5000 /
@@ -147,7 +186,7 @@ Status legend:
 - **Awaiting external config** — implemented, but needs credentials/approvals you must supply (keys, merchant accounts, provider review).
 - **Incomplete** — not built yet.
 
-Last verified: 26 September 2026 — `tsc -b` 0 errors, 285/285 tests, Convex push and production build succeed.
+Last verified: 28 September 2026 — `tsc -b` 0 errors, 449/449 tests (27 files), Convex push OK. Earlier: 26 September 2026 — 285/285 tests.
 
 ## The connected chamber (this milestone's focus)
 

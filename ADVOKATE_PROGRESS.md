@@ -4,7 +4,70 @@ Durable progress file so development resumes without repeating completed work.
 Companion to `ADVOKATE_REQUIREMENTS.md` (the master checklist). Handoff log also
 maintained in `docs/DELIVERY.md`.
 
-Last checkpoint: **27 September 2026**
+Last checkpoint: **28 September 2026**
+
+---
+
+## Implementation turn — 28 Sep 2026 (CJ GLOBAL internal workforce + capability-gated operations)
+
+### Correction of record: chamber Team & Access ≠ CJ GLOBAL workforce
+
+An earlier report described request 6 (Team & Access) as satisfying the CJ
+GLOBAL platform-workforce need. That was a **conflation**: `inviteStaff`/
+`setMemberRole`/`suspendMember` manage members *inside a customer law firm*
+(chamber employees), not CJ GLOBAL's own support agents/supervisors/developers.
+The correction is recorded here and in docs/DELIVERY.md; the chamber system
+remains unchanged and correct for its own purpose.
+
+### Delivered: real platform-internal workforce (chamber-independent)
+
+- **Schema** (`platformOpsTables`): `platformEmployees` (userId unique per
+  platform, email, role, status active/suspended, invite/suspend audit fields;
+  by_user/by_email/by_status indexes) and `platformInvitations` (email, role,
+  salt+tokenHash, invitedBy, expiresAt, acceptedAt, revokedAt; by_token/by_email).
+- **Functions** (`workforce.ts`): `inviteEmployee` (email validation, ≥24-char
+  token, refuses active employees, supersedes live invites),
+  `acceptEmployeeInvite` (signed-in + server-verified email required, must
+  match the invite; creates/reactivates the row in-transaction),
+  `suspendEmployee`/`unsuspendEmployee`/`setEmployeeRole` (owner-only, never
+  self-targeted), `revokeInvitation`, `listEmployees`/`listInvitations`
+  (owner-only; tokenHash never returned), `myPlatformIdentity` (self).
+- **Role model** (`platformWorkforce.ts`, pure): roles are exactly
+  `support_agent | support_supervisor | developer`. There is NO owner role —
+  ownership stays the audited `isPlatformAdmin` flag bound to the verified
+  `PLATFORM_OWNER_EMAIL` account, and no workforce function can set it.
+- **Capability-gated operations** (`platformOps.ts`): the seven ticket
+  mutations + the handoff rebuild now authorize per capability via
+  `operatorForCapability` (owner flag OR employee role capability) instead of
+  the blanket `isPlatformAdmin` check; `getTicket` additionally lets
+  queue-capable staff read the ticket thread they work. Agents claim/reply/
+  resolve/prioritize; supervisors add handoff view + diagnostics; developers
+  get read-only queue + rebuild but cannot reply or claim.
+- **UI**: `/owner` WorkforcePanel (invite → one-time copyable
+  `/accept-platform-invite?token=…` link, pending invites with revoke, roster
+  with role select + suspend/restore), capability-gated console sections, and
+  public `/accept-platform-invite` page (requires sign-in; shows sign-in CTA
+  with returnTo when signed out). The top-bar Headset link ("Open owner
+  console") now appears for workforce identities too — never for customers.
+- **Tests (real backend, 4 identities)** — `workforce.test.ts` (4 tests,
+  console/agent/developer/chamber-owner): invite→accept→persist→identity →
+  agent claims + replies successfully → developer reply REFUSED
+  (`platform.ticket.reply`) → agent rebuild REFUSED → developer rebuild
+  SUCCEEDS but claim REFUSED → agent cannot list employees → suspension
+  kills queue access instantly → unsuspend restores it → revoked token is
+  dead → chamber-owner has no platform identity → activation bindings (no
+  verified-email account, wrong account, and `bootstrapStatus` operator-only
+  privacy incl. `configured:false` in the test backend) all enforced on the
+  real Convex backend (convex-test), not capability-matrix stubs.
+
+### Verification (this turn, actual results)
+
+- `bunx convex dev --once` → **push OK** (moonlit-elk-307 dev).
+- `bunx tsc -b --noEmit` → **0 errors**.
+- `bun run test` → **27 files, 449/449 passed** (445 prior + 4 workforce).
+- **Browser: unverified** — no E2E pass of invite/accept/console flows yet.
+- **Owner activation: still pending** the user's OTP sign-in + activation
+  click on /owner (mailbox-side step; negative gate proof stands).
 
 ---
 
@@ -57,7 +120,11 @@ Last checkpoint: **27 September 2026**
   `REBUILD_MAX_ORGS = 500` scan limits abort the rebuild with an explanatory
   error instead of silently truncating; both constants pinned by test.
 
-### Team & Access + isolation (requests 6–7)
+### Chamber Team & Access + isolation (requests 6–7) — chamber-scope only
+
+> Scope correction (28 Sep): this section covers the **in-chamber** member
+> system. It does not satisfy the CJ GLOBAL internal-workforce request — that
+> system shipped separately on 28 Sep (see top of file).
 
 - **Verified implemented server-side** (inspected + typechecked, existing
   tests green): `invitations.inviteStaff` (team.invite capability, token+salt,

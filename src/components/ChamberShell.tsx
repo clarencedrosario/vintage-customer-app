@@ -385,28 +385,35 @@ function OrgSwitcher({ onNavigate }: { onNavigate?: () => void }) {
 }
 
 /** Discreet top-bar entry to the platform consoles — only for platform
- *  admins: /platform (subscriptions/chambers) and /owner (support ops). */
+ *  admins (/platform subscriptions/chambers + /owner support ops) and CJ
+ *  GLOBAL workforce employees (/owner with capability-reduced sections).
+ *  Customers and chamber-only users see nothing here. */
 function PlatformLink() {
   const amAdmin = useQuery(api.platform.amIPlatformAdmin);
-  if (!amAdmin) return null;
+  const platformIdentity = useQuery(api.workforce.myPlatformIdentity);
+  const isWorkforce = !!platformIdentity?.platformRole;
+  const showOwnerConsole = !!amAdmin || isWorkforce;
+  if (!showOwnerConsole) return null;
   return (
     <>
       <NavLink
         to="/owner"
-        title="Support operations console"
-        aria-label="Support operations console"
+        title="Open owner console"
+        aria-label="Open owner console"
         className="flex size-8 items-center justify-center rounded-md text-slate-500 hover:bg-muted hover:text-foreground"
       >
         <Headset className="size-4" aria-hidden="true" />
       </NavLink>
-      <NavLink
-        to="/platform"
-        title="Platform console"
-        aria-label="Platform console"
-        className="flex size-8 items-center justify-center rounded-md text-slate-500 hover:bg-muted hover:text-foreground"
-      >
-        <Shield className="size-4" aria-hidden="true" />
-      </NavLink>
+      {amAdmin && (
+        <NavLink
+          to="/platform"
+          title="Platform console"
+          aria-label="Platform console"
+          className="flex size-8 items-center justify-center rounded-md text-slate-500 hover:bg-muted hover:text-foreground"
+        >
+          <Shield className="size-4" aria-hidden="true" />
+        </NavLink>
+      )}
     </>
   );
 }

@@ -8,9 +8,10 @@
 //  - SUBMIT/REPLY: any authenticated, non-anonymous user from any portal
 //    (client, staff, chamber console). Tickets are about the platform —
 //    no special capability required.
-//  - TRIAGE/RESOLVE/CLOSE: platform operators only (users.isPlatformAdmin,
-//    the same gate as the section-24 console), every action audited in
-//    platformOpsAudit.
+//  - TRIAGE/RESOLVE/CLOSE: capability-gated platform staff — the platform
+//    owner (isPlatformAdmin) or CJ GLOBAL workforce employees by role
+//    (support_agent / support_supervisor / developer), every action audited
+//    in platformOpsAudit.
 //  - VISIBILITY: only the ticket's submitter and platform operators can
 //    read a ticket. Never chamber-wide, never cross-customer.
 //  - NO LEGAL RECORD EXPOSURE: a ticket carries its own subject/body and
@@ -73,22 +74,11 @@ async function actorOf(
   return user;
 }
 
-async function requireOperator(
-  ctx: QueryCtx | MutationCtx,
-): Promise<Doc<"users">> {
-  const user = await actorOf(ctx);
-  if (!user || !user.isPlatformAdmin) {
-    throw new Error("Platform operator access required.");
-  }
-  return user;
-}
-
 /**
  * Capability-gated operator authority: the platform owner holds every
  * platform capability; workforce employees hold only their role's set.
- * Replaces the blanket flag check for queue operations — a support agent
- * can work the queue but NOT run the handoff rebuild, a developer can
- * read diagnostics but NOT reply to customers.
+ * A support agent can work the queue but NOT run the handoff rebuild, a
+ * developer can read diagnostics but NOT reply to customers.
  */
 async function requirePlatformCapability(
   ctx: QueryCtx | MutationCtx,
@@ -99,6 +89,35 @@ async function requirePlatformCapability(
   if (!actor.isPlatformAdmin && !actor.capabilities.includes(cap)) {
     throw new Error(`This platform action requires ${cap}.`);
   }
+}
+
+/** Non-throwing variant for visibility decisions. */
+async function hasPlatformCapability(
+  ctx: QueryCtx | MutationCtx,
+  cap: string,
+): Promise<boolean> {
+  const actor = await platformActorOf(ctx);
+  return !!actor && (actor.isPlatformAdmin || actor.capabilities.includes(cap));
+}
+
+/**
+ * Mutation-side gate: verifies the capability AND returns the acting user
+ * for assignment/audit fields. Same authority rule as
+ * requirePlatformCapability — the owner flag or an employee capability —
+ * so a support agent claiming a ticket lands their own user row on it.
+ */
+async function operatorForCapability(
+  ctx: QueryCtx | MutationCtx,
+  cap: string,
+): Promise<Doc<"users">> {
+  const actor = await platformActorOf(ctx);
+  if (!actor) throw new Error("Sign in required.");
+  if (!actor.isPlatformAdmin && !actor.capabilities.includes(cap)) {
+    throw new Error(`This platform action requires ${cap}.`);
+  }
+  const user = await actorOf(ctx);
+  if (!user) throw new Error("Sign in required.");
+  return user;
 }
 
 async function auditOps(
@@ -408,14 +427,22 @@ export const operatorQueue = query({
   },
 });
 
-/** Full ticket detail: submitter or operator only. */
+/** Full ticket detail: submitter, operator, or queue-capable platform staff. */
 export const getTicket = query({
   args: { ticketId: v.id("supportTickets") },
   handler: async (ctx, args) => {
     const user = await actorOf(ctx);
     if (!user) return null;
     const ticket = await ctx.db.get(args.ticketId);
-    if (!ticket || !canSeeTicket(user, ticket)) return null;
+    if (!ticket) return null;
+    // Platform workforce with queue access may read any ticket (agents need
+    // the thread they are replying to); everyone else keeps the
+    // submitter-or-owner rule untouched.
+    const staffViewer = await hasPlatformCapability(
+      ctx,
+      "platform.ticket.view_queue",
+    );
+    if (!staffViewer && !canSeeTicket(user, ticket)) return null;
     const messages = await ctx.db
       .query("supportTicketMessages")
       .withIndex("by_ticket", (q) => q.eq("ticketId", args.ticketId))
@@ -513,8 +540,7 @@ export const addCustomerMessage = mutation({
 export const startProgress = mutation({
   args: { ticketId: v.id("supportTickets"), note: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    await requirePlatformCapability(ctx, "platform.ticket.claim");
-    const operator = await requireOperator(ctx);
+    const operator = await operatorForCapability(ctx, "platform.ticket.claim");
     const ticket = await ticketOrThrow(ctx, args.ticketId);
     if (ticket.status !== "open") {
       throw new Error("Only open tickets can move to in progress.");
@@ -552,8 +578,7 @@ export const startProgress = mutation({
 export const addOperatorMessage = mutation({
   args: { ticketId: v.id("supportTickets"), body: v.string() },
   handler: async (ctx, args) => {
-    await requirePlatformCapability(ctx, "platform.ticket.reply");
-    const operator = await requireOperator(ctx);
+    const operator = await operatorForCapability(ctx, "platform.ticket.reply");
     const ticket = await ticketOrThrow(ctx, args.ticketId);
     if (ticket.status === "closed") {
       throw new Error("Reopen the ticket before replying.");
@@ -582,8 +607,7 @@ export const addOperatorMessage = mutation({
 export const assignTicket = mutation({
   args: { ticketId: v.id("supportTickets") },
   handler: async (ctx, args) => {
-    await requirePlatformCapability(ctx, "platform.ticket.claim");
-    const operator = await requireOperator(ctx);
+    const operator = await operatorForCapability(ctx, "platform.ticket.claim");
     const ticket = await ticketOrThrow(ctx, args.ticketId);
     const now = Date.now();
     const nextStatus = ticket.status === "open" ? "in_progress" : ticket.status;
@@ -612,8 +636,10 @@ export const setTicketPriority = mutation({
     priority: v.union(...TICKET_PRIORITIES.map((p) => v.literal(p))),
   },
   handler: async (ctx, args) => {
-    await requirePlatformCapability(ctx, "platform.ticket.set_priority");
-    const operator = await requireOperator(ctx);
+    const operator = await operatorForCapability(
+      ctx,
+      "platform.ticket.set_priority",
+    );
     const ticket = await ticketOrThrow(ctx, args.ticketId);
     await ctx.db.patch(ticket._id, {
       priority: args.priority,
@@ -634,8 +660,10 @@ export const setTicketPriority = mutation({
 export const resolveTicket = mutation({
   args: { ticketId: v.id("supportTickets"), note: v.string() },
   handler: async (ctx, args) => {
-    await requirePlatformCapability(ctx, "platform.ticket.resolve_close");
-    const operator = await requireOperator(ctx);
+    const operator = await operatorForCapability(
+      ctx,
+      "platform.ticket.resolve_close",
+    );
     const ticket = await ticketOrThrow(ctx, args.ticketId);
     if (!canTransitionTicket(ticket.status, "resolved")) {
       throw new Error(`A ${ticket.status} ticket cannot be resolved.`);
@@ -677,8 +705,10 @@ export const resolveTicket = mutation({
 export const closeTicket = mutation({
   args: { ticketId: v.id("supportTickets") },
   handler: async (ctx, args) => {
-    await requirePlatformCapability(ctx, "platform.ticket.resolve_close");
-    const operator = await requireOperator(ctx);
+    const operator = await operatorForCapability(
+      ctx,
+      "platform.ticket.resolve_close",
+    );
     const ticket = await ticketOrThrow(ctx, args.ticketId);
     if (ticket.status !== "resolved") {
       throw new Error("Only resolved tickets can be closed.");
@@ -707,8 +737,10 @@ export const closeTicket = mutation({
 export const reopenTicket = mutation({
   args: { ticketId: v.id("supportTickets"), reason: v.string() },
   handler: async (ctx, args) => {
-    await requirePlatformCapability(ctx, "platform.ticket.resolve_close");
-    const operator = await requireOperator(ctx);
+    const operator = await operatorForCapability(
+      ctx,
+      "platform.ticket.resolve_close",
+    );
     const ticket = await ticketOrThrow(ctx, args.ticketId);
     if (ticket.status !== "resolved" && ticket.status !== "closed") {
       throw new Error("Only resolved or closed tickets can be reopened.");
@@ -824,8 +856,10 @@ export const myChamberHandoffStats = query({
 export const rebuildAiHandoffStats = mutation({
   args: {},
   handler: async (ctx) => {
-    await requirePlatformCapability(ctx, "platform.handoff.rebuild");
-    const operator = await requireOperator(ctx);
+    const operator = await operatorForCapability(
+      ctx,
+      "platform.handoff.rebuild",
+    );
 
     // Explicit scan limits: a rebuild reads at most REBUILD_MAX_TICKETS
     // tickets across at most REBUILD_MAX_ORGS chambers. Volume is operator-
