@@ -1185,6 +1185,17 @@ export const legalIntelTables = {
     ok: v.boolean(),
     createdAt: v.number(),
   }).index("by_job", ["jobId"]),
+
+  // Staging area for chunked CLI ingestion: statute bodies exceed the CLI
+  // single-argument size limit, so the ingest script appends ordered chunks
+  // with a runKey, then ingestSourceTextCli concatenates + clears them in
+  // the same transaction that writes the immutable version row.
+  ingestChunks: defineTable({
+    runKey: v.string(), // groups one ingestion payload
+    seq: v.number(),
+    bodyChunk: v.string(),
+    createdAt: v.number(),
+  }).index("by_run", ["runKey", "seq"]),
 };
 
 export const platformOpsTables = {

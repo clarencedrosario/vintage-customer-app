@@ -186,7 +186,7 @@ export function resolveApplicability(
     onDate <= addDays(governing.inForceFrom, 730)
   ) {
     reviewFlags.push(
-      "Within two years of commencement — transitional exceptions (e.g. s.358 BNS / s.356 BNSS / s.167 BSA savings on pending proceedings) may alter applicability; verify against the matter's procedural stage.",
+      "Within two years of commencement — transitional exceptions (e.g. s.358(2) BNS general savings; s.531(2)(a) BNSS and s.170(2) BSA pending-proceedings savings keeping pending matters under the former codes) may alter applicability; verify against the matter's procedural stage.",
     );
   }
   if (crossRefs.some((r) => r.fromKey === governing.stableKey && r.mappingKind === "no_equivalent")) {

@@ -729,14 +729,30 @@ export const verifyCitations = mutation({
 export const runIngestionSweep = action({
   args: { maxSources: v.optional(v.number()) },
   handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    if (!isPlatformOperator(user)) {
+      throw new Error("Platform operator access required.");
+    }
     const limit = Math.min(args.maxSources ?? 50, 200);
     const sources = await ctx.runQuery(internal.legalIntel.allSourceIds, {});
-    let enqueued = 0;
+    let opened = 0;
+    let skipped = 0;
+    const runIds: string[] = [];
     for (const s of sources.slice(0, limit)) {
-      await ctx.runMutation(internal.legalIntel.openRun, { sourceId: s._id });
-      enqueued += 1;
+      const r = await ctx.runMutation(internal.legalIntel.openRun, { sourceId: s._id });
+      if (r.opened) {
+        opened += 1;
+        runIds.push(String(r.runId));
+      } else {
+        skipped += 1;
+      }
     }
-    return { enqueued };
+    return {
+      opened,
+      skipped,
+      runIds,
+      note: "Runs are state machine rows only. This deployment has no automated fetcher configured: a scheduled action cannot silently rewrite verified law text. Each run is completed by an explicit authenticated ingestion (scripts/ingest-legal-text.mjs) which records updated/failed against the open run — duplicate prevention above keeps retried sweeps from double-enqueueing a source.",
+    };
   },
 });
 
@@ -745,16 +761,30 @@ export const allSourceIds = internalQuery({
   handler: async (ctx) => ctx.db.query("legalSources").collect(),
 });
 
-/** Open a run row (retry-aware). */
+/**
+ * Open a run row — WITH duplicate prevention: a source with an unfinished
+ * run (no finishedAt) is skipped, so a retried sweep or two racing sweeps
+ * can never double-enqueue the same source. Returns whether a new run was
+ * actually opened (the sweep reports this as skipped/queued).
+ */
 export const openRun = internalMutation({
-  args: { sourceId: v.id("legalSources") },
+  args: { sourceId: v.id("legalSources"), triggeredBy: v.optional(v.union(v.literal("schedule"), v.literal("manual"))) },
   handler: async (ctx, args) => {
-    await ctx.db.insert("ingestionRuns", {
+    const unfinished = await ctx.db
+      .query("ingestionRuns")
+      .withIndex("by_source", (q) => q.eq("sourceId", args.sourceId))
+      .collect();
+    if (unfinished.some((r) => r.finishedAt === undefined)) {
+      return { opened: false as const, skipped: true as const };
+    }
+    const prev = unfinished.sort((a, b) => b.startedAt - a.startedAt)[0];
+    const runId = await ctx.db.insert("ingestionRuns", {
       sourceId: args.sourceId,
       startedAt: Date.now(),
-      attempts: 1,
-      triggeredBy: "schedule",
+      attempts: (prev?.attempts ?? 0) + 1,
+      triggeredBy: args.triggeredBy ?? "schedule",
     });
+    return { opened: true as const, skipped: false as const, runId };
   },
 });
 
@@ -851,6 +881,182 @@ export const ingestSourceText = mutation({
       updatedAt: now,
     });
     return { versionId, version: nextVersion, previousVersion: prev?.version ?? null };
+  },
+});
+
+// ---------------------------------------------------------------------
+// CLI ingestion path (26.8) — used by scripts/ingest-legal-text.mjs.
+// Statute bodies exceed the CLI argument size limit, so the script
+// stages ordered chunks (stageChunk) and then calls ingestSourceTextCli,
+// which concatenates the chunks and writes the immutable version row in
+// one transaction. Runs through INTERNAL functions only: the public
+// ingestSourceText remains the operator-authenticated browser path.
+// ---------------------------------------------------------------------
+
+export const stageChunk = internalMutation({
+  args: { runKey: v.string(), seq: v.number(), bodyChunk: v.string() },
+  handler: async (ctx, args) => {
+    await ctx.db.insert("ingestChunks", {
+      runKey: args.runKey,
+      seq: args.seq,
+      bodyChunk: args.bodyChunk,
+      createdAt: Date.now(),
+    });
+    return { ok: true };
+  },
+});
+
+export const clearChunks = internalMutation({
+  args: { runKey: v.string() },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("ingestChunks")
+      .withIndex("by_run", (q) => q.eq("runKey", args.runKey))
+      .collect();
+    for (const r of rows) await ctx.db.delete(r._id);
+    return { cleared: rows.length };
+  },
+});
+
+/** Ingest text from the CLI: new immutable version + freshness update. */
+export const ingestSourceTextCli = internalMutation({
+  args: {
+    stableKey: v.string(),
+    runKey: v.string(),
+    sections: v.array(
+      v.object({ anchor: v.string(), heading: v.string(), start: v.number() }),
+    ),
+    collectedAt: v.string(),
+    sourceUrl: v.optional(v.string()),
+    publisher: v.optional(v.string()),
+    provenanceNote: v.optional(v.string()),
+    closeRunId: v.optional(v.id("ingestionRuns")),
+  },
+  handler: async (ctx, args) => {
+    const chunks = await ctx.db
+      .query("ingestChunks")
+      .withIndex("by_run", (q) => q.eq("runKey", args.runKey))
+      .collect();
+    chunks.sort((a, b) => a.seq - b.seq);
+    if (chunks.length === 0) {
+      throw new Error(`No staged chunks for ${args.runKey}.`);
+    }
+    const body = chunks.map((c) => c.bodyChunk).join("");
+    for (const c of chunks) await ctx.db.delete(c._id);
+
+    const s = await ctx.db
+      .query("legalSources")
+      .withIndex("by_stable_key", (q) => q.eq("stableKey", args.stableKey))
+      .unique();
+    if (!s) throw new Error(`Unknown source stable key: ${args.stableKey}`);
+    const prev = s.latestVersion ? await ctx.db.get(s.latestVersion) : null;
+    const nextVersion = (prev?.version ?? 0) + 1;
+    const now = Date.now();
+    const versionId = await ctx.db.insert("legalSourceVersions", {
+      sourceId: s._id,
+      version: nextVersion,
+      body,
+      sections: args.sections,
+      collectedAt: args.collectedAt,
+      createdAt: now,
+    });
+    await ctx.db.patch(s._id, {
+      latestVersion: versionId,
+      collectionDate: args.collectedAt,
+      ...(args.sourceUrl ? { sourceUrl: args.sourceUrl } : {}),
+      ...(args.publisher ? { publisher: args.publisher } : {}),
+      updatedAt: now,
+    });
+    if (args.closeRunId) {
+      const run = await ctx.db.get(args.closeRunId);
+      if (run) {
+        await ctx.db.patch(run._id, {
+          finishedAt: now,
+          outcome: "updated",
+          newVersionId: versionId,
+          lastSuccessfulAt: now,
+        });
+      }
+    } else {
+      await ctx.db.insert("ingestionRuns", {
+        sourceId: s._id,
+        startedAt: now,
+        finishedAt: now,
+        outcome: "updated",
+        newVersionId: versionId,
+        attempts: 1,
+        lastSuccessfulAt: now,
+        triggeredBy: "manual",
+      });
+    }
+    return {
+      versionId,
+      version: nextVersion,
+      bodyChars: body.length,
+      sectionsCount: args.sections.length,
+      provenanceNote: args.provenanceNote ?? null,
+    };
+  },
+});
+
+/** Record a CLI run outcome (mirror of recordIngestionResult for CLI). */
+export const recordResultCli = internalMutation({
+  args: {
+    runId: v.id("ingestionRuns"),
+    outcome: v.union(
+      v.literal("unchanged"),
+      v.literal("updated"),
+      v.literal("failed"),
+    ),
+    error: v.optional(v.string()),
+    needsReview: v.optional(v.boolean()),
+    reviewNote: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const run = await ctx.db.get(args.runId);
+    if (!run) throw new Error("Run not found.");
+    const now = Date.now();
+    await ctx.db.patch(run._id, {
+      finishedAt: now,
+      outcome: args.outcome,
+      error: args.error?.slice(0, 500),
+      needsReview: args.needsReview,
+      reviewNote: args.reviewNote?.slice(0, 500),
+      lastSuccessfulAt: args.outcome === "failed" ? run.lastSuccessfulAt : now,
+    });
+    if (args.outcome === "failed") {
+      await ctx.db.insert("platformAdminAudit", {
+        actorId: run.sourceId as never,
+        actorName: "legal-intel ingestion",
+        action: "legal_source.ingest_failed",
+        targetType: "legalSource",
+        targetId: String(run.sourceId),
+        detail: args.error?.slice(0, 200),
+        createdAt: now,
+      });
+    }
+    return { ok: true };
+  },
+});
+
+/** Post-ingest readback for the CLI verification step. */
+export const getSourceCli = internalQuery({
+  args: { stableKey: v.string() },
+  handler: async (ctx, args) => {
+    const s = await ctx.db
+      .query("legalSources")
+      .withIndex("by_stable_key", (q) => q.eq("stableKey", args.stableKey))
+      .unique();
+    if (!s) return null;
+    const vRow = s.latestVersion ? await ctx.db.get(s.latestVersion) : null;
+    return {
+      stableKey: s.stableKey,
+      title: s.title,
+      sourceUrl: s.sourceUrl,
+      publisher: s.publisher,
+      collectionDate: s.collectionDate,
+      latestVersion: vRow ? { version: vRow.version, sectionsCount: (vRow.sections ?? []).length, bodyChars: vRow.body.length } : null,
+    };
   },
 });
 
