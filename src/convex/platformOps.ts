@@ -27,6 +27,7 @@ import {
 } from "./_generated/server";
 import { getCurrentUser } from "./users";
 import { getAccessContext } from "./access";
+import { platformActorOf } from "./workforce";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   TICKET_PRIORITIES,
@@ -80,6 +81,24 @@ async function requireOperator(
     throw new Error("Platform operator access required.");
   }
   return user;
+}
+
+/**
+ * Capability-gated operator authority: the platform owner holds every
+ * platform capability; workforce employees hold only their role's set.
+ * Replaces the blanket flag check for queue operations — a support agent
+ * can work the queue but NOT run the handoff rebuild, a developer can
+ * read diagnostics but NOT reply to customers.
+ */
+async function requirePlatformCapability(
+  ctx: QueryCtx | MutationCtx,
+  cap: string,
+): Promise<void> {
+  const actor = await platformActorOf(ctx);
+  if (!actor) throw new Error("Sign in required.");
+  if (!actor.isPlatformAdmin && !actor.capabilities.includes(cap)) {
+    throw new Error(`This platform action requires ${cap}.`);
+  }
 }
 
 async function auditOps(
@@ -366,7 +385,7 @@ export const myTickets = query({
 export const operatorQueue = query({
   args: {},
   handler: async (ctx) => {
-    await requireOperator(ctx);
+    await requirePlatformCapability(ctx, "platform.ticket.view_queue");
     const [open, inProgress, resolved] = await Promise.all([
       ctx.db
         .query("supportTickets")
@@ -410,7 +429,7 @@ export const getTicket = query({
 export const opsCounts = query({
   args: {},
   handler: async (ctx) => {
-    await requireOperator(ctx);
+    await requirePlatformCapability(ctx, "platform.ticket.view_queue");
     const all = await ctx.db.query("supportTickets").collect();
     const byStatus = { open: 0, in_progress: 0, resolved: 0, closed: 0 };
     let unassigned = 0;
@@ -494,6 +513,7 @@ export const addCustomerMessage = mutation({
 export const startProgress = mutation({
   args: { ticketId: v.id("supportTickets"), note: v.optional(v.string()) },
   handler: async (ctx, args) => {
+    await requirePlatformCapability(ctx, "platform.ticket.claim");
     const operator = await requireOperator(ctx);
     const ticket = await ticketOrThrow(ctx, args.ticketId);
     if (ticket.status !== "open") {
@@ -532,6 +552,7 @@ export const startProgress = mutation({
 export const addOperatorMessage = mutation({
   args: { ticketId: v.id("supportTickets"), body: v.string() },
   handler: async (ctx, args) => {
+    await requirePlatformCapability(ctx, "platform.ticket.reply");
     const operator = await requireOperator(ctx);
     const ticket = await ticketOrThrow(ctx, args.ticketId);
     if (ticket.status === "closed") {
@@ -561,6 +582,7 @@ export const addOperatorMessage = mutation({
 export const assignTicket = mutation({
   args: { ticketId: v.id("supportTickets") },
   handler: async (ctx, args) => {
+    await requirePlatformCapability(ctx, "platform.ticket.claim");
     const operator = await requireOperator(ctx);
     const ticket = await ticketOrThrow(ctx, args.ticketId);
     const now = Date.now();
@@ -583,13 +605,14 @@ export const assignTicket = mutation({
   },
 });
 
-/** Priority change (operator only). */
+/** Priority change (operators with the capability). */
 export const setTicketPriority = mutation({
   args: {
     ticketId: v.id("supportTickets"),
     priority: v.union(...TICKET_PRIORITIES.map((p) => v.literal(p))),
   },
   handler: async (ctx, args) => {
+    await requirePlatformCapability(ctx, "platform.ticket.set_priority");
     const operator = await requireOperator(ctx);
     const ticket = await ticketOrThrow(ctx, args.ticketId);
     await ctx.db.patch(ticket._id, {
@@ -611,6 +634,7 @@ export const setTicketPriority = mutation({
 export const resolveTicket = mutation({
   args: { ticketId: v.id("supportTickets"), note: v.string() },
   handler: async (ctx, args) => {
+    await requirePlatformCapability(ctx, "platform.ticket.resolve_close");
     const operator = await requireOperator(ctx);
     const ticket = await ticketOrThrow(ctx, args.ticketId);
     if (!canTransitionTicket(ticket.status, "resolved")) {
@@ -653,6 +677,7 @@ export const resolveTicket = mutation({
 export const closeTicket = mutation({
   args: { ticketId: v.id("supportTickets") },
   handler: async (ctx, args) => {
+    await requirePlatformCapability(ctx, "platform.ticket.resolve_close");
     const operator = await requireOperator(ctx);
     const ticket = await ticketOrThrow(ctx, args.ticketId);
     if (ticket.status !== "resolved") {
@@ -682,6 +707,7 @@ export const closeTicket = mutation({
 export const reopenTicket = mutation({
   args: { ticketId: v.id("supportTickets"), reason: v.string() },
   handler: async (ctx, args) => {
+    await requirePlatformCapability(ctx, "platform.ticket.resolve_close");
     const operator = await requireOperator(ctx);
     const ticket = await ticketOrThrow(ctx, args.ticketId);
     if (ticket.status !== "resolved" && ticket.status !== "closed") {
@@ -721,7 +747,7 @@ export const reopenTicket = mutation({
 export const opsAudit = query({
   args: { limit: v.optional(v.number()) },
   handler: async (ctx, args) => {
-    await requireOperator(ctx);
+    await requirePlatformCapability(ctx, "platform.diagnostics.view");
     return ctx.db
       .query("platformOpsAudit")
       .withIndex("by_time", (q) => q.gte("createdAt", 0))
@@ -741,7 +767,7 @@ export const opsAudit = query({
 export const handoffViewRows = query({
   args: {},
   handler: async (ctx) => {
-    await requireOperator(ctx);
+    await requirePlatformCapability(ctx, "platform.handoff.view");
     const rows = await ctx.db.query("aiHandoffStats").collect();
     const withNames = await Promise.all(
       rows.map(async (r) => {
@@ -798,6 +824,7 @@ export const myChamberHandoffStats = query({
 export const rebuildAiHandoffStats = mutation({
   args: {},
   handler: async (ctx) => {
+    await requirePlatformCapability(ctx, "platform.handoff.rebuild");
     const operator = await requireOperator(ctx);
 
     // Explicit scan limits: a rebuild reads at most REBUILD_MAX_TICKETS

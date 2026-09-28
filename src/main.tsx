@@ -42,6 +42,7 @@ const Reports = lazy(() => import("./pages/Reports.tsx"));
 const Accounting = lazy(() => import("./pages/Accounting.tsx"));
 const Hr = lazy(() => import("./pages/Hr.tsx"));
 const OwnerConsole = lazy(() => import("./pages/OwnerConsole.tsx"));
+const AcceptPlatformInvite = lazy(() => import("./pages/AcceptPlatformInvite.tsx"));
 const Team = lazy(() => import("./pages/Team.tsx"));
 const Settings = lazy(() => import("./pages/Settings.tsx"));
 const ClientPortal = lazy(() => import("./pages/ClientPortal.tsx"));
@@ -367,6 +368,7 @@ createRoot(document.getElementById("root")!).render(
                   </RequireAuth>
                 }
               />
+              <Route path="/accept-platform-invite" element={<AcceptPlatformInvite />} />
               <Route
                 path="/platform"
                 element={

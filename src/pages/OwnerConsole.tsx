@@ -20,6 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -38,6 +39,20 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Headset, Shield, ShieldAlert, ShieldCheck } from "lucide-react";
+
+// The owner holds every platform capability (mirror of the server-side
+// rule in platformOps.requirePlatformCapability / platformWorkforce).
+const OWNER_PLATFORM_CAPS = [
+  "platform.ticket.view_queue",
+  "platform.ticket.reply",
+  "platform.ticket.claim",
+  "platform.ticket.resolve_close",
+  "platform.ticket.set_priority",
+  "platform.handoff.view",
+  "platform.handoff.rebuild",
+  "platform.team.manage",
+  "platform.diagnostics.view",
+];
 import { Link } from "react-router";
 
 // =====================================================================
@@ -82,8 +97,282 @@ function when(ts?: number | null): string {
   });
 }
 
+// =====================================================================
+// CJ GLOBAL Team & Access — internal workforce management (owner only).
+//
+// Distinct from the chamber Team page: this manages platform employees
+// (support_agent / support_supervisor / developer) whose membership lives
+// in platformEmployees — independent of any chamber. Invites carry a
+// one-time token; the raw token is shown once and never stored server-
+// side. No "owner" role exists to invite: ownership is the audited
+// isPlatformAdmin flag, so employees cannot grant themselves or anyone
+// else platform ownership.
+// =====================================================================
+
+const PLATFORM_ROLE_LABELS: Record<string, string> = {
+  support_agent: "Support Agent",
+  support_supervisor: "Support Supervisor",
+  developer: "Developer",
+};
+
+function WorkforcePanel() {
+  const employees = useQuery(api.workforce.listEmployees);
+  const invites = useQuery(api.workforce.listInvitations);
+  const invite = useMutation(api.workforce.inviteEmployee);
+  const revoke = useMutation(api.workforce.revokeInvitation);
+  const suspend = useMutation(api.workforce.suspendEmployee);
+  const unsuspend = useMutation(api.workforce.unsuspendEmployee);
+  const setEmployeeRoleFn = useMutation(api.workforce.setEmployeeRole);
+
+  const [email, setEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState<string>("support_agent");
+  const [busy, setBusy] = useState(false);
+  const [lastToken, setLastToken] = useState<{ email: string; url: string } | null>(null);
+
+  const act = async (fn: () => Promise<unknown>, ok: string) => {
+    try {
+      await fn();
+      toast.success(ok);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed.");
+    }
+  };
+
+  const sendInvite = async () => {
+    // One-time token generated client-side, shown ONCE in the copyable
+    // link, stored server-side only as salted SHA-256.
+    const bytes = new Uint8Array(24);
+    crypto.getRandomValues(bytes);
+    const token = Array.from(bytes)
+      .map((b) => b.toString(36).padStart(2, "0"))
+      .join("")
+      .slice(0, 32);
+    setBusy(true);
+    try {
+      await invite({ email: email.trim(), role: inviteRole as never, token });
+      setLastToken({
+        email: email.trim(),
+        url: `${window.location.origin}/accept-platform-invite?token=${token}`,
+      });
+      setEmail("");
+      toast.success("Invitation created — share the link with the invitee.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Invite failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="font-serif text-lg">Invite a platform employee</CardTitle>
+          <CardDescription>
+            CJ GLOBAL internal roles only — support agents work the queue,
+            supervisors additionally see the handoff view and audit, developers
+            get diagnostics. There is no invitable owner role: platform
+            ownership is bound to one verified account by audited activation.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex max-w-xl flex-wrap items-end gap-2">
+            <div className="min-w-[220px] flex-1 space-y-1">
+              <Label htmlFor="wf-email" className="text-xs">Work email</Label>
+              <Input
+                id="wf-email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="agent@example.com"
+                className="h-8 text-sm"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Platform role</Label>
+              <Select value={inviteRole} onValueChange={setInviteRole}>
+                <SelectTrigger className="h-8 w-[190px] text-sm"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {Object.entries(PLATFORM_ROLE_LABELS).map(([v, label]) => (
+                    <SelectItem key={v} value={v}>{label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Button size="sm" disabled={busy || !email.includes("@")} onClick={sendInvite}>
+              Create invite
+            </Button>
+          </div>
+          {lastToken && (
+            <div className="rounded-md border border-[#B68A45]/40 bg-[#B68A45]/[0.06] p-3">
+              <p className="text-xs font-medium">
+                One-time link for {lastToken.email} — shown once, stored only as a hash:
+              </p>
+              <div className="mt-1 flex items-center gap-2">
+                <code className="min-w-0 flex-1 truncate rounded bg-background px-2 py-1 text-[11px]">
+                  {lastToken.url}
+                </code>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs"
+                  onClick={() => {
+                    void navigator.clipboard.writeText(lastToken.url);
+                    toast.success("Link copied.");
+                  }}
+                >
+                  Copy
+                </Button>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="font-serif text-lg">Pending invitations</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="overflow-hidden rounded-md border border-border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Email</TableHead>
+                  <TableHead>Role</TableHead>
+                  <TableHead>Invited</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {invites === undefined && (
+                  <TableRow><TableCell colSpan={5} className="text-xs text-muted-foreground">Loading…</TableCell></TableRow>
+                )}
+                {invites?.length === 0 && (
+                  <TableRow><TableCell colSpan={5} className="text-xs text-muted-foreground">No pending invitations.</TableCell></TableRow>
+                )}
+                {invites?.map((inv) => (
+                  <TableRow key={inv._id}>
+                    <TableCell className="text-xs">{inv.email}</TableCell>
+                    <TableCell className="text-xs">{PLATFORM_ROLE_LABELS[inv.role] ?? inv.role}</TableCell>
+                    <TableCell className="whitespace-nowrap text-xs">{when(inv.createdAt)}</TableCell>
+                    <TableCell>
+                      {inv.revokedAt ? (
+                        <Badge variant="outline" className="bg-stone-100 text-stone-700 border-stone-200">Revoked</Badge>
+                      ) : inv.expired ? (
+                        <Badge variant="outline" className="bg-stone-100 text-stone-700 border-stone-200">Expired</Badge>
+                      ) : (
+                        <Badge variant="outline" className="bg-sky-100 text-sky-900 border-sky-200">Pending</Badge>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {!inv.revokedAt && !inv.expired && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 px-2 text-xs"
+                          onClick={() => act(() => revoke({ invitationId: inv._id }), "Invitation revoked.")}
+                        >
+                          Revoke
+                        </Button>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="font-serif text-lg">Platform employees</CardTitle>
+          <CardDescription>
+            Membership is platform-level: nothing here touches chamber
+            memberships, and suspending access takes effect immediately.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="overflow-hidden rounded-md border border-border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Email</TableHead>
+                  <TableHead>Role</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Accepted</TableHead>
+                  <TableHead>Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {employees === undefined && (
+                  <TableRow><TableCell colSpan={5} className="text-xs text-muted-foreground">Loading…</TableCell></TableRow>
+                )}
+                {employees?.length === 0 && (
+                  <TableRow><TableCell colSpan={5} className="text-xs text-muted-foreground">No platform employees yet.</TableCell></TableRow>
+                )}
+                {employees?.map((emp) => (
+                  <TableRow key={emp._id}>
+                    <TableCell className="text-xs">{emp.email}</TableCell>
+                    <TableCell>
+                      <Select
+                        value={emp.role}
+                        onValueChange={(v: string) =>
+                          void act(() => setEmployeeRoleFn({ employeeId: emp._id, role: v as never }), "Role updated.")
+                        }
+                      >
+                        <SelectTrigger className="h-7 w-[180px] text-xs"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {Object.entries(PLATFORM_ROLE_LABELS).map(([v, label]) => (
+                            <SelectItem key={v} value={v}>{label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </TableCell>
+                    <TableCell>
+                      {emp.status === "active" ? (
+                        <Badge variant="outline" className="bg-emerald-50 text-emerald-900 border-emerald-200">Active</Badge>
+                      ) : (
+                        <Badge variant="outline" className="bg-red-50 text-red-900 border-red-200">Suspended</Badge>
+                      )}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap text-xs">{when(emp.acceptedAt)}</TableCell>
+                    <TableCell>
+                      {emp.status === "active" ? (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 px-2 text-xs"
+                          onClick={() => act(() => suspend({ employeeId: emp._id }), "Access suspended.")}
+                        >
+                          Suspend
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 px-2 text-xs"
+                          onClick={() => act(() => unsuspend({ employeeId: emp._id }), "Access restored.")}
+                        >
+                          Restore
+                        </Button>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 export default function OwnerConsole() {
   const amAdmin = useQuery(api.platform.amIPlatformAdmin);
+  const identity = useQuery(api.workforce.myPlatformIdentity);
   const eligibility = useQuery(api.platform.myOwnerActivationEligibility);
   const selfActivate = useMutation(api.platform.selfActivateOwner);
   const counts = useQuery(api.platformOps.opsCounts);
@@ -124,7 +413,16 @@ export default function OwnerConsole() {
     }
   };
 
-  if (amAdmin === undefined) {
+  // Capability-derived UI gating — mirrors the server's gate exactly; the
+  // server remains authoritative when capabilities change mid-session.
+  const isPlatformIdentity =
+    amAdmin === true || (identity?.platformRole ?? null) !== null;
+  const caps = new Set<string>([
+    ...(amAdmin ? OWNER_PLATFORM_CAPS : []),
+    ...(identity?.capabilities ?? []),
+  ]);
+
+  if (amAdmin === undefined || identity === undefined) {
     return (
       <ChamberShell subtitle="CJ Global" title="Operations console">
         <p className="mt-10 text-sm text-muted-foreground">Checking access…</p>
@@ -132,7 +430,9 @@ export default function OwnerConsole() {
     );
   }
 
-  if (!amAdmin) {
+  // Customers and chamber-only accounts: activation card if eligible,
+  // otherwise a bare refusal. No queue content is ever rendered.
+  if (!isPlatformIdentity) {
     return (
       <ChamberShell subtitle="CJ Global" title="Operations console">
         <Card>
@@ -181,6 +481,15 @@ export default function OwnerConsole() {
   }
 
   const selected = detail?.ticket;
+  const canSeeQueue = caps.has("platform.ticket.view_queue");
+  const canReply = caps.has("platform.ticket.reply");
+  const canClaim = caps.has("platform.ticket.claim");
+  const canResolve = caps.has("platform.ticket.resolve_close");
+  const canSetPriority = caps.has("platform.ticket.set_priority");
+  const canSeeHandoff = caps.has("platform.handoff.view");
+  const canRebuild = caps.has("platform.handoff.rebuild");
+  const canSeeAudit = caps.has("platform.diagnostics.view");
+  const canManageTeam = amAdmin === true; // workforce admin is owner-only
 
   return (
     <ChamberShell
@@ -194,7 +503,11 @@ export default function OwnerConsole() {
       }
     >
       <div className="space-y-8">
+        {/* CJ GLOBAL Team & Access — owner-only workforce management */}
+        {canManageTeam && <WorkforcePanel />}
+
         {/* Health counters */}
+        {canSeeQueue && (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
           {[
             { label: "Open", value: counts?.byStatus.open, tone: "text-sky-900" },
@@ -221,8 +534,10 @@ export default function OwnerConsole() {
             </Card>
           ))}
         </div>
+        )}
 
         {/* AI-handoff mat view — one row per chamber, write-maintained */}
+        {canSeeHandoff && (
         <Card>
           <CardHeader>
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -237,6 +552,7 @@ export default function OwnerConsole() {
                   tickets and corrects any drift, audited.
                 </CardDescription>
               </div>
+              {canRebuild && (
               <Button
                 size="sm"
                 variant="outline"
@@ -257,6 +573,7 @@ export default function OwnerConsole() {
               >
                 Rebuild view
               </Button>
+              )}
             </div>
           </CardHeader>
           <CardContent>
@@ -315,8 +632,10 @@ export default function OwnerConsole() {
             </div>
           </CardContent>
         </Card>
+        )}
 
         {/* Queue */}
+        {canSeeQueue && (
         <Card>
           <CardHeader>
             <CardTitle className="font-serif text-lg">Ticket queue</CardTitle>
@@ -409,7 +728,7 @@ export default function OwnerConsole() {
                       </TableCell>
                       <TableCell>
                         <div className="flex flex-wrap gap-1">
-                          {t.status === "open" && (
+                          {t.status === "open" && canClaim && (
                             <Button
                               size="sm"
                               variant="outline"
@@ -424,7 +743,7 @@ export default function OwnerConsole() {
                               Claim
                             </Button>
                           )}
-                          {(t.status === "open" || t.status === "in_progress") && (
+                          {(t.status === "open" || t.status === "in_progress") && canResolve && (
                             <Button
                               size="sm"
                               variant="outline"
@@ -437,7 +756,7 @@ export default function OwnerConsole() {
                               Resolve
                             </Button>
                           )}
-                          {t.status === "resolved" && (
+                          {t.status === "resolved" && canResolve && (
                             <>
                               <Button
                                 size="sm"
@@ -471,8 +790,10 @@ export default function OwnerConsole() {
             </div>
           </CardContent>
         </Card>
+        )}
 
         {/* Audit trail */}
+        {canSeeAudit && (
         <Card>
           <CardHeader>
             <CardTitle className="font-serif text-lg">Operations audit</CardTitle>
@@ -521,6 +842,7 @@ export default function OwnerConsole() {
             </div>
           </CardContent>
         </Card>
+        )}
 
         <p className="text-xs text-muted-foreground">
           Need the subscription console? It lives at{" "}
@@ -591,7 +913,7 @@ export default function OwnerConsole() {
                   </li>
                 ))}
               </ol>
-              {selected && selected.status !== "closed" && (
+              {selected && selected.status !== "closed" && canReply && (
                 <div className="space-y-2 border-t border-border pt-3">
                   <Label htmlFor="op-reply" className="text-xs">Reply as support</Label>
                   <Textarea

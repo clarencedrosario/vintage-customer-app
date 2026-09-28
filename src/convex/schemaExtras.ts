@@ -1051,4 +1051,57 @@ export const platformOpsTables = {
     lastResolvedAt: v.optional(v.number()),
     updatedAt: v.number(),
   }).index("by_org", ["orgId"]),
+
+  // -----------------------------------------------------------------
+  // CJ GLOBAL internal workforce — deliberately SEPARATE from chamber
+  // membership (memberships/invitations tables) and from the chamber
+  // role/permission system. One row per platform employee; roles are
+  // platform-only (NO owner role: platform ownership is the audited
+  // isPlatformAdmin flag on the matching verified account, never an
+  // invitable role — self-grant is structurally impossible).
+  // -----------------------------------------------------------------
+  platformEmployees: defineTable({
+    userId: v.id("users"), // the authenticated account (unique, enforced in code)
+    email: v.string(),
+    role: v.union(
+      v.literal("support_agent"),
+      v.literal("support_supervisor"),
+      v.literal("developer"),
+    ),
+    status: v.union(v.literal("active"), v.literal("suspended")),
+    invitedBy: v.id("users"),
+    invitedAt: v.number(),
+    acceptedAt: v.number(),
+    suspendedAt: v.optional(v.number()),
+    suspendedBy: v.optional(v.id("users")),
+    unsuspendedAt: v.optional(v.number()),
+    unsuspendedBy: v.optional(v.id("users")),
+  })
+    .index("by_user", ["userId"])
+    .index("by_email", ["email"])
+    .index("by_status", ["status"]),
+
+  // Platform-internal invitations. Same crypto shape as the chamber
+  // invitations (per-invite salt + SHA-256 of salt+token): the raw token
+  // exists only in the invite link, never in the database. Lifecycle:
+  // pending → accepted | revoked | expired (terminal). acceptEmployee
+  // flips BOTH rows in one transaction.
+  platformInvitations: defineTable({
+    email: v.string(),
+    role: v.union(
+      v.literal("support_agent"),
+      v.literal("support_supervisor"),
+      v.literal("developer"),
+    ),
+    salt: v.string(),
+    tokenHash: v.string(),
+    invitedBy: v.id("users"),
+    invitedByName: v.optional(v.string()),
+    expiresAt: v.number(),
+    createdAt: v.number(),
+    acceptedAt: v.optional(v.number()),
+    revokedAt: v.optional(v.number()),
+  })
+    .index("by_token", ["tokenHash"])
+    .index("by_email", ["email"]),
 };
