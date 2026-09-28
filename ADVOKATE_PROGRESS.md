@@ -69,6 +69,42 @@ remains unchanged and correct for its own purpose.
 - **Owner activation: still pending** the user's OTP sign-in + activation
   click on /owner (mailbox-side step; negative gate proof stands).
 
+### Domain policy (28 Sep addendum): preview origin everywhere, configurable production domain
+
+The user owns no domain and advokate.in is unavailable. Record:
+
+- **Zero hard-coded `advokate.in` links exist in code.** A grep confirms the
+  only occurrences are cosmetic wordmarks (ADVOKATE.IN display text in
+  ChamberShell/BrandMark/Landing/FindALawyer, email footer text in notify.ts,
+  PDF header fallback) and the TOTP label fallback in `twofactor.ts` — none
+  are URLs.
+- **Link composition centralized** in `src/lib/appLinks.ts` (`appOrigin()` /
+  `appLink()`): resolves `VITE_PUBLIC_APP_URL` first (future production
+  domain — set it in the project environment/Keys config when a domain is
+  connected, no code change), else the current `window.location.origin`
+  (the live preview). Applied to: platform-workforce invitation links
+  (OwnerConsole), chamber member invite links (Team), client invite links
+  (Client360), intake completion links (Intake). In-app navigation remains
+  relative.
+- **"Open owner console"** is now a hero CTA on the landing page (relative
+  `/owner` link) in addition to the top-bar Headset entry for platform
+  identities and the AcceptPlatformInvite success button. Owner-activation
+  walkthrough (runs entirely inside the preview, no domain needed):
+  1. Open the app **preview**; copy its origin (e.g. `https://<app>.vly.sh`)
+     into a new browser tab if the platform's inline preview is embedded.
+  2. In that tab, open **`/owner`** (or click the landing hero button
+     "Open owner console"). Signed out → redirected to
+     `/login?returnTo=%2Fowner`.
+  3. Sign in with `clarencedrosario@gmail.com` → the 6-digit OTP email
+     arrives (Freebuff send_otp — operational; this is the mailbox-side step
+     only the user can do).
+  4. Enter the OTP → signed in; the account's email is now verified
+     server-side.
+  5. `/owner` shows the amber **Activate platform ownership** card (only for
+     the matching verified account) → click it (audited `admin.self_activate`).
+  6. The console loads: queue, counters, handoff view, audit, WorkforcePanel.
+     2FA enrollment is available via Settings → two-factor.
+
 ---
 
 ## Implementation turn — 27 Sep 2026 (owner activation shipped; support workflow verified at policy level)

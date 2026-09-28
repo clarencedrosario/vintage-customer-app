@@ -1,5 +1,23 @@
 # Implementation & delivery map (section 31)
 
+## Handoff — 28 Sep 2026 (2): preview-origin links; production domain stays configurable
+
+- **No domain is owned** and advokate.in is unavailable. **No URL in the app
+  points at advokate.in** — remaining occurrences are display wordmarks and
+  an OTP label fallback, not links.
+- **Link policy**: every shareable URL (platform-workforce invitation links,
+  chamber member invites, client invites, intake completion links) composes
+  from `appLink()` in `src/lib/appLinks.ts`: it uses `VITE_PUBLIC_APP_URL` if
+  configured, else the **current preview origin** — so a link copied in the
+  preview always opens the preview. In-app navigation stays relative.
+- **Production domain later**: set `VITE_PUBLIC_APP_URL` (e.g.
+  `https://yournewdomain.com`) in the project environment/Keys configuration
+  once a domain is connected; nothing else changes. No code edit, no
+  hard-coded host.
+- **Landing page**: the hero now carries an **"Open owner console"** button
+  (third CTA next to sign-in / find-a-lawyer) linking to the relative
+  `/owner` route — it works in the actual preview regardless of origin.
+
 ## Handoff — 28 Sep 2026: CJ GLOBAL internal workforce shipped; conflation corrected
 
 - **Correction (recorded honestly):** earlier handoffs labelled the chamber

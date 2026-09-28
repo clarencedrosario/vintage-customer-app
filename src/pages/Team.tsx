@@ -29,6 +29,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { useMutation, useQuery } from "convex/react";
 import { MoreHorizontal, UserPlus } from "lucide-react";
 import { useState } from "react";
+import { appLink } from "@/lib/appLinks";
 import { toast } from "sonner";
 
 const ORG_ROLE_OPTIONS = [
@@ -395,7 +396,7 @@ export default function Team() {
               </DialogHeader>
               <div className="rounded-md border border-border bg-muted p-3">
                 <code className="block break-all text-xs">
-                  {`${window.location.origin}/login?invite=${issued.token}`}
+                  {appLink(`/login?invite=${issued.token}`)}
                 </code>
               </div>
               <DialogFooter>
@@ -403,7 +404,7 @@ export default function Team() {
                   className="w-full"
                   onClick={() => {
                     void navigator.clipboard?.writeText(
-                      `${window.location.origin}/login?invite=${issued.token}`,
+                      appLink(`/login?invite=${issued.token}`),
                     );
                     toast.success("Link copied.");
                     setOpen(false);

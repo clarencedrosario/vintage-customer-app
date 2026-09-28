@@ -39,6 +39,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Headset, Shield, ShieldAlert, ShieldCheck } from "lucide-react";
+import { appLink } from "@/lib/appLinks";
 
 // The owner holds every platform capability (mirror of the server-side
 // rule in platformOps.requirePlatformCapability / platformWorkforce).
@@ -152,7 +153,7 @@ function WorkforcePanel() {
       await invite({ email: email.trim(), role: inviteRole as never, token });
       setLastToken({
         email: email.trim(),
-        url: `${window.location.origin}/accept-platform-invite?token=${token}`,
+        url: appLink(`/accept-platform-invite?token=${token}`),
       });
       setEmail("");
       toast.success("Invitation created — share the link with the invitee.");

@@ -39,6 +39,7 @@ import {
   type IntakeUrgency,
 } from "@/lib/intakeFlow";
 import { formatDateTimeIN } from "@/lib/format";
+import { appLink } from "@/lib/appLinks";
 import { useMutation, useQuery } from "convex/react";
 import {
   AlertTriangle,
@@ -249,7 +250,9 @@ function InvitePanel({ row, onChanged }: { row: IntakeRow; onChanged: () => void
     setBusy(true);
     try {
       const res = await createInvite({ intakeId: row._id as never });
-      const url = `${window.location.origin}/intake/complete?token=${encodeURIComponent(res.token)}`;
+      const url = appLink(
+        `/intake/complete?token=${encodeURIComponent(res.token)}`,
+      );
       setLink(url);
       toast.success("Completion link issued — it expires in 7 days.");
       onChanged();

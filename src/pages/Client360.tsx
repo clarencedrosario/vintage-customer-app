@@ -18,6 +18,7 @@ import {
   formatDateIN,
   formatDateTimeIN,
 } from "@/lib/format";
+import { appLink } from "@/lib/appLinks";
 import { useMutation, useQuery } from "convex/react";
 import {
   Archive,
@@ -294,8 +295,7 @@ function PortalAccessCard({
                   clientId,
                   token,
                 });
-                const origin = window.location.origin;
-                setInviteLink(`${origin}/login?invite=${token}`);
+                setInviteLink(appLink(`/login?invite=${token}`));
                 toast.success("Invitation created — share the link once.");
               } catch (err) {
                 toast.error(err instanceof Error ? err.message : "Failed.");
