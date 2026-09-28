@@ -23,6 +23,7 @@ const CourtDay = lazy(() => import("./pages/CourtDay.tsx"));
 const Documents = lazy(() => import("./pages/Documents.tsx"));
 const AdvokateAI = lazy(() => import("./pages/AdvokateAI.tsx"));
 const Research = lazy(() => import("./pages/Research.tsx"));
+const LegalIntel = lazy(() => import("./pages/LegalIntel.tsx"));
 const PortalAdmin = lazy(() => import("./pages/PortalAdmin.tsx"));
 const Attention = lazy(() => import("./pages/Attention.tsx"));
 const MatterDetail = lazy(() => import("./pages/MatterDetail.tsx"));
@@ -221,6 +222,14 @@ createRoot(document.getElementById("root")!).render(
                 element={
                   <RequireAuth>
                     <Research />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/legal-intel"
+                element={
+                  <RequireAuth>
+                    <LegalIntel />
                   </RequireAuth>
                 }
               />

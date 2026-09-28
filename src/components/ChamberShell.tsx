@@ -88,6 +88,7 @@ const NAV_GROUPS: { heading: string; items: NavItem[] }[] = [
     heading: "Intelligence",
     items: [
       { to: "/ai", label: "Advokate AI", icon: Bot },
+      { to: "/legal-intel", label: "Legal Intelligence", icon: Scale },
       { to: "/research", label: "Legal Research", icon: Scale },
       { to: "/knowledge", label: "Firm Knowledge", icon: BookOpen },
     ],

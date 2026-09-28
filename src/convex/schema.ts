@@ -10,6 +10,8 @@ import {
   vaultTables,
   hrTables,
   platformOpsTables,
+  legalIntelTables,
+  LEGAL_DATE_KINDS,
 } from "./schemaExtras";
 
 // ---------------------------------------------------------------------
@@ -125,6 +127,7 @@ export default defineSchema({
   ...vaultTables,
   ...hrTables,
   ...platformOpsTables,
+  ...legalIntelTables,
 
   users: defineTable({
     name: v.optional(v.string()),
@@ -188,6 +191,14 @@ export default defineSchema({
     invoicePrefix: v.string(),
     // Editable permission matrix: orgRole -> capability keys.
     permissions: v.optional(v.any()),
+    // Section 26: firm-level legal defaults for AI context. DEFAULTS only —
+    // lawyers confirm per-matter jurisdiction (matters.legalProfile).
+    legalDefaults: v.optional(
+      v.object({
+        country: v.optional(v.string()),
+        stateOrProvince: v.optional(v.string()),
+      }),
+    ),
     // Paid placements & promotions (section 23). Everything is disabled
     // until an owner records a compliance review and enables the feature.
     promotionsEnabled: v.optional(v.boolean()),
@@ -469,6 +480,30 @@ export default defineSchema({
     title: v.string(),
     practiceArea: v.string(),
     description: v.optional(v.string()),
+    // Section 26 jurisdiction-aware legal profile. Firm settings provide
+    // DEFAULTS only; lawyers (matter.edit) confirm or correct per matter.
+    // The AI never silently applies the firm's default law to a matter
+    // recorded for another jurisdiction.
+    legalProfile: v.optional(
+      v.object({
+        country: v.string(), // lowercase ISO-ish, e.g. "in"
+        stateOrProvince: v.optional(v.string()),
+        // Relevant legal dates (any subset):
+        legalDates: v.optional(
+          v.array(
+            v.object({
+              kind: v.union(...LEGAL_DATE_KINDS.map((k) => v.literal(k))),
+              date: v.string(), // YYYY-MM-DD
+            }),
+          ),
+        ),
+        proceduralStage: v.optional(v.string()),
+        governingLawClause: v.optional(v.string()),
+        crossBorderFactors: v.optional(v.string()),
+        confirmedById: v.optional(v.id("users")),
+        confirmedAt: v.optional(v.number()),
+      }),
+    ),
     status: matterStatusValidator,
     priority: v.optional(
       v.union(v.literal("normal"), v.literal("high"), v.literal("urgent")),

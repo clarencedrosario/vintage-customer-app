@@ -371,6 +371,84 @@ function WorkforcePanel() {
   );
 }
 
+// =====================================================================
+// Section 26 — Advokate Legal Intelligence: operator seed panel.
+// Idempotent: the Indian core statutes, IPC↔BNS verified cross-references,
+// the European coverage register and the evaluation set. Seeding registers
+// sources with provenance and honest coverage statuses — it does NOT
+// fabricate legal text; ingestion fills content via the pipeline.
+// =====================================================================
+function LegalIntelSeedPanel() {
+  const seedIndia = useMutation(api.legalIntel.seedIndianCore);
+  const seedEurope = useMutation(api.legalIntel.seedEuropeanCoverage);
+  const seedEval = useMutation(api.legalIntel.seedEvalCases);
+  const coverage = useQuery(api.legalIntel.coverage, {});
+  const freshness = useQuery(api.legalIntel.freshness, {});
+  const [busy, setBusy] = useState(false);
+
+  const run = async (fn: () => Promise<unknown>, ok: string) => {
+    setBusy(true);
+    try {
+      await fn();
+      toast.success(ok);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="font-serif text-xl">Advokate Legal Intelligence — source library</CardTitle>
+        <CardDescription>
+          Registers the verified Indian core (Constitution, IPC, CrPC, Evidence
+          Act, BNS, BNSS, BSA, POCSO) with official-source provenance, the
+          IPC↔BNS verified cross-references, the European coverage register
+          (all states, honest not_started statuses) and adversarial evaluation
+          cases. Seeding creates registry entries — legal text arrives only
+          through ingestion.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex flex-wrap gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => run(() => seedIndia({}), "Indian core registered.")}
+          >
+            Seed Indian core
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => run(() => seedEurope({}), "European coverage register seeded.")}
+          >
+            Seed European register
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => run(() => seedEval({}), "Evaluation cases seeded.")}
+          >
+            Seed evaluation cases
+          </Button>
+        </div>
+        {coverage && coverage.length > 0 && (
+          <p className="text-xs text-muted-foreground">
+            Registered countries: {coverage.length} · sources tracked:{" "}
+            {freshness?.length ?? 0}
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function OwnerConsole() {
   const amAdmin = useQuery(api.platform.amIPlatformAdmin);
   const identity = useQuery(api.workforce.myPlatformIdentity);
@@ -589,6 +667,9 @@ export default function OwnerConsole() {
       <div className="space-y-8">
         {/* CJ GLOBAL Team & Access — owner-only workforce management */}
         {canManageTeam && <WorkforcePanel />}
+
+        {/* Section 26: Legal Intelligence library seed (operator action). */}
+        {canManageTeam && <LegalIntelSeedPanel />}
 
         {/* Health counters */}
         {canSeeQueue && (

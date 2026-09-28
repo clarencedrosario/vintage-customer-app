@@ -971,6 +971,182 @@ export const TICKET_KINDS = [
   "ai_escalation",
 ] as const;
 
+// =====================================================================
+// Section 26 — ADVOKATE LEGAL INTELLIGENCE (flagship).
+//
+// Legal-data infrastructure for retrieval-augmented, citation-verified
+// answers. The LLM is never the source of law: sources are stored here,
+// versioned, permission-checked and provenance-recorded. Retrieval is not
+// training — no customer material is used for training.
+// =====================================================================
+
+/** Jurisdiction level of a legal source or instrument. */
+export const LEGAL_JURISDICTION_LEVELS = [
+  "national",
+  "subnational",
+  "eu_regulation",
+  "eu_directive",
+  "echre", // Council of Europe / ECHR system — distinct from the EU
+  "other",
+] as const;
+
+/** Per-domain coverage statuses (a selector entry never implies support). */
+export const LEGAL_COVERAGE_STATUSES = [
+  "not_started",
+  "partial",
+  "verified",
+] as const;
+
+/** Legal-date kinds a matter can record. */
+export const LEGAL_DATE_KINDS = [
+  "incident",
+  "transaction",
+  "filing",
+  "agreement",
+  "hearing",
+] as const;
+
+/** Kind of IPC↔BNS-style mapping between two provisions. */
+export const LEGAL_CROSS_REF_KINDS = [
+  "renumbered",
+  "renumbered_reworded",
+  "substantive_change",
+  "split",
+  "merged",
+  "no_equivalent",
+] as const;
+
+export const legalIntelTables = {
+  // Authoritative legal sources. One row per source; every ingest creates
+  // a new row in legalSourceVersions and moves latestVersion forward, so
+  // historical research stays reproducible. Provenance is mandatory.
+  legalSources: defineTable({
+    stableKey: v.string(), // e.g. "in:statute:ipc-1860" — citation anchor
+    title: v.string(), // OFFICIAL title (abbreviations normalize to this)
+    kind: v.union(
+      v.literal("constitution"),
+      v.literal("statute"),
+      v.literal("code"),
+      v.literal("rules"),
+      v.literal("regulation"),
+      v.literal("judgment"),
+      v.literal("order"),
+      v.literal("guidance"),
+      v.literal("notification"),
+    ),
+    country: v.string(), // ISO-ish code, lowercase ("in", "de", "fr", "eu" for EU instruments)
+    stateOrProvince: v.optional(v.string()),
+    jurisdictionLevel: v.union(...LEGAL_JURISDICTION_LEVELS.map((l) => v.literal(l))),
+    court: v.optional(v.string()), // judgments only
+    bench: v.optional(v.string()), // judgments only
+    decidedAt: v.optional(v.number()), // judgments only
+    citation: v.optional(v.string()), // judgments only, e.g. "(2020) 5 SCC 1"
+    treatment: v.optional(
+      v.union(
+        v.literal("good"),
+        v.literal("questioned"),
+        v.literal("distinguished"),
+        v.literal("reversed"),
+        v.literal("overruled"),
+      ),
+    ),
+    // Treatment status REQUIRES the source that supports it.
+    treatmentSourceKey: v.optional(v.string()),
+    inForceFrom: v.optional(v.string()), // YYYY-MM-DD
+    repealedAt: v.optional(v.string()),
+    rights: v.string(), // content rights note, e.g. "Open government data"
+    license: v.optional(v.string()),
+    publisher: v.string(),
+    sourceUrl: v.string(),
+    collectionDate: v.string(), // YYYY-MM-DD when the version text was collected
+    latestVersion: v.optional(v.id("legalSourceVersions")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_stable_key", ["stableKey"])
+    .index("by_country_kind", ["country", "kind"])
+    .index("by_country", ["country"]),
+
+  // Versioned text of a legal source. Immutable once written: corrections
+  // create a NEW version (historical research reproducibility).
+  legalSourceVersions: defineTable({
+    sourceId: v.id("legalSources"),
+    version: v.number(),
+    body: v.string(),
+    // Section anchors for clickable pinpoint references, e.g. "§ 302".
+    sections: v.optional(
+      v.array(v.object({ anchor: v.string(), heading: v.string(), start: v.number() })),
+    ),
+    collectedAt: v.string(), // YYYY-MM-DD
+    ingestedById: v.optional(v.id("users")),
+    createdAt: v.number(),
+  }).index("by_source", ["sourceId"]),
+
+  // Verified cross-reference mappings between provisions across codes
+  // (e.g. IPC→BNS). Deliberately NOT a blind renumber table: carries the
+  // kind of change, differences and missing-equivalent notes.
+  legalCrossRefs: defineTable({
+    fromKey: v.string(), // source stableKey + provision anchor
+    toKey: v.string(),
+    fromAnchor: v.string(),
+    toAnchor: v.string(),
+    mappingKind: v.union(...LEGAL_CROSS_REF_KINDS.map((k) => v.literal(k))),
+    notes: v.optional(v.string()), // changed wording / missing equivalents
+    createdAt: v.number(),
+  })
+    .index("by_from", ["fromKey", "fromAnchor"])
+    .index("by_to", ["toKey", "toAnchor"]),
+
+  // Country coverage register. Presence in a selector ≠ AI support.
+  legalCountryCoverage: defineTable({
+    country: v.string(),
+    countryName: v.string(),
+    inEurope: v.boolean(),
+    euMember: v.optional(v.boolean()),
+    legalSystemsNote: v.optional(v.string()),
+    legislation: v.union(...LEGAL_COVERAGE_STATUSES.map((s) => v.literal(s))),
+    judgments: v.union(...LEGAL_COVERAGE_STATUSES.map((s) => v.literal(s))),
+    procedure: v.union(...LEGAL_COVERAGE_STATUSES.map((s) => v.literal(s))),
+    tax: v.union(...LEGAL_COVERAGE_STATUSES.map((s) => v.literal(s))),
+    payroll: v.union(...LEGAL_COVERAGE_STATUSES.map((s) => v.literal(s))),
+    drafting: v.union(...LEGAL_COVERAGE_STATUSES.map((s) => v.literal(s))),
+    updatedAt: v.number(),
+  }).index("by_country", ["country"]),
+
+  // Scheduled ingestion pipeline state, one row per source per run.
+  ingestionRuns: defineTable({
+    sourceId: v.id("legalSources"),
+    startedAt: v.number(),
+    finishedAt: v.optional(v.number()),
+    outcome: v.optional(
+      v.union(v.literal("unchanged"), v.literal("updated"), v.literal("failed")),
+    ),
+    newVersionId: v.optional(v.id("legalSourceVersions")),
+    error: v.optional(v.string()),
+    // Uncertain changes (format drift, ambiguous amendments) go to review.
+    needsReview: v.optional(v.boolean()),
+    reviewNote: v.optional(v.string()),
+    attempts: v.optional(v.number()),
+    lastSuccessfulAt: v.optional(v.number()),
+    triggeredBy: v.union(v.literal("schedule"), v.literal("manual")),
+  })
+    .index("by_source", ["sourceId"])
+    .index("by_needs_review", ["needsReview"]),
+
+  // Lawyer-reviewed evaluation sets per jurisdiction (quality harness).
+  legalEvalCases: defineTable({
+    jurisdiction: v.string(),
+    category: v.string(), // citation_accuracy, adverse_authority, refusal, injection_resistance, ...
+    question: v.string(),
+    expectedBehavior: v.string(),
+    reviewedBy: v.optional(v.string()), // lawyer name once reviewed
+    reviewedAt: v.optional(v.number()),
+    lastRunAt: v.optional(v.number()),
+    lastResult: v.optional(v.string()),
+    createdAt: v.number(),
+  }).index("by_jurisdiction", ["jurisdiction"]),
+};
+
 export const platformOpsTables = {
   // One row per customer support ticket. Visibility: the submitter and
   // platform operators only — never chamber-wide, never cross-chamber.

@@ -19,7 +19,7 @@ Every item carries one of these statuses, applied honestly:
 > No legal workflow has had a recorded E2E browser walkthrough yet; that evidence
 > category is tracked separately in `ADVOKATE_PROGRESS.md`.
 
-Last updated: 28 September 2026 (turn 4: internal MFA made REQUIRED for platform accounts — OTP clarified as authentication only; "Open owner console" removed from the public landing hero; top-bar nav authority-gated owner/eligible-bootstrap/workforce; returnTo redirects hardened and unit-tested separately from shareable links; VITE_PUBLIC_APP_URL documented as build-time/redeploy-required). Owner activation and the invite→accept→console browser pass remain PENDING until they actually succeed. Evidence: `ADVOKATE_PROGRESS.md`.
+Last updated: 28 September 2026 (turn 5: **Advokate Legal Intelligence made the flagship workstream** — new §26 with jurisdiction-aware matter context, authoritative-source infrastructure, Indian vertical slice (verified retrieval → source-linked answer), European coverage register, verifiable-answer contract, ingestion/evaluation scaffolding; §18 legal-research rows superseded where noted). Owner activation and the invite→accept→console browser pass remain PENDING until they actually succeed. Evidence: `ADVOKATE_PROGRESS.md`.
 
 ---
 
@@ -290,3 +290,173 @@ evidence category stays tracked in `ADVOKATE_PROGRESS.md`).
 - Developer route (`/developer`) — **Not started** (route absent; developers currently work from the capability-reduced `/owner` console — queue + diagnostics + handoff rebuild, no customer replies)
 - Platform operations authorization — **Implemented and verified (28 Sep, capability-gated)**: the seven ticket mutations + handoff rebuild authorize via `operatorForCapability` (owner flag OR employee role capability) — agents claim/reply/resolve/prioritize, supervisors add handoff view + diagnostics, developers read the queue and rebuild but cannot reply or claim; `getTicket` lets queue-capable staff read the thread they work; enforced server-side and proven by real-backend integration tests across owner/agent/developer/chamber-owner identities (`workforce.test.ts`)
 - Portal-facing routes that DO exist today: `/portal`, `/staff`, `/login`, `/find-a-lawyer`, `/owner` plus the authenticated practice routes
+
+## 26. ADVOKATE LEGAL INTELLIGENCE — FLAGSHIP (added 28 Sep 2026)
+
+CJ GLOBAL's core product requirement: a jurisdiction-aware legal AI
+assistant — explicitly NOT a generic chatbot and NOT the customer-support
+ticketing flow (which stays in §25/SupportCentre). Honest scope statement:
+retrieval-augmented answers over verified, versioned legal sources with
+citation verification; the LLM is never the source of law. Sections marked
+"(slice)" are the verified Indian vertical slice delivered 28 Sep; broader
+topics and jurisdictions expand in measured phases.
+
+### 26.1 Jurisdiction-aware context — **Implemented and verified (slice)**
+- Matter legal profile (28 Sep): `matters.legalProfile` records country,
+  stateOrProvince (optional), courtOrTribunal (from `court`), practiceArea,
+  legalDates (incident/transaction/filing/agreement/hearing — typed,
+  optional), proceduralStage, governingLawClause, crossBorderFactors,
+  confirmedBy (lawyer who last confirmed), confirmedAt. Firm settings
+  (`organizations.legalDefaults`) supply DEFAULTS only; authorized lawyers
+  (matter.edit) select or correct per matter via `legalIntel.setMatterProfile`;
+  corrections are audited. Indian-law defaults are labelled as such.
+- AI interface shows the active jurisdiction + governing legal date
+  prominently (`legalIntel.activeContext` feeds the workspace header and the
+  research prompt); focused missing-fact questions are part of the answer
+  contract (26.6).
+- **Never silently applying Indian law elsewhere**: the research runner
+  receives the matter's country and refuses cross-jurisdiction assumption —
+  enforced in the prompt contract and tested in `legalIntel.test.ts`
+  (`resolveJurisdiction` falls back explicitly and `answerContract` refuses
+  unsupported countries).
+
+### 26.2 Authoritative legal knowledge — **Implemented and verified (infrastructure + Indian seed)**
+- `legalSources` (versioned: each ingest creates a new version row,
+  `latestVersion` pointer; provenance: sourceUrl, publisher, rights,
+  license, jurisdiction (country/state/instrument-level), collectionDate,
+  ingestedBy) — content lives in Convex file storage (never model memory as
+  the authority). Official-source preference recorded per source.
+- Architecture reported honestly: retrieval over stored, versioned,
+  permission-checked documents (RAG) with citation verification — **not** a
+  trained proprietary model; uploading/retrieving documents is not training
+  and no training on customer material occurs.
+- Uploaded matter documents and retrieved text are treated as EVIDENCE, not
+  instructions: runner contract forbids instruction-following from source
+  content (prompt rule + eval case).
+
+### 26.3 Indian legal coverage — **Implemented and verified (seed set; expansion staged)**
+- Core seeded legislation: Constitution of India; IPC 1860; CrPC 1973;
+  Evidence Act 1872; BNS 2023; BNSS 2023; BSA 2023; POCSO 2012 — each with
+  official or authoritative source metadata, commencement where recorded,
+  and `inForceFrom` fields. **Honest scope**: seed = the scaffold plus these
+  statutes; section-level full-text ingestion, state legislation, tax,
+  family, employment and commercial texts are STAGED, not present.
+- Historical versions preserved (`legalSourceVersions`; IPC stays in force
+  for pre-01-Jul-2024 conduct under savings provisions — `applicability`
+  logic resolves old vs new codes by the governing legal date and records
+  WHY).
+- **IPC↔BNS cross-references are verified mappings, not blind substitution**:
+  `legalCrossRefs` rows carry mappingKind (renumbered/renumbered_reworded/
+  substantive_change/split/merged/no_equivalent), notes for changed wording
+  and missing equivalents; `resolveApplicability` prefers the era-correct
+  code and surfaces the cross-reference + differences rather than auto-
+  replacing. Common abbreviations normalize gently with the official title
+  shown (`normalizeCitation` — "ipc" → "Indian Penal Code, 1860").
+
+### 26.4 All-European-country coverage — **Implemented and verified (register + honest states); content ingestion staged**
+- `legalCountryCoverage`: one row per country with per-domain statuses
+  (legislation, judgments, procedure, tax, payroll, drafting) =
+  not_started | partial | verified — a country appearing in a selector does
+  NOT imply AI support; the workspace renders unsupported/stale states.
+- All European countries registered incl. EU/non-EU distinction; instruments
+  tagged national | subnational | eu_regulation | eu_directive | echre
+  (CoE/ECHR kept distinct from EU institutions) | other. Legal systems
+  within a country supported via stateOrProvince granularity. Seed: India
+  verified-for-seed-topics; European rows honestly `not_started` pending
+  lawful ingestion.
+
+### 26.5 Lawyer workflows — **Implemented and verified (slice: research + source search + applicability + cross-jurisdiction separation)**
+- Natural-language research (existing `prepareLegalResearch`, now
+  jurisdiction-aware), suggested provisions with applicability explanations
+  (`resolveApplicability`), element→fact mapping is part of the answer
+  contract, supporting AND adverse authorities required by the answer
+  contract, evidence gaps + client questions generated when facts are
+  missing, source-linked drafting (existing drafting kinds), document
+  comparison + chronology extraction (existing `compare`/`chronology`
+  kinds), cross-jurisdiction comparisons with per-jurisdiction separation
+  (answer contract section rules).
+- Factual assumptions labelled; supplied facts vs AI inference distinguished;
+  NO outcome guarantees or success probabilities (runner contract + eval).
+
+### 26.6 Verifiable answers — **Implemented and verified (contract + citation verification)**
+- Nine-part answer contract (`buildAnswerContract` in `src/lib/legalIntel.ts`):
+  jurisdiction+date, brief answer, applicable provisions, relevant judgments,
+  application to facts, contrary authority/uncertainty, missing information,
+  clickable sources with section/paragraph anchors, source freshness +
+  coverage limitations. Enforced in the `legal_research` runner prompt.
+- **Citation verification**: `verifyCitations` checks every cited source
+  exists (by stable key) and quoted spans actually occur in the stored
+  version text (normalized whitespace); failures are surfaced as unverified,
+  never silently dropped. Fabricated citations/sections/quotations are
+  prohibited by contract and tested (`legalIntel.test.ts`).
+- **Refusal with honesty**: when insufficient reliable sources exist the
+  contract requires saying so and offering verified material only — never a
+  confident unsupported answer (runner rule + eval case).
+
+### 26.7 Precedent & judgment treatment — **Partially implemented (register + provenance); subsequent-treatment ingestion staged**
+- Judgments are first-class `legalSources` with court, bench, date,
+  citation, procedural posture fields and binding/persuasive determination
+  per jurisdiction rules (pure helper provided; per-country binding rules
+  expand with each jurisdiction).
+- Overruled/reversed/distinguished/questioned status requires supporting
+  source evidence — the model allows the status only with a citation to the
+  treatment source; "no negative treatment found in available sources" is
+  distinct from "confirmed good law" and is labelled as such. Holding vs
+  submissions vs narrative vs AI interpretation separated in the answer
+  contract. Automated subsequent-treatment ingestion is STAGED.
+
+### 26.8 Continuous updates — **Implemented and verified (scheduler + review queue); live source feeds staged**
+- `ingestionRuns` (per source: detected change, retries, failure alerts to
+  platform audit, version creation, index refresh timestamp, review queue
+  for uncertain changes, lastSuccessfulAt) + `runIngestionSweep` scheduled
+  action scaffold and `recordIngestionResult`. Change-detection fetchers
+  per upstream official source are STAGED (needs lawful source agreements);
+  the pipeline, limits, audit and staleness surfacing are live. No real-time
+  completeness is promised; stale/unavailable sources warn in UI. Historical
+  research reproducible via saved versions + the governing legal date.
+
+### 26.9 Confidentiality & human review — **Implemented and verified (enforced via existing permission model)**
+- Permissions enforced BEFORE retrieval and generation (same
+  requireAccess/canViewMatter rules as all AI kinds — no new data path).
+- Cross-firm leakage prevented by org-scoped queries on sources, indexes,
+  caches and logs (orgId-scoped tables; no cross-org retrieval path).
+- No training on customer legal material by default; provider handling/
+  retention documented in the AI section (§18 notes; provider DPA status
+  recorded when a live key is configured).
+- Lawyer approval gates unchanged for sends/filings/deadline changes;
+  monetary calculations route through versioned payroll/accounting functions
+  (existing), never free-form model arithmetic.
+
+### 26.10 Lawyer-facing interface — **Implemented and verified (slice)**
+- `/legal-intel` workspace: jurisdiction + legal-date selector, matter
+  context selector, research mode (existing AI pipeline) and **source search
+  that works without AI generation** (verified stored sources, highlighted
+  statutes, era-correct applicability badges), answer/source panes
+  (contract-structured), clickable provision anchors, saved-research linkage
+  via existing AI jobs, visible unsupported-country/stale-source states,
+  feedback/correction reporting recorded to platform-adjacent audit.
+- Drafts and inferred conclusions labelled; unsupported coverage states
+  explicit — never a generic chat box.
+
+### 26.11 Quality evaluation — **Implemented and verified (harness + seed set); lawyer-reviewed sets pending**
+- `legalEvalCases` + runner structure measuring: citation accuracy (only
+  real seeds cited), source support, jurisdiction/historical applicability
+  (IPC-vs-BNS by date), adverse-authority recognition, missing-fact
+  handling, refusal-to-invent, confidentiality/instruction-resistance
+  (prompt-injection-in-document case). Adversarial cases included:
+  outdated statutes, conflicting decisions, wrong-country questions,
+  user-supplied false citations, unavailable sources.
+- **Software tests passing ≠ legal accuracy.** Results are published as
+  internal readiness evidence; NO "smartest AI" claims. Lawyer-reviewed
+  evaluation sets per enabled jurisdiction: PENDING (operator work).
+
+### 26.12 Delivery & priority — **Adopted (this section re-ranks the roadmap)**
+- Flagship workstream alongside platform reliability. Verified Indian
+  vertical slice shipped 28 Sep: question → jurisdiction/date selection →
+  verified retrieval → source-linked answer contract → lawyer inspection of
+  cited passages. Expansion order: more Indian topics → EU instruments →
+  country-by-country European verification. Coverage, update status, test
+  results and dependencies are reported from actual data (coverage rows,
+  ingestion runs, eval results) — never asserted.
+
+
