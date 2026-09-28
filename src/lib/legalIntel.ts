@@ -334,6 +334,36 @@ function normText(t: string): string {
   return t.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
+/**
+ * Extract citations from generated answer text: stable keys ("in:...")
+ * with an optional pinpoint anchor and an optional quoted passage.
+ * Pure — unit-tested; the runner runs checkCitation over the results.
+ */
+export function extractCitations(text: string): CitationToVerify[] {
+  const out: CitationToVerify[] = [];
+  const seen = new Set<string>();
+  const re = /\[?(in:[a-z0-9][a-z0-9:\-]*)([^\]\n]{0,60})\]?([^\n]{0,300})/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const stableKey = m[1];
+    const tail = `${m[2] ?? ""} ${m[3] ?? ""}`;
+    const anchorM =
+      /§\s*([0-9]{1,3}[A-Z]?)/.exec(tail) ??
+      /(?:\bs|\bsection)\s+([0-9]{1,3}[A-Z]?)/i.exec(m[2] ?? "");
+    const quoteM = /[\u201C"]([^\u201D\"]{20,400})[\u201D"]/.exec(tail);
+    const dedupe = `${stableKey}|${anchorM?.[1] ?? ""}`;
+    if (seen.has(dedupe)) continue;
+    seen.add(dedupe);
+    out.push({
+      stableKey,
+      anchor: anchorM ? `§ ${anchorM[1]}` : undefined,
+      quote: quoteM?.[1],
+    });
+    if (out.length >= 25) break;
+  }
+  return out;
+}
+
 /** Validate one citation against the stored corpus. Pure. */
 export function checkCitation(
   citation: CitationToVerify,

@@ -521,6 +521,57 @@ export const runJob = internalAction({
       await ctx.runMutation(internal.ai.appendChronology, { jobId: args.jobId, events });
     }
 
+    // Backend citation validation (26.6): for legal_research answers the
+    // runner extracts cited stable keys and runs the pure checkCitation
+    // validator against STORED text. Failed checks do NOT silently pass:
+    // every check is persisted, and a failed report prepends a blocking
+    // banner so the answer can never present itself as verified.
+    if (payload.kind === "legal_research") {
+      const { extractCitations, checkCitation } = await import("../lib/legalIntel");
+      const citations = extractCitations(result.text).slice(0, 10);
+      if (citations.length > 0) {
+        const checks: Array<{
+          stableKey: string;
+          provision?: string;
+          quote?: string;
+          sourceExists: boolean;
+          textIngested: boolean;
+          anchorValid: boolean | null;
+          quoteVerified: boolean | null;
+          problem?: string;
+          ok: boolean;
+        }> = [];
+        for (const c of citations) {
+          const stored = await ctx.runQuery(internal.legalIntel.storedSourceForCheck, {
+            stableKey: c.stableKey,
+          });
+          const chk = checkCitation(c, stored as never);
+          checks.push({
+            stableKey: c.stableKey,
+            provision: c.anchor,
+            quote: c.quote,
+            sourceExists: chk.sourceExists,
+            textIngested: chk.textIngested,
+            anchorValid: chk.anchorValid,
+            quoteVerified: chk.quoteVerified,
+            problem: chk.problem ?? undefined,
+            ok: chk.ok,
+          });
+        }
+        const report = await ctx.runMutation(internal.legalIntel.attachCitationChecks, {
+          jobId: args.jobId,
+          checks,
+        });
+        if (report.status === "needs_citation_review") {
+          const failures = report.failed
+            .map((f) => `- ${f.stableKey}: ${f.problem}`)
+            .join("\n");
+          result.text =
+            `⚠ CITATION VALIDATION FAILED — this draft is marked needs_citation_review and MUST NOT be treated as verified.\n${failures}\n\n---\n\n${result.text}`;
+        }
+      }
+    }
+
     await ctx.runMutation(internal.ai.attachResult, {
       jobId: args.jobId,
       result: `${DISCLOSURE}\n\n${result.text}`,

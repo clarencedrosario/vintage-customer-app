@@ -32,6 +32,7 @@ import {
   governingLegalDate,
   buildAnswerContract,
   normalizeCitation,
+  checkCitation,
   countryName,
   EUROPEAN_COUNTRY_CODES,
 } from "../lib/legalIntel";
@@ -729,10 +730,14 @@ export const verifyCitations = mutation({
 export const runIngestionSweep = action({
   args: { maxSources: v.optional(v.number()) },
   handler: async (ctx, args) => {
-    const user = await getCurrentUser(ctx);
-    if (!isPlatformOperator(user)) {
-      throw new Error("Platform operator access required.");
-    }
+    // Actions cannot use the query-side getCurrentUser helper; derive the
+    // identity through the auth layer and verify operator status in a
+    // query (never trust the JWT claims alone).
+    const { getAuthUserId } = await import("@convex-dev/auth/server");
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Platform operator access required.");
+    const op = await ctx.runQuery(internal.legalIntel.operatorCheck, { userId });
+    if (!op.isOperator) throw new Error("Platform operator access required.");
     const limit = Math.min(args.maxSources ?? 50, 200);
     const sources = await ctx.runQuery(internal.legalIntel.allSourceIds, {});
     let opened = 0;
@@ -753,6 +758,206 @@ export const runIngestionSweep = action({
       runIds,
       note: "Runs are state machine rows only. This deployment has no automated fetcher configured: a scheduled action cannot silently rewrite verified law text. Each run is completed by an explicit authenticated ingestion (scripts/ingest-legal-text.mjs) which records updated/failed against the open run — duplicate prevention above keeps retried sweeps from double-enqueueing a source.",
     };
+  },
+});
+
+/**
+ * CLI registry bootstrap (same idempotent content as seedIndianCore, run
+ * without an identity). Bounded escape hatch for headless deployments:
+ * single call, insert-only (idempotent), audited. The browser path
+ * (seedIndianCore, operator-gated) remains the normal route.
+ */
+export const seedIndianCoreCli = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    let created = 0;
+    const createdIds: { stableKey: string; id: string }[] = [];
+    for (const s of INDIA_SEED) {
+      const existing = await ctx.db
+        .query("legalSources")
+        .withIndex("by_stable_key", (q) => q.eq("stableKey", s.stableKey))
+        .unique();
+      if (existing) continue;
+      const sourceId = await ctx.db.insert("legalSources", {
+        stableKey: s.stableKey,
+        title: s.title,
+        kind: s.kind,
+        codeFamily: s.codeFamily,
+        country: "in",
+        jurisdictionLevel: "national",
+        inForceFrom: s.inForceFrom,
+        repealedAt: s.repealedAt,
+        rights: s.rights,
+        publisher: s.publisher,
+        sourceUrl: s.sourceUrl,
+        collectionDate: todayISO(),
+        createdAt: now,
+        updatedAt: now,
+      });
+      const versionId = await ctx.db.insert("legalSourceVersions", {
+        sourceId,
+        version: 1,
+        body: `[INGESTION PENDING] ${s.title}\n\nOfficial source: ${s.sourceUrl}\nPublisher: ${s.publisher}\n\nSection-level text for this source has not been ingested in this deployment yet. Advokate will not cite sections from this source until ingestion completes. This stub exists so provenance, coverage status and the pipeline are wired before content arrives — never to fabricate content.\n\nRegistry note: ${s.notes}`,
+        collectedAt: todayISO(),
+        createdAt: now,
+      });
+      await ctx.db.patch(sourceId, { latestVersion: versionId });
+      created += 1;
+      createdIds.push({ stableKey: s.stableKey, id: sourceId });
+    }
+    let refsCreated = 0;
+    for (const r of IPC_BNS_SEED) {
+      const dup = await ctx.db
+        .query("legalCrossRefs")
+        .withIndex("by_from", (q) =>
+          q.eq("fromKey", "in:statute:ipc-1860").eq("fromAnchor", r.fromAnchor),
+        )
+        .first();
+      if (dup) continue;
+      await ctx.db.insert("legalCrossRefs", {
+        fromKey: "in:statute:ipc-1860",
+        toKey: "in:statute:bns-2023",
+        fromAnchor: r.fromAnchor,
+        toAnchor: r.toAnchor,
+        mappingKind: r.kind as "renumbered_reworded" | "no_equivalent",
+        notes: r.notes,
+        nearestProvisions: "nearestProvisions" in r ? [...r.nearestProvisions] : undefined,
+        reviewStatus: "verified" as const,
+        evidenceUrl: "https://www.indiacode.nic.in",
+        evidenceNote: r.evidenceNote,
+        createdAt: now,
+      });
+      refsCreated += 1;
+    }
+    const inCoverage = await ctx.db
+      .query("legalCountryCoverage")
+      .withIndex("by_country", (q) => q.eq("country", "in"))
+      .unique();
+    if (!inCoverage) {
+      await ctx.db.insert("legalCountryCoverage", {
+        country: "in",
+        countryName: "India",
+        inEurope: false,
+        legislation: "partial",
+        judgments: "not_started",
+        procedure: "partial",
+        tax: "not_started",
+        payroll: "not_started",
+        drafting: "partial",
+        updatedAt: now,
+      });
+    }
+    const admin = (await ctx.db.query("users").collect()).find((u) => u.isPlatformAdmin === true);
+    if (admin) {
+      await ctx.db.insert("platformAdminAudit", {
+        actorId: admin._id,
+        actorName: "legal-intel cli bootstrap",
+        action: "legal_source.registry_bootstrapped",
+        targetType: "legalSource",
+        targetId: createdIds[0]?.id ?? "none",
+        detail: `CLI bootstrap created ${created} sources, ${refsCreated} cross-refs, India coverage row (insert-only idempotent).`,
+        createdAt: now,
+      });
+    }
+    return { sourcesCreated: created, crossRefsCreated: refsCreated };
+  },
+});
+
+/**
+ * Bounded real-judgment registry (26.9): two Supreme Court of India
+ * judgments whose full PDFs were retrieved from official government
+ * hosts. Metadata (court, bench, decided date, citations) is taken from
+ * the documents' own headers; treatment is deliberately UNSET —
+ * precedent treatment is NOT claimed as verified without a treatment
+ * source. Bounded excerpts of the retrieved text are ingested via the
+ * same pipeline as statutes.
+ */
+const JUDGMENT_SEED = [
+  {
+    stableKey: "in:judgment:sc-tofan-singh-2020",
+    title: "Tofan Singh v. State of Tamil Nadu (Supreme Court of India, 29 Oct 2020)",
+    court: "Supreme Court of India",
+    bench: "R.F. Nariman; Navin Sinha, JJ.",
+    decidedAt: "2020-10-29",
+    // Reporter citation NOT printed on the retrieved document's header:
+    // recorded by appeal number + date only. No invented reporter cite.
+    citation: "Criminal Appeal No. 152 of 2013 (decided 29.10.2020)",
+    sourceUrl: "https://www.narcoordindia.gov.in/narcoordindia/Judgements/1655898300-4205-DOC-Tofan_Singh_vs_The_State_Of_Tamil_Nadu_on_29_October_2020.PDF",
+    publisher: "Government of India (NARCORD portal copy of SCI judgment)",
+  },
+  {
+    stableKey: "in:judgment:sc-nanavati-1961",
+    title: "K.M. Nanavati v. State of Maharashtra (Supreme Court of India, 24 Nov 1961)",
+    court: "Supreme Court of India",
+    bench: "K. Subbarao; S.K. Das; Raghubar Dayal, JJ.",
+    decidedAt: "1961-11-24",
+    citation: "1962 AIR 605; 1962 SCR Supl. (1) 567 (as printed in the retrieved document)",
+    sourceUrl: "https://aphc.gov.in/docs/imp_judgements/K_M_Nanavati_vs_State_Of_Maharashtra.PDF",
+    publisher: "Andhra Pradesh High Court (official portal copy of SCI judgment)",
+  },
+];
+
+/**
+ * CLI seed for the bounded judgment registry (insert-only, idempotent,
+ * audited). Companion to seedIndianCoreCli; same headless rationale.
+ */
+export const seedJudgmentsCli = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    let created = 0;
+    for (const j of JUDGMENT_SEED) {
+      const existing = await ctx.db
+        .query("legalSources")
+        .withIndex("by_stable_key", (q) => q.eq("stableKey", j.stableKey))
+        .unique();
+      if (existing) continue;
+      const sourceId = await ctx.db.insert("legalSources", {
+        stableKey: j.stableKey,
+        title: j.title,
+        kind: "judgment",
+        country: "in",
+        jurisdictionLevel: "national",
+        court: j.court,
+        bench: j.bench,
+        decidedAt: Date.parse(`${j.decidedAt}T00:00:00Z`),
+        citation: j.citation,
+        // treatment intentionally UNSET: no verified treatment source.
+        rights: "Open government publication",
+        publisher: j.publisher,
+        sourceUrl: j.sourceUrl,
+        collectionDate: todayISO(),
+        createdAt: now,
+        updatedAt: now,
+      });
+      const versionId = await ctx.db.insert("legalSourceVersions", {
+        sourceId,
+        version: 1,
+        body: `[INGESTION PENDING] ${j.title}\n\nRetrieved document: ${j.sourceUrl}\n\nJudgment text is ingested via the bounded pipeline (paragraph-anchored excerpts of the retrieved PDF).`,
+        collectedAt: todayISO(),
+        createdAt: now,
+      });
+      await ctx.db.patch(sourceId, { latestVersion: versionId });
+      created += 1;
+    }
+    const inCoverage = await ctx.db
+      .query("legalCountryCoverage")
+      .withIndex("by_country", (q) => q.eq("country", "in"))
+      .unique();
+    if (inCoverage && inCoverage.judgments === "not_started") {
+      await ctx.db.patch(inCoverage._id, { judgments: "partial", updatedAt: now });
+    }
+    return { judgmentsCreated: created };
+  },
+});
+
+/** Operator verification for actions (identity → users row check). */
+export const operatorCheck = internalQuery({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    return { isOperator: isPlatformOperator(user) };
   },
 });
 
@@ -825,15 +1030,18 @@ export const recordIngestionResult = mutation({
     }
     if (args.outcome === "failed") {
       // Failure alert path (platform ops audit is infrastructure-only).
-      await ctx.db.insert("platformAdminAudit", {
-        actorId: run.sourceId as never,
-        actorName: "legal-intel ingestion",
-        action: "legal_source.ingest_failed",
-        targetType: "legalSource",
-        targetId: String(run.sourceId),
-        detail: args.error?.slice(0, 200),
-        createdAt: now,
-      });
+      const admin = (await ctx.db.query("users").collect()).find((u) => u.isPlatformAdmin === true);
+      if (admin) {
+        await ctx.db.insert("platformAdminAudit", {
+          actorId: admin._id,
+          actorName: "legal-intel ingestion",
+          action: "legal_source.ingest_failed",
+          targetType: "legalSource",
+          targetId: String(run.sourceId),
+          detail: args.error?.slice(0, 200),
+          createdAt: now,
+        });
+      }
     }
     return { ok: true };
   },
@@ -923,9 +1131,6 @@ export const ingestSourceTextCli = internalMutation({
   args: {
     stableKey: v.string(),
     runKey: v.string(),
-    sections: v.array(
-      v.object({ anchor: v.string(), heading: v.string(), start: v.number() }),
-    ),
     collectedAt: v.string(),
     sourceUrl: v.optional(v.string()),
     publisher: v.optional(v.string()),
@@ -933,16 +1138,32 @@ export const ingestSourceTextCli = internalMutation({
     closeRunId: v.optional(v.id("ingestionRuns")),
   },
   handler: async (ctx, args) => {
-    const chunks = await ctx.db
-      .query("ingestChunks")
-      .withIndex("by_run", (q) => q.eq("runKey", args.runKey))
-      .collect();
-    chunks.sort((a, b) => a.seq - b.seq);
+    // Body chunks were staged under runKey; section chunks (JSON arrays,
+    // size-limited like the body) under `${runKey}#sections`.
+    const load = async (key: string) => {
+      const rows = await ctx.db
+        .query("ingestChunks")
+        .withIndex("by_run", (q) => q.eq("runKey", key))
+        .collect();
+      rows.sort((a, b) => a.seq - b.seq);
+      return rows;
+    };
+    const chunks = await load(args.runKey);
+    const secChunks = await load(`${args.runKey}#sections`);
     if (chunks.length === 0) {
       throw new Error(`No staged chunks for ${args.runKey}.`);
     }
+    if (secChunks.length === 0) {
+      throw new Error(`No staged section chunks for ${args.runKey}.`);
+    }
     const body = chunks.map((c) => c.bodyChunk).join("");
-    for (const c of chunks) await ctx.db.delete(c._id);
+    let sections: { anchor: string; heading: string; start: number }[] = [];
+    try {
+      sections = JSON.parse(secChunks.map((c) => c.bodyChunk).join(""));
+    } catch {
+      throw new Error(`Staged section chunks are not valid JSON for ${args.runKey}.`);
+    }
+    for (const c of [...chunks, ...secChunks]) await ctx.db.delete(c._id);
 
     const s = await ctx.db
       .query("legalSources")
@@ -956,7 +1177,7 @@ export const ingestSourceTextCli = internalMutation({
       sourceId: s._id,
       version: nextVersion,
       body,
-      sections: args.sections,
+      sections,
       collectedAt: args.collectedAt,
       createdAt: now,
     });
@@ -993,7 +1214,7 @@ export const ingestSourceTextCli = internalMutation({
       versionId,
       version: nextVersion,
       bodyChars: body.length,
-      sectionsCount: args.sections.length,
+      sectionsCount: sections.length,
       provenanceNote: args.provenanceNote ?? null,
     };
   },
@@ -1025,15 +1246,18 @@ export const recordResultCli = internalMutation({
       lastSuccessfulAt: args.outcome === "failed" ? run.lastSuccessfulAt : now,
     });
     if (args.outcome === "failed") {
-      await ctx.db.insert("platformAdminAudit", {
-        actorId: run.sourceId as never,
-        actorName: "legal-intel ingestion",
-        action: "legal_source.ingest_failed",
-        targetType: "legalSource",
-        targetId: String(run.sourceId),
-        detail: args.error?.slice(0, 200),
-        createdAt: now,
-      });
+      const admin = (await ctx.db.query("users").collect()).find((u) => u.isPlatformAdmin === true);
+      if (admin) {
+        await ctx.db.insert("platformAdminAudit", {
+          actorId: admin._id,
+          actorName: "legal-intel ingestion (cli)",
+          action: "legal_source.ingest_failed",
+          targetType: "legalSource",
+          targetId: String(run.sourceId),
+          detail: args.error?.slice(0, 200),
+          createdAt: now,
+        });
+      }
     }
     return { ok: true };
   },
@@ -1056,6 +1280,248 @@ export const getSourceCli = internalQuery({
       publisher: s.publisher,
       collectionDate: s.collectionDate,
       latestVersion: vRow ? { version: vRow.version, sectionsCount: (vRow.sections ?? []).length, bodyChars: vRow.body.length } : null,
+    };
+  },
+});
+
+// ---------------------------------------------------------------------
+// Backend citation validation (26.6) — enforced in CODE. The runner
+// extracts citations from a generated legal_research answer, re-reads the
+// STORED source text here, and runs the pure checkCitation validator;
+// failing checks flip the answer into needs_citation_review BEFORE the
+// result is ever presented as verified.
+// ---------------------------------------------------------------------
+
+/** Stored text for one source (internal — runner-side validation). */
+export const storedSourceForCheck = internalQuery({
+  args: { stableKey: v.string() },
+  handler: async (ctx, args) => {
+    const s = await ctx.db
+      .query("legalSources")
+      .withIndex("by_stable_key", (q) => q.eq("stableKey", args.stableKey))
+      .unique();
+    if (!s) return null;
+    const vRow = s.latestVersion ? await ctx.db.get(s.latestVersion) : null;
+    if (!vRow) {
+      return { stableKey: s.stableKey, title: s.title, body: null, sections: null };
+    }
+    return {
+      stableKey: s.stableKey,
+      title: s.title,
+      body: vRow.body,
+      sections: vRow.sections ?? null,
+    };
+  },
+});
+
+/** Persist citation check rows for a job (internal — runner-side). */
+export const attachCitationChecks = internalMutation({
+  args: {
+    jobId: v.id("aiJobs"),
+    checks: v.array(
+      v.object({
+        stableKey: v.string(),
+        provision: v.optional(v.string()),
+        quote: v.optional(v.string()),
+        sourceExists: v.boolean(),
+        textIngested: v.boolean(),
+        anchorValid: v.union(v.boolean(), v.null()),
+        quoteVerified: v.union(v.boolean(), v.null()),
+        problem: v.optional(v.string()),
+        ok: v.boolean(),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    for (const c of args.checks.slice(0, 40)) {
+      await ctx.db.insert("legalCitationChecks", {
+        jobId: args.jobId,
+        stableKey: c.stableKey,
+        provision: c.provision,
+        quote: c.quote?.slice(0, 500),
+        sourceExists: c.sourceExists,
+        textIngested: c.textIngested,
+        anchorValid: c.anchorValid === true,
+        quoteVerified: c.quoteVerified === true,
+        problem: c.problem,
+        ok: c.ok,
+        createdAt: now,
+      });
+    }
+    const failed = args.checks.filter((c) => !c.ok);
+    return {
+      checkedAt: now,
+      total: args.checks.length,
+      failed: failed.map((f) => ({ stableKey: f.stableKey, problem: f.problem ?? "failed" })),
+      allVerified: args.checks.length > 0 && failed.length === 0,
+      status: failed.length === 0 ? "verified" : "needs_citation_review",
+    };
+  },
+});
+
+/** Derived citation report for one job (UI renders the citation panel). */
+export const citationReportForJob = query({
+  args: { jobId: v.id("aiJobs") },
+  handler: async (ctx, args) => {
+    await requireSignedIn(ctx);
+    const rows = await ctx.db
+      .query("legalCitationChecks")
+      .withIndex("by_job", (q) => q.eq("jobId", args.jobId))
+      .collect();
+    const failed = rows.filter((r) => !r.ok);
+    return {
+      total: rows.length,
+      allVerified: rows.length > 0 && failed.length === 0,
+      status: rows.length === 0 ? "unchecked" : failed.length === 0 ? "verified" : "needs_citation_review",
+      rows: rows.map((r) => ({
+        stableKey: r.stableKey,
+        provision: r.provision,
+        quote: r.quote,
+        anchorValid: r.anchorValid ?? null,
+        quoteVerified: r.quoteVerified ?? null,
+        problem: r.problem ?? null,
+        ok: r.ok,
+      })),
+    };
+  },
+});
+
+// ---------------------------------------------------------------------
+// Automated end-to-end research check (26.12) — NO LLM involved.
+// Drives the full pipeline over REAL ingested text: jurisdiction →
+// governing date → retrieval → era applicability → grounded claims with
+// passage offsets → citation validation. This is the automated evidence
+// tier; LLM generation and browser verification are tracked separately.
+// ---------------------------------------------------------------------
+export const researchDryRun = internalQuery({
+  args: {
+    country: v.string(),
+    onDate: v.string(),
+    family: v.optional(v.string()),
+    question: v.optional(v.string()),
+    /** Optional pinpoint, e.g. "§ 302" — retrieves THAT provision. */
+    anchorHint: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const provisions = (
+      await ctx.db
+        .query("legalSources")
+        .withIndex("by_country", (q) => q.eq("country", args.country))
+        .collect()
+    ).filter((p) => p.latestVersion);
+    const crossRefs = await ctx.db.query("legalCrossRefs").collect();
+
+    const applicability = resolveApplicability(
+      provisions.map((p) => ({
+        stableKey: p.stableKey,
+        title: p.title,
+        codeFamily: p.codeFamily,
+        inForceFrom: p.inForceFrom,
+        repealedAt: p.repealedAt,
+        country: p.country,
+      })),
+      crossRefs.map((r) => ({
+        fromKey: r.fromKey,
+        toKey: r.toKey,
+        fromAnchor: r.fromAnchor,
+        toAnchor: r.toAnchor,
+        mappingKind: r.mappingKind,
+        notes: r.notes,
+      })),
+      args.onDate,
+      args.family,
+    );
+
+    // Rank the governing family first, then remaining in-force sources.
+    const fam = args.family;
+    const inForce = provisions.filter(
+      (p) =>
+        (p.inForceFrom ?? "0000-01-01") <= args.onDate &&
+        !(p.repealedAt && p.repealedAt <= args.onDate),
+    );
+    const ranked = [
+      ...inForce.filter((p) => fam && p.codeFamily === fam),
+      ...inForce.filter((p) => !fam || p.codeFamily !== fam),
+    ].slice(0, 6);
+
+    const retrieved: {
+      stableKey: string;
+      title: string;
+      anchor: string;
+      heading: string;
+      offset: number;
+      quote: string;
+      checkOk: boolean;
+      problem: string | null;
+    }[] = [];
+    for (const p of ranked) {
+      const vRow = p.latestVersion ? await ctx.db.get(p.latestVersion) : null;
+      if (!vRow) continue;
+      const sections = vRow.sections ?? [];
+      // Pinpoint when hinted; otherwise the first real section anchor.
+      const sec = (args.anchorHint ? sections.find((x) => x.anchor === args.anchorHint) : undefined) ?? sections[0];
+      const anchor = sec ? sec.anchor : "§ 1";
+      const start = sec ? sec.start : 0;
+      const quote = vRow.body.slice(start, start + 220).replace(/\s+/g, " ").trim();
+      const check = checkCitation(
+        { stableKey: p.stableKey, anchor, quote },
+        { stableKey: p.stableKey, title: p.title, body: vRow.body, sections },
+      );
+      retrieved.push({
+        stableKey: p.stableKey,
+        title: p.title,
+        anchor,
+        heading: sec?.heading ?? "(document head)",
+        offset: check.quoteOffset >= 0 ? check.quoteOffset : start,
+        quote,
+        checkOk: check.ok,
+        problem: check.problem,
+      });
+    }
+
+    const label = `${countryName(args.country)} (automated check, demo profile)`;
+    const contract = buildAnswerContract({
+      country: args.country,
+      jurisdictionLabel: label,
+      legalDate: args.onDate,
+      legalDateBasis: "explicit check date",
+      dateIsAssumption: false,
+      supportedCountries: ["in"],
+    });
+
+    // Template-assembled brief answer from RETRIEVED material only —
+    // clearly labelled; the LLM generation step is a separate tier.
+    let answer: string;
+    if (contract.refusalRequired || retrieved.length === 0) {
+      answer = contract.refusalMessage ||
+        "No verified in-force sources retrieved for this date — refusing rather than answering from memory.";
+    } else if (applicability) {
+      const gov = retrieved.find((r) => r.stableKey === applicability.applicableKey) ?? retrieved[0];
+      answer = [
+        `Jurisdiction/date: ${label}; ${args.onDate}.`,
+        `Governing (${fam ?? "general"} family): ${applicability.applicableLabel} — ${applicability.reason}.`,
+        `Provision ${gov.anchor} (${gov.heading}): "${gov.quote.slice(0, 180)}" [clickable: offset ${gov.offset}].`,
+        applicability.crossRefs.length
+          ? `Cross-references (research aids): ${applicability.crossRefs.map((c) => `${c.toAnchor} of ${c.toKey} (${c.mappingKind})`).join("; ")}.`
+          : "",
+        applicability.reviewFlags.length
+          ? `FOR LAWYER REVIEW: ${applicability.reviewFlags.join(" | ")}`
+          : "",
+      ].filter(Boolean).join(" ");
+    } else {
+      answer = `No in-force ${fam ?? ""} provision covers ${args.onDate} — refusal recorded (era question needs lawyer review).`;
+    }
+
+    return {
+      question: args.question ?? null,
+      jurisdiction: { country: args.country, label, confirmed: false },
+      legalDate: { date: args.onDate, basis: "explicit check date", isAssumption: false },
+      applicability,
+      retrieved,
+      answer,
+      contract,
+      generatedBy: "template (no LLM) — automated pipeline evidence",
     };
   },
 });

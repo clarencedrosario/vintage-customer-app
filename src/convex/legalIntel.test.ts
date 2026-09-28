@@ -14,7 +14,8 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import { convexTest } from "convex-test";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
+import { checkCitation, extractCitations } from "../lib/legalIntel";
 
 const modules: Record<string, () => Promise<unknown>> = (import.meta as unknown as {
   glob: (p: string) => Record<string, () => Promise<unknown>>;
@@ -159,6 +160,15 @@ describe("Advokate Legal Intelligence — real backend slice", () => {
       family: "penal",
     });
     expect(postBns.resolved?.applicableKey).toBe("in:statute:bns-2023");
+
+    // Temporal review flags: a pre-BNS date must flag the repeal-era
+    // savings question (BLANKET July-2024 switching is forbidden); the
+    // post-BNS date is inside two years of commencement, so transitional
+    // savings (s.358(2) BNS / s.531(2)(a) BNSS / s.170(2) BSA) must be
+    // flagged for lawyer review too.
+    expect(preBns.resolved!.reviewFlags.length).toBeGreaterThan(0);
+    expect(preBns.resolved!.reviewFlags.join(" ")).toMatch(/savings|transitional/i);
+    expect(postBns.resolved!.reviewFlags.join(" ")).toMatch(/transitional exceptions/i);
   });
 
   it("matter jurisdiction: firm default is a labelled fallback; lawyer confirmation wins", async () => {
@@ -219,6 +229,174 @@ describe("Advokate Legal Intelligence — real backend slice", () => {
     expect(fake!.sourceExists).toBe(false);
     expect(fake!.problem).toMatch(/does not exist/);
     expect(result.allVerified).toBe(false);
+  });
+
+  it("backend citation validator: pinpoint + quote fidelity against stored text (pure)", () => {
+    const stored = {
+      stableKey: "in:statute:ipc-1860",
+      title: "Indian Penal Code, 1860",
+      body: "302. Punishment for murder.--Whoever commits murder shall be punished with death.",
+      sections: [{ anchor: "§ 302", heading: "Punishment for murder", start: 0 }],
+    };
+    // Verbatim quote + valid pinpoint → verified with passage offset.
+    const good = checkCitation(
+      { stableKey: stored.stableKey, anchor: "§ 302", quote: "punished with death" },
+      stored,
+    );
+    expect(good.ok).toBe(true);
+    expect(good.quoteVerified).toBe(true);
+    expect(good.anchorValid).toBe(true);
+    expect(good.quoteOffset).toBeGreaterThan(0);
+    // Fabricated quote → blocked even though the source exists.
+    const badQuote = checkCitation(
+      { stableKey: stored.stableKey, quote: "shall be hanged by the neck" },
+      stored,
+    );
+    expect(badQuote.ok).toBe(false);
+    expect(badQuote.problem).toMatch(/not found in the stored version/i);
+    // Wrong pinpoint → blocked.
+    const badPin = checkCitation(
+      { stableKey: stored.stableKey, anchor: "§ 999" },
+      stored,
+    );
+    expect(badPin.ok).toBe(false);
+    expect(badPin.problem).toMatch(/does not match any section/i);
+    // Un-ingested source → blocked.
+    const pending = checkCitation(
+      { stableKey: "in:statute:pocso-2012" },
+      { stableKey: "in:statute:pocso-2012", title: "POCSO", body: null, sections: null },
+    );
+    expect(pending.ok).toBe(false);
+    expect(pending.problem).toMatch(/not ingested/i);
+    // Missing source → blocked.
+    expect(checkCitation({ stableKey: "in:statute:nope" }, null).ok).toBe(false);
+  });
+
+  it("citation extraction pulls stable keys, pinpoints and quotes from generated text", () => {
+    const text = `The provision relied on is [in:statute:ipc-1860 § 302] which reads "punished with death" while BNS [in:statute:bns-2023 § 103] governs post-commencement conduct.`;
+    const cites = extractCitations(text);
+    expect(cites.length).toBe(2);
+    expect(cites[0]!.stableKey).toBe("in:statute:ipc-1860");
+    expect(cites[0]!.anchor).toBe("§ 302");
+    expect(cites[0]!.quote).toMatch(/punished with death/);
+    expect(cites[1]!.stableKey).toBe("in:statute:bns-2023");
+    expect(cites[1]!.anchor).toBe("§ 103");
+  });
+
+  it("ingest pipeline: dedupe, freshness, and failure handling on real run rows", async () => {
+    const operatorId = await createTestUser(t, {
+      email: "op4@cjglobal.test",
+      verified: true,
+      platformAdmin: true,
+    });
+    const op = asUser(t, operatorId);
+    await op.mutation(api.legalIntel.seedIndianCore, {});
+
+    // Find a source id via the CLI readback path.
+    const src = await op.query(api.legalIntel.searchSources, { q: "sakshya" });
+    const bsa = src.find((s) => s.stableKey === "in:statute:bsa-2023");
+    expect(bsa).toBeDefined();
+    const bsaId = bsa!._id;
+
+    // 1) openRun twice → the second is a dedupe skip.
+    const r1 = await t.run(ctx =>
+      ctx.runMutation(internal.legalIntel.openRun, { sourceId: bsaId }),
+    );
+    expect(r1.opened).toBe(true);
+    const r2 = await t.run(ctx =>
+      ctx.runMutation(internal.legalIntel.openRun, { sourceId: bsaId }),
+    );
+    expect(r2.opened).toBe(false);
+    expect(r2.skipped).toBe(true);
+
+    // 2) close the run with a new version → freshness updates.
+    const now = Date.now();
+    const versionId = await t.run(async (ctx) => {
+      const v = await ctx.db.insert("legalSourceVersions", {
+        sourceId: bsaId,
+        version: 2,
+        body: "1. Short title and commencement.—(1) This Act may be called the Bharatiya Sakshya Adhiniyam, 2023.",
+        sections: [{ anchor: "§ 1", heading: "Short title", start: 0 }],
+        collectedAt: "2026-09-28",
+        createdAt: now,
+      });
+      return v;
+    });
+    await op.mutation(api.legalIntel.recordIngestionResult, {
+      runId: r1.runId,
+      outcome: "updated",
+      newVersionId: versionId,
+    });
+    const after = await t.run(async (ctx) => {
+      const run = await ctx.db.get(r1.runId);
+      const source = await ctx.db.get(bsaId);
+      return { run, source };
+    });
+    expect(after.run?.outcome).toBe("updated");
+    expect(after.run?.lastSuccessfulAt).toBeDefined();
+    expect(after.source?.collectionDate).toBe("2026-09-28");
+
+    // 3) failure path: a failed run records the error and keeps lastSuccess unset.
+    const r3 = await t.run(ctx =>
+      ctx.runMutation(internal.legalIntel.openRun, { sourceId: bsaId }),
+    );
+    await op.mutation(api.legalIntel.recordIngestionResult, {
+      runId: r3.runId,
+      outcome: "failed",
+      error: "simulated upstream failure (test)",
+    });
+    const failedRun = await t.run((ctx) => ctx.db.get(r3.runId));
+    expect(failedRun?.outcome).toBe("failed");
+    expect(failedRun?.error).toMatch(/simulated upstream failure/);
+    expect(failedRun?.lastSuccessfulAt).toBeUndefined();
+  });
+
+  it("automated end-to-end check: jurisdiction → date → retrieval → grounded answer over INGESTED text", async () => {
+    const operatorId = await createTestUser(t, {
+      email: "op5@cjglobal.test",
+      verified: true,
+      platformAdmin: true,
+    });
+    const op = asUser(t, operatorId);
+    await op.mutation(api.legalIntel.seedIndianCore, {});
+
+    // Ingest a small REAL excerpt (with section anchor) so the dry run
+    // retrieves actual provision text, not a registry stub.
+    await op.mutation(api.legalIntel.ingestSourceText, {
+      stableKey: "in:statute:ipc-1860",
+      body: "302. Punishment for murder.--Whoever commits murder shall be punished with death, or imprisonment for life, and shall also be liable to fine.",
+      sections: [
+        { anchor: "§ 302", heading: "Punishment for murder", start: 0 },
+      ],
+    });
+
+    // Pre-BNS incident date + pinpoint → IPC governs, § 302 retrieved,
+    // the passage verifies against stored text, and era review flags fire.
+    const pre = await t.run((ctx) =>
+      ctx.runQuery(internal.legalIntel.researchDryRun, {
+        country: "in",
+        onDate: "2024-03-01",
+        family: "penal",
+        anchorHint: "§ 302",
+      }),
+    );
+    expect(pre.applicability?.applicableKey).toBe("in:statute:ipc-1860");
+    const ipcHit = pre.retrieved.find((r: { stableKey: string }) => r.stableKey === "in:statute:ipc-1860");
+    expect(ipcHit).toBeDefined();
+    expect(ipcHit!.anchor).toBe("§ 302");
+    expect(ipcHit!.checkOk).toBe(true);
+    expect(ipcHit!.quote).toMatch(/murder/i);
+    expect(pre.answer).toMatch(/Indian Penal Code, 1860/);
+    expect(pre.answer).toMatch(/FOR LAWYER REVIEW/);
+
+    // Unsupported jurisdiction still refuses inside the same pipeline.
+    const fr = await t.run((ctx) =>
+      ctx.runQuery(internal.legalIntel.researchDryRun, {
+        country: "fr",
+        onDate: "2024-03-01",
+      }),
+    );
+    expect(fr.answer).toMatch(/will not produce a substantive legal answer/);
   });
 
   it("unsupported jurisdiction: the answer contract refuses, coverage register stays honest", async () => {
