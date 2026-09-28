@@ -324,13 +324,16 @@ describe("Advokate Legal Intelligence — real backend slice", () => {
 
     // 2) close the run with a new version → freshness updates.
     const now = Date.now();
+    // recordIngestionResult stamps freshness with the SUCCESS date (UTC),
+    // so derive the expectation instead of hardcoding a calendar day.
+    const todayUtc = new Date(now).toISOString().slice(0, 10);
     const versionId = await t.run(async (ctx) => {
       const v = await ctx.db.insert("legalSourceVersions", {
         sourceId: bsaId,
         version: 2,
         body: "1. Short title and commencement.—(1) This Act may be called the Bharatiya Sakshya Adhiniyam, 2023.",
         sections: [{ anchor: "§ 1", heading: "Short title", start: 0 }],
-        collectedAt: "2026-09-28",
+        collectedAt: todayUtc,
         createdAt: now,
       });
       return v;
@@ -347,7 +350,7 @@ describe("Advokate Legal Intelligence — real backend slice", () => {
     });
     expect(after.run?.outcome).toBe("updated");
     expect(after.run?.lastSuccessfulAt).toBeDefined();
-    expect(after.source?.collectionDate).toBe("2026-09-28");
+    expect(after.source?.collectionDate).toBe(todayUtc);
 
     // 3) failure path: a failed run records the error and keeps lastSuccess unset.
     const r3 = await t.run(ctx =>

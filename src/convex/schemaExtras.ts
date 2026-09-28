@@ -1061,6 +1061,11 @@ export const legalIntelTables = {
     repealedAt: v.optional(v.string()),
     rights: v.string(), // content rights note, e.g. "Open government data"
     license: v.optional(v.string()),
+    // Precise corpus status surfaced to lawyers (26.3/26.6): e.g. POCSO
+    // "text NOT OBTAINED FROM SOURCES ATTEMPTED (with URL/error log)" —
+    // distinct from "unavailable anywhere"; citations stay validator-blocked
+    // until real text is ingested.
+    statusNote: v.optional(v.string()),
     publisher: v.string(),
     sourceUrl: v.string(),
     collectionDate: v.string(), // YYYY-MM-DD when the version text was collected

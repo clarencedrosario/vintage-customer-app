@@ -1,4 +1,4 @@
-// Extract text + section anchors from downloaded bare-act PDFs (v3).
+// Extract text + section anchors from downloaded bare-act PDFs (v5).
 // - Gap math uses segment END (x+width) so "144" + "." + "(1)" joins to
 //   "144. (1) ..." (pdfjs splits these into separate items in gazettes).
 // - MHA IPC reprint: left margin column (x<48) holds section headings, but
@@ -6,9 +6,16 @@
 //   back BEFORE body text of the same line, never dropped.
 // - Gazette sanhitas: margin band (x<110 or x>520) holds "N. Heading.";
 //   running headers (y>765) and underscore rules are stripped.
-// - Sequential-window filter (with lettered-section tolerance) rejects
-//   page-number artifacts. Missing headings fall back to the first
-//   subsequent line containing ".--"/".—".
+// - Constitution: the PDF opens with the "ARRANGEMENT OF ARTICLES" table
+//   of contents whose entries repeat article headings verbatim (incl.
+//   article 1's). The body gate therefore requires the operative "1. …
+//   Union.—" content marker, so anchors point at real text, never the TOC.
+// - Sequential-window filter with: same-number lettered chaining (371A
+//   after 371), a bounded backwards window for out-of-order column flow
+//   (the MHA CrPC print emits §330's heading before §329's text), leading
+//   bracket tolerance ("[371A." for inserted articles), and print variants
+//   "371B ." (space before dot) / "371-I." (hyphen). Duplicate lines
+//   upgrade a placeholder heading instead of creating second anchors.
 import { createRequire } from "module";
 import { mkdirSync, writeFileSync, readFileSync } from "fs";
 import { createHash } from "crypto";
@@ -42,7 +49,7 @@ const SOURCES = [
   { key: "in:code:bsa-2023", pdf: "/tmp/bsa_mha.pdf", mode: "gazette", startAt: 1, maxNo: 170,
     sourceUrl: "https://www.mha.gov.in/sites/default/files/2024-04/250882_english_01042024_0.pdf",
     publisher: "The Gazette of India (Extraordinary), via MHA" },
-  { key: "in:constitution:constitution-of-india", pdf: "/tmp/const_s3waas.pdf", mode: "plain", startAt: 1, maxNo: 400,
+  { key: "in:constitution:constitution-of-india", pdf: "/tmp/const_s3waas.pdf", mode: "constitution", startAt: 1, maxNo: 400,
     sourceUrl: "https://cdnbbsr.s3waas.gov.in/s380537a945c7aaa788ccfcdf1b99b5d8f/uploads/2023/05/2023050195.pdf",
     publisher: "Government of India (official Constitution as amended up to date of edition)" },
 ];
@@ -88,10 +95,8 @@ function buildLines(items, mode) {
       }
       return text.replace(/\s+/g, " ").trim();
     };
-    // width is attached for gap math (pdfjs gives it per item).
-    const withW = (arr) => arr;
-    const marginText = render(withW(L.margin));
-    const bodyText = render(withW(L.body));
+    const marginText = render(L.margin);
+    const bodyText = render(L.body);
     if (/^_+$/.test(bodyText.replace(/\s/g, "").slice(0, 40)) && bodyText.length > 20) continue;
     if (mode === "gazette") {
       if (marginText && /^\d{1,3}[A-Z]?\./.test(marginText)) {
@@ -111,39 +116,66 @@ function buildLines(items, mode) {
 }
 
 function headingFrom(text) {
-  let h = text.replace(/^\d{1,3}[A-Z]?\.\s*/, "");
+  let h = text.replace(/^[\[(]?\s*\d{1,3}\s*(?:([A-Z])|-([A-Z]))?\s*\.\s*/, "");
   const cut = h.search(/\.--|\.—|—|\.–|–|\.\(| \(/);
   if (cut > 0) h = h.slice(0, cut);
   h = h.replace(/^["'“”]+|["'“”.]+$/g, "").replace(/\s+/g, " ").trim();
   return h.slice(0, 140);
 }
 
-function detectSections(lines, { startAt, maxNo }) {
+function detectSections(lines, { startAt, maxNo, mode }) {
   const bodyLines = [];
   const sections = [];
   let offset = 0;
   let lastAccepted = 0;
-  const re = /^(\d{1,3})([A-Z]?)\.\s*(.*)$/;
+  // "31A." | "371B ." (space before dot) | "371-I." (hyphen variant),
+  // with optional leading bracket ("[371A." marks an inserted article).
+  const re = /^[\[(]?\s*(\d{1,3})\s*(?:([A-Z])|-([A-Z]))?\s*\.\s*(.*)$/;
   const rangeRe = /^(\d{1,3})\s*(?:to|and)\s*(\d{1,3})([A-Z]?)\.\s*(.*)$/;
+  // Constitution body gate: the s3waas TOC repeats headings verbatim, so
+  // only the operative "1. Name and territory of the Union.—" line (with
+  // the em-dash content marker) may open candidate processing.
+  const BODY_GATE = mode === "constitution";
+  let bodyStarted = !BODY_GATE;
+  const registered = new Set(); // "num+letter" — one anchor per provision
   const anomalies = [];
   let pendingIdx = null; // section awaiting a heading
   let pendingScans = 0;
   for (const raw of lines) {
+    if (BODY_GATE && !bodyStarted) {
+      if (/^1\.\s*Name and territory of the Union\.(?:—|--)/.test(raw)) {
+        bodyStarted = true; // the gate line itself is article 1's anchor line
+      } else {
+        bodyLines.push(raw);
+        offset += raw.length + 1;
+        continue;
+      }
+    }
+    bodyLines.push(raw);
     let matched = null;
     let rangeMatch = null;
     const m = re.exec(raw);
     if (m) {
       const num = parseInt(m[1], 10);
-      const letter = m[2] ?? "";
-      const base = 3 + Math.floor((num - lastAccepted) * 0.02);
+      const letter = m[2] ?? m[3] ?? ""; // "31A." or "371-I." hyphen variant
+      const key = `${num}${letter}`;
+      const base = 3 + Math.floor(Math.max(0, num - lastAccepted) * 0.02);
       const tol = letter ? Math.max(base, 6) : base;
-      if (num > lastAccepted && num <= lastAccepted + tol && num <= maxNo) {
+      const forward = num > lastAccepted && num <= lastAccepted + tol && num <= maxNo && !registered.has(key);
+      // Lettered sub-articles chain at the SAME number (371A..371J after 371).
+      const sameNumLetter = letter !== "" && num === lastAccepted && !registered.has(key) && num <= maxNo;
+      // Out-of-order column flow: the MHA CrPC print emits §330's heading
+      // line before §329's text. Accept a small backwards step the FIRST
+      // time that number is seen so its real (following) text is anchored.
+      const backwards = num < lastAccepted && num >= lastAccepted - 3 && !registered.has(key) && num >= 1;
+      if (forward || sameNumLetter || backwards) {
         matched = { num, letter, at: offset };
+        if (backwards) anomalies.push(`out-of-order print: § ${key} anchored after § ${lastAccepted} (column flow)`);
       }
     }
     if (!matched) {
-      // Repeal/omission RANGE lines, e.g. "161 to 165A. Rep. by ..." —
-      // the MHA IPC print carries repealed provisions ONLY as such ranges.
+      // Repeal/omission RANGE lines, e.g. "161 to 165A. Rep. by ...". The
+      // MHA IPC print carries repealed provisions ONLY as such ranges.
       // Register every number in the range (its text is the omission note)
       // so anchors exist and the sequential window resumes after the range.
       const rm = rangeRe.exec(raw);
@@ -155,7 +187,6 @@ function detectSections(lines, { startAt, maxNo }) {
         }
       }
     }
-    bodyLines.push(raw);
     if (matched) {
       const heading = headingFrom(raw);
       sections.push({
@@ -163,9 +194,10 @@ function detectSections(lines, { startAt, maxNo }) {
         heading: heading || `Section ${matched.num}${matched.letter}`,
         start: matched.at,
       });
+      registered.add(`${matched.num}${matched.letter}`);
       if (sections.length === 1 && matched.num !== startAt)
         anomalies.push(`first detected section is ${matched.num}, expected ${startAt}`);
-      lastAccepted = matched.num;
+      if (matched.num > lastAccepted) lastAccepted = matched.num;
       if (heading) { pendingIdx = null; pendingScans = 0; }
       else { pendingIdx = sections.length - 1; pendingScans = 5; }
     } else if (rangeMatch) {
@@ -176,9 +208,18 @@ function detectSections(lines, { startAt, maxNo }) {
           heading: `[Omitted in source] ${note}`.slice(0, 140),
           start: rangeMatch.at,
         });
+        registered.add(`${n}${rangeMatch.letter}`);
       }
-      lastAccepted = rangeMatch.n2;
+      lastAccepted = Math.max(lastAccepted, rangeMatch.n2);
       pendingIdx = null; pendingScans = 0;
+    } else if (m && registered.has(`${parseInt(m[1], 10)}${m[2] ?? m[3] ?? ""}`)) {
+      // Duplicate print of an already-registered provision (the body line
+      // after a bare-number heading line): upgrade a placeholder heading.
+      const s = sections.find((x) => x.anchor === `§ ${parseInt(m[1], 10)}${m[2] ?? m[3] ?? ""}`);
+      if (s && /^Section \d/.test(s.heading)) {
+        const h = headingFrom(raw);
+        if (h) { s.heading = h; pendingIdx = null; pendingScans = 0; }
+      }
     } else if (pendingIdx !== null) {
       const s = sections[pendingIdx];
       if (/^\(/.test(raw) || !raw) { pendingIdx = null; pendingScans = 0; }
@@ -206,11 +247,10 @@ for (const src of SOURCES) {
   for (let p = 1; p <= doc.numPages; p++) {
     const page = await doc.getPage(p);
     const tc = await page.getTextContent();
-    // attach widths for gap math
     const items = tc.items.map((it) => ({ ...it, w: it.width ?? 0 }));
     allLines.push(...buildLines(items, src.mode));
   }
-  const { body, sections, anomalies } = detectSections(allLines, { startAt: src.startAt, maxNo: src.maxNo });
+  const { body, sections, anomalies } = detectSections(allLines, { startAt: src.startAt, maxNo: src.maxNo, mode: src.mode });
   const record = {
     key: src.key, sourceUrl: src.sourceUrl, publisher: src.publisher,
     pdfFile: path.basename(src.pdf), pdfSha256: sha, pdfPages: doc.numPages,

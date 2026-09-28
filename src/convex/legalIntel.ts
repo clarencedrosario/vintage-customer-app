@@ -183,7 +183,11 @@ const INDIA_SEED: SeedSource[] = [
     sourceUrl: "https://www.indiacode.nic.in",
     publisher: "India Code (Legislative Department)",
     rights: "Open government publication",
-    notes: "Special act; survives the 2023 codes (children-specific offences).",
+    // Precise status (turn 7): NOT obtained from sources attempted — not
+    // "unavailable anywhere". Attempt log with URLs and raw errors is
+    // preserved verbatim in docs/LEGAL_CORPUS_MIGRATION.md § POCSO.
+    notes:
+      "Special act; survives the 2023 codes (children-specific offences). Text NOT OBTAINED FROM SOURCES ATTEMPTED (28 Sep 2026): indiacode.nic.in HTTP 504; indiacode.gov.in JS app shell; api.sci.gov.in 0 bytes; wcd.gov.in HTML shell; missionvatsalya.wcd.gov.in 403; ncpcr.gov.in file-not-found; legislative.gov.in 404; web.archive.org 403/429; advocatekhoj login-walled; indiankanoon Cloudflare 403; India Code deep URLs timeout. Retrieval NOT exhaustive — official mirrors may exist. Citations from this source are BLOCKED by the citation validator until real text is ingested.",
   },
 ];
 
@@ -319,6 +323,25 @@ export const seedEuropeanCoverage = mutation({
       created += 1;
     }
     return { created };
+  },
+});
+
+/**
+ * CLI annotation (26.3/26.6): persist precise corpus-status notes onto a
+ * source row from the ingestion pipeline — e.g. the POCSO attempt log.
+ * internalMutation: only callable by other Convex functions or the
+ * deployment's own CLI/admin key — never from a browser session.
+ */
+export const annotateSourceCli = internalMutation({
+  args: { stableKey: v.string(), statusNote: v.string() },
+  handler: async (ctx, args) => {
+    const s = await ctx.db
+      .query("legalSources")
+      .withIndex("by_stable_key", (q) => q.eq("stableKey", args.stableKey))
+      .first();
+    if (!s) throw new Error(`Unknown source stable key: ${args.stableKey}`);
+    await ctx.db.patch(s._id, { statusNote: args.statusNote });
+    return { ok: true, sourceId: s._id };
   },
 });
 
