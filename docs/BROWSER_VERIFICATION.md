@@ -1,11 +1,14 @@
 # Legal Intelligence — authenticated browser verification (§26, demand 8)
 
-Status: **PENDING — not yet executed.** The automated tier (Convex push,
-typecheck, 498 backend/pure tests, CLI-era pipeline checks over the real
-corpus) is complete, but no signed-in browser session has walked the UI yet.
-This document gives the exact manual steps; record the outcome (pass or
-defect list) in `ADVOKATE_PROGRESS.md` when performed. Until then, claims
-stay at "automated checks passed; browser verification pending."
+Status: **PENDING — not yet executed (BLOCKED: no browser access).** The
+automated tier (Convex push, typecheck, 502 backend/pure tests, CLI-era
+pipeline checks over the real corpus) is complete, but no signed-in browser
+session has walked the UI yet. A probe of the managed dev server from the
+execution sandbox (2026-09-29, ports 5173/5174/3000/8080/4173) returned no
+HTTP listener, so the 11 checks below could not be executed — they remain
+BLOCKED, not passed. Record the outcome (pass or defect list) in
+`ADVOKATE_PROGRESS.md` when performed. Until then, claims stay at
+"automated checks passed; browser verification blocked/pending."
 
 ## Preconditions
 
@@ -14,6 +17,9 @@ stay at "automated checks passed; browser verification pending."
   "Seed India core", or `bunx convex run legalIntel:seedIndianCoreCli`).
 - Corpus ingested (7 statutes, v3+). The freshness card on the page shows
   per-source versions and collection dates.
+- `OPENAI_API_KEY` is configured (see `docs/LEGAL_INTEL_MODEL_SETUP.md`)
+  for the model-research steps 12–14; without it steps 12–14 exercise the
+  honest provider-unavailable state instead.
 
 ## Steps (record observed result for each)
 
@@ -52,3 +58,26 @@ stay at "automated checks passed; browser verification pending."
     it. The result of this checklist is the only thing that may move
     demand 8 from pending to done; a lawyer-review pass (tier 5) is a
     separate, later step by a qualified person.
+12. **Model research — submit.** In "Model research — ask, inspect, save",
+    with a matter selected, type a question ("What punishment applies for
+    culpable homicide not amounting to murder for conduct on 2024-03-01?")
+    and submit. Expect: the job appears immediately as "Research running
+    …"; on a deployment WITHOUT the key, it resolves to the honest failure
+    card ("Live AI is not configured …") with the question preserved and a
+    "Retry without retyping" button; with the key, expect a real answer
+    plus focused clarification questions when jurisdiction/date/stage are
+    unconfirmed.
+13. **Citation handling.** On a done answer, expect the citation-check
+    rows: green "✓ stableKey · pinpoint · quote verified" lines when
+    checks pass, a red-blocking banner ("MUST NOT be treated as
+    verified") when any check fails, and the green verified banner must
+    explicitly say passage-level legal support is NOT confirmed. Submit a
+    question inviting a quote and verify a fabricated quote or a bare
+    reporter-style citation surfaces as a failed row.
+14. **Provenance & save/reopen.** Expect the "Grounded in these exact
+    source versions" panel listing ingested version numbers, collection
+    dates, original-source links and the coverage-limits line (judgment
+    excerpts bounded; schedules/provisos not separately verified; POCSO
+    excluded). Reload the page: the saved list still shows the job; click
+    it — question, status, answer, snapshot and citation rows come back
+    unchanged.

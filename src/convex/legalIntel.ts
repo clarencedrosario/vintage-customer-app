@@ -1429,6 +1429,12 @@ export const storedSourceForCheck = internalQuery({
     if (!vRow) {
       return { stableKey: s.stableKey, title: s.title, body: null, sections: null };
     }
+    // The [INGESTION PENDING] stub is provenance, not statute text: the
+    // citation validator must treat it as NOT ingested, so citations from
+    // un-ingested sources (e.g. POCSO) stay blocked.
+    if (vRow.body.startsWith("[INGESTION PENDING]")) {
+      return { stableKey: s.stableKey, title: s.title, body: null, sections: null };
+    }
     return {
       stableKey: s.stableKey,
       title: s.title,

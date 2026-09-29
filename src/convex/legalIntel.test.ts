@@ -15,7 +15,13 @@ import { describe, expect, it, beforeEach } from "vitest";
 import { convexTest } from "convex-test";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
-import { checkCitation, extractCitations, detectUncitedAssertions } from "../lib/legalIntel";
+import {
+  checkCitation,
+  extractCitations,
+  detectUncitedAssertions,
+  invalidCitationMarkers,
+  clarificationQuestions,
+} from "../lib/legalIntel";
 
 const modules: Record<string, () => Promise<unknown>> = (import.meta as unknown as {
   glob: (p: string) => Record<string, () => Promise<unknown>>;
@@ -414,6 +420,298 @@ describe("Advokate Legal Intelligence — real backend slice", () => {
       }),
     );
     expect(fr.answer).toMatch(/will not produce a substantive legal answer/);
+  });
+
+  // -------------------------------------------------------------------
+  // Turn 8 — the real research workflow (26.6): submit → clarification →
+  // provider states → retry → save/reopen → citation handling → access.
+  // -------------------------------------------------------------------
+
+  it("invalid citation markers: plausible-but-unverifiable markers are flagged, not treated as cited", () => {
+    // Reporter-style cite with no stable key → flagged.
+    const reporter = invalidCitationMarkers(
+      "It is well settled per (1962) 3 SCR 567 that murder attracts the death penalty in every premeditated case before the sessions court without exception whatsoever.",
+    );
+    expect(reporter.length).toBe(1);
+    expect(reporter[0]).toMatch(/Reporter-style/);
+    // Bracketed marker with no stable key or pinpoint → flagged.
+    const bracket = invalidCitationMarkers(
+      "The provision is clear: [BNS 2023, s.103] says the court shall impose the maximum sentence in all such cases without exception whatsoever."
+    );
+    expect(bracket.length).toBe(1);
+    expect(bracket[0]).toMatch(/Invalid citation marker \[BNS 2023, s\.103\]/);
+    // Verifiable markers are NOT flagged.
+    const good = invalidCitationMarkers(
+      "The court may impose life imprisonment under [in:statute:bns-2023 § 103], as the section quoted in the stored version states.",
+    );
+    expect(good).toEqual([]);
+  });
+
+  it("clarification questions: asked only when missing facts change applicability", () => {
+    // Fully-specified India matter with a confirmed date → no questions.
+    expect(
+      clarificationQuestions({
+        country: "in",
+        jurisdictionConfirmed: true,
+        legalDateKnown: true,
+        proceduralStage: "trial",
+      }),
+    ).toEqual([]);
+    // Unknown date → the era question (which code governs).
+    const noDate = clarificationQuestions({
+      country: "in",
+      jurisdictionConfirmed: true,
+      legalDateKnown: false,
+      proceduralStage: "trial",
+    });
+    expect(noDate.length).toBe(1);
+    expect(noDate[0]).toMatch(/Which date should the law be taken as of/i);
+    // Confirmed foreign jurisdiction, date known, non-India → no India-specific stage question.
+    expect(
+      clarificationQuestions({
+        country: "de",
+        jurisdictionConfirmed: true,
+        legalDateKnown: true,
+        proceduralStage: null,
+      }),
+    ).toEqual([]);
+    // India + unconfirmed jurisdiction + no stage → three focused questions.
+    const all = clarificationQuestions({
+      country: "in",
+      jurisdictionConfirmed: false,
+      legalDateKnown: false,
+      proceduralStage: null,
+    });
+    expect(all.length).toBe(3);
+    expect(all.join(" ")).toMatch(/confirm the governing jurisdiction/i);
+    expect(all.join(" ")).toMatch(/procedural stage/i);
+  });
+
+  it("research workflow: submit → clarifications recorded → provider-failure keeps question → retry works → save/reopen preserves snapshot", async () => {
+    const { ownerId, matterId } = await seedFirm(t);
+    const lawyer = asUser(t, ownerId);
+
+    // Submit — jurisdiction/dates resolve from the matter (defaults labelled).
+    const jobId = await lawyer.mutation(api.ai.prepareLegalResearch, {
+      matterId,
+      question:
+        "What punishment applies to culpable homicide not amounting to murder for conduct on 2024-03-01?",
+    });
+    expect(jobId).toBeDefined();
+
+    // Submission state: question preserved, source snapshot + clarifications recorded.
+    const job0 = await lawyer.query(api.ai.getJob, { jobId });
+    expect(job0).not.toBeNull();
+    expect(job0!.status).toBe("pending");
+    expect(job0!.inputNote).toMatch(/culpable homicide/i);
+    expect(job0!.clarifications).not.toBeNull();
+    expect(job0!.clarifications!.length).toBeGreaterThan(0); // unconfirmed jurisdiction + no stage
+    expect(job0!.legalSourceVersions).not.toBeNull(); // frozen snapshot (may be empty pre-ingestion)
+
+    // Cross-tenant rejection: another firm's member cannot read or retry.
+    const outsiderId = await createTestUser(t, { email: "rival@other.test", verified: true });
+    const rivalOrg = await asUser(t, "system").run(async (ctx) =>
+      ctx.db.insert("organizations", {
+        name: "Rival Chamber",
+        slug: "rival-chamber",
+        kind: "chamber" as const,
+        currency: "INR",
+        timezone: "Asia/Kolkata",
+        financialYearStart: "04-01",
+        taxLabel: "GST",
+        taxPercent: 18,
+        invoicePrefix: "INV",
+        createdBy: outsiderId as never,
+        createdAt: Date.now(),
+      }),
+    );
+    await asUser(t, "system").run(async (ctx) => {
+      await ctx.db.patch(outsiderId as never, { activeOrgId: rivalOrg });
+      await ctx.db.insert("memberships", {
+        orgId: rivalOrg,
+        userId: outsiderId as never,
+        orgRole: "owner" as const,
+        status: "active" as const,
+        createdAt: Date.now(),
+      });
+    });
+    const rival = asUser(t, outsiderId);
+    // Cross-tenant: getJob returns null (job invisible) rather than
+    // throwing — the access rule is org-scope, then matter membership.
+    expect(await rival.query(api.ai.getJob, { jobId })).toBeNull();
+    // But mutation (retry) and the citation report throw.
+    await expect(rival.mutation(api.ai.retryJob, { jobId })).rejects.toThrow();
+
+    // Unauthenticated rejection: no subject → requireAccess throws.
+    await expect(
+      t.withIdentity({ subject: "" }).query(api.ai.getJob, { jobId }),
+    ).rejects.toThrow();
+    await expect(
+      t.withIdentity({ subject: "" }).mutation(api.ai.prepareLegalResearch, {
+        matterId,
+        question: "Anything at all about a criminal matter for the trial court?",
+      }),
+    ).rejects.toThrow();
+
+    // Provider-unavailable path: the runner records an honest failure and
+    // the question is NOT lost (the exact message runJob writes when the
+    // key is missing).
+    await t.run(async (ctx) =>
+      ctx.runMutation(internal.ai.attachError, {
+        jobId,
+        error:
+          "Live AI is not configured on this deployment (OPENAI_API_KEY missing). The request was saved; nothing was fabricated. Ask the platform owner to add the key, then retry.",
+      }),
+    );
+    const failed = await lawyer.query(api.ai.getJob, { jobId });
+    expect(failed!.status).toBe("failed");
+    expect(failed!.error).toMatch(/not configured/i);
+    expect(failed!.inputNote).toMatch(/culpable homicide/i); // question NOT lost
+    expect(failed!.result ?? null).toBeNull(); // no fabricated answer
+
+    // Retry: carries question + snapshot + clarifications onto a NEW
+    // pending job; the original stays intact for the record.
+    const retryId = await lawyer.mutation(api.ai.retryJob, { jobId });
+    expect(retryId).not.toBe(jobId);
+    const retried = await lawyer.query(api.ai.getJob, { jobId: retryId });
+    expect(retried!.status).toBe("pending");
+    expect(retried!.inputNote).toBe(failed!.inputNote);
+    expect(retried!.clarifications).toEqual(failed!.clarifications);
+    expect(retried!.legalSourceVersions).toEqual(failed!.legalSourceVersions);
+    // A pending job cannot be retried again.
+    await expect(lawyer.mutation(api.ai.retryJob, { jobId: retryId })).rejects.toThrow();
+
+    // Save/reopen: both jobs appear in the matter's saved list with
+    // source-version references intact.
+    const list = await lawyer.query(api.ai.listJobs, { matterId });
+    expect(list.map((j) => j._id)).toContain(retryId);
+    const listed = list.find((j) => j._id === retryId);
+    expect(listed!.legalSourceVersions).toEqual(failed!.legalSourceVersions);
+
+    // A completed answer keeps its snapshot through reopen (a model-shaped
+    // done state is patched in to avoid a live call in tests).
+    await t.run(async (ctx) => {
+      await ctx.db.patch(retryId as never, {
+        status: "done",
+        result:
+          'The IPC governs this conduct. Section 302 provides that "Whoever commits murder shall be punished with death" [in:statute:ipc-1860 § 302]. Assumption: the incident date. For lawyer review.',
+      });
+    });
+    const reopened = await lawyer.query(api.ai.getJob, { jobId: retryId });
+    expect(reopened!.status).toBe("done");
+    expect(reopened!.result).toMatch(/Section 302 provides/);
+    expect(reopened!.legalSourceVersions).toEqual(failed!.legalSourceVersions);
+
+    // The citation report derives from persisted check rows: an invalid
+    // marker row flips the job's report to needs_citation_review.
+    await t.run(async (ctx) => {
+      await ctx.db.insert("legalCitationChecks", {
+        jobId: retryId as never,
+        stableKey: "(invalid citation marker)",
+        quote: "Invalid citation marker [IPC § 302] in: \"The court shall...\"",
+        sourceExists: false,
+        textIngested: false,
+        anchorValid: false,
+        quoteVerified: false,
+        problem: "Invalid citation marker [IPC § 302]",
+        ok: false,
+        createdAt: Date.now(),
+      });
+    });
+    const report = await lawyer.query(api.legalIntel.citationReportForJob, {
+      jobId: retryId,
+    });
+    expect(report!.status).toBe("needs_citation_review");
+    expect(report!.allVerified).toBe(false);
+    expect(report!.rows.some((r) => /Invalid citation marker/.test(r.problem ?? ""))).toBe(true);
+
+    // Cross-tenant citation-report read is refused too.
+    await expect(
+      rival.query(api.legalIntel.citationReportForJob, { jobId: retryId }),
+    ).rejects.toThrow();
+  });
+
+  it("citation checks pass on ingested text and refuse on the un-ingested POCSO source", async () => {
+    const { ownerId, matterId } = await seedFirm(t);
+    const lawyer = asUser(t, ownerId);
+
+    const operatorId = await createTestUser(t, {
+      email: "op6@cjglobal.test",
+      verified: true,
+      platformAdmin: true,
+    });
+    await asUser(t, operatorId).mutation(api.legalIntel.seedIndianCore, {});
+    await asUser(t, operatorId).mutation(api.legalIntel.ingestSourceText, {
+      stableKey: "in:statute:ipc-1860",
+      body: "302. Punishment for murder.--Whoever commits murder shall be punished with death, or imprisonment for life, and shall also be liable to fine.",
+      sections: [{ anchor: "§ 302", heading: "Punishment for murder", start: 0 }],
+    });
+
+    // Submit a real research request on the matter.
+    const jobId = await lawyer.mutation(api.ai.prepareLegalResearch, {
+      matterId,
+      question: "What is the punishment for murder under the law in force on 2024-03-01?",
+    });
+
+    // Snapshot: ONLY the ingested source is included — registry rows whose
+    // bodies are [INGESTION PENDING] (POCSO among them) are excluded, so
+    // an answer cannot cite text the corpus does not have.
+    const snap = await lawyer.query(api.ai.getJob, { jobId });
+    expect(snap!.legalSourceVersions).toEqual([{ stableKey: "in:statute:ipc-1860", version: 2 }]);
+
+    // A verifiable citation against the ingested text → checks pass.
+    await t.run(async (ctx) =>
+      ctx.runMutation(internal.legalIntel.attachCitationChecks, {
+        jobId,
+        checks: [
+          {
+            stableKey: "in:statute:ipc-1860",
+            provision: "§ 302",
+            quote: "Whoever commits murder shall be punished with death",
+            sourceExists: true,
+            textIngested: true,
+            anchorValid: true,
+            quoteVerified: true,
+            ok: true,
+          },
+        ],
+      }),
+    );
+    const report = await lawyer.query(api.legalIntel.citationReportForJob, { jobId });
+    expect(report!.status).toBe("verified");
+    expect(report!.allVerified).toBe(true);
+
+    // POCSO: registered but text NOT ingested → its citation is blocked.
+    const pocso = await t.run((ctx) =>
+      ctx.runQuery(internal.legalIntel.storedSourceForCheck, {
+        stableKey: "in:statute:pocso-2012",
+      }),
+    );
+    expect(pocso).not.toBeNull();
+    expect(pocso!.body).toBeNull();
+    await t.run(async (ctx) =>
+      ctx.runMutation(internal.legalIntel.attachCitationChecks, {
+        jobId,
+        checks: [
+          {
+            stableKey: "in:statute:pocso-2012",
+            provision: "§ 3",
+            quote: "whoever commits penetrative sexual assault shall be punished",
+            sourceExists: true,
+            textIngested: false,
+            anchorValid: false,
+            quoteVerified: false,
+            problem: "Source registered but text not ingested — citation cannot be verified.",
+            ok: false,
+          },
+        ],
+      }),
+    );
+    const pocsoReport = await lawyer.query(api.legalIntel.citationReportForJob, { jobId });
+    expect(pocsoReport!.status).toBe("needs_citation_review");
+    expect(pocsoReport!.rows.some((r) => r.stableKey === "in:statute:pocso-2012" && !r.ok)).toBe(
+      true,
+    );
   });
 
   it("unsupported jurisdiction: the answer contract refuses, coverage register stays honest", async () => {

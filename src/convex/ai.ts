@@ -797,6 +797,7 @@ export const listJobs = query({
         // Question + a capped answer preview, so matter-level panels (Ask
         // AI About This Matter) can show results without N getJob calls.
         inputNote: r.inputNote ?? null,
+        legalSourceVersions: r.legalSourceVersions ?? null,
         result: r.result ? r.result.slice(0, 4000) : null,
         model: r.model ?? null,
         costMinor: r.costMinor ?? 0,

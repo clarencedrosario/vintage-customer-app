@@ -456,10 +456,32 @@ topics and jurisdictions expand in measured phases.
   flags substantive sentences — "shall/must/liable/punishable/held that…"
   — that carry NO citation marker, so an answer cannot pass with verified
   citations in one paragraph and unsupported legal claims in another.
-  Scope honesty: existence + quote-fidelity + uncited-assertion checks
-  together establish the answer cites REAL stored text and leaves no naked
-  substantive claims; they do NOT establish that any cited passage legally
-  supports the conclusion — that remains a lawyer judgement.
+- **Invalid citation markers are flagged too (turn 8):**
+  `invalidCitationMarkers` (pure, unit-tested, persisted as failed checks
+  by the runner) catches plausibly-formatted markers that reference
+  NOTHING verifiable — "[IPC § 302]", "[BNS 2023, s.103]", bare
+  reporter cites (AIR/SCC/SCR) — so a wrong marker cannot pass as
+  "cited" merely because a marker exists.
+- **Real research workflow (turn 8):** `prepareLegalResearch` (matter
+  access + note.write required) records on the job: the question,
+  a frozen `legalSourceVersions` snapshot (ONLY sources with real ingested
+  text — stubs excluded, so an answer cannot cite text the corpus lacks),
+  and `clarificationQuestions` output — focused questions asked ONLY when
+  missing facts change applicability (unknown governing date, unconfirmed
+  jurisdiction, missing procedural stage on Indian matters). `retryJob`
+  re-runs a failed/expired request WITHOUT losing the question, snapshot
+  or clarifications; `listJobs`/`getJob` expose the saved history for
+  reopen. Provider-unavailable runs fail honestly ("Live AI is not
+  configured") — never simulated answers. Access verified: unauthenticated
+  rejected, cross-tenant read returns null + mutation/report throws.
+- **POCSO stays blocked (turn 8):** `storedSourceForCheck` treats the
+  `[INGESTION PENDING]` stub as NOT ingested, so citations from
+  un-ingested sources are validator-blocked until real text arrives.
+  Scope honesty: existence + quote-fidelity + uncited-assertion +
+  invalid-marker checks together establish the answer cites REAL stored
+  text and leaves no naked or wrongly-marked substantive claims; they do
+  NOT establish that any cited passage legally supports the conclusion —
+  that remains a lawyer judgement.
 - **Refusal with honesty**: when insufficient reliable sources exist the
   contract requires saying so and offering verified material only — never a
   confident unsupported answer (runner rule + eval case).

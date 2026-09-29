@@ -4,7 +4,94 @@ Durable progress file so development resumes without repeating completed work.
 Companion to `ADVOKATE_REQUIREMENTS.md` (the master checklist). Handoff log also
 maintained in `docs/DELIVERY.md`.
 
-Last checkpoint: **28 September 2026**
+Last checkpoint: **29 September 2026**
+
+---
+
+## Implementation turn — 29 Sep 2026 (8): COMPLETE RESEARCH USER WORKFLOW + verification
+
+### What turn 8 adds
+
+The turn-8 goal: an authenticated lawyer can submit a research question,
+receive an actual model-generated answer grounded in available sources,
+inspect its citations, and save/reopen the research. Status: **workflow
+implemented and backend-verified end to end; live model-backed execution
+PENDING on `OPENAI_API_KEY`; browser checks BLOCKED (no browser access
+from the execution sandbox).**
+
+1. **Backend workflow (all access-gated):** `prepareLegalResearch` —
+   requires `requireAccess` + `note.write` + `requireMatter`; resolves
+   jurisdiction/date from the matter legal profile; freezes a
+   `legalSourceVersions` snapshot of ONLY sources with real ingested text
+   (the `[INGESTION PENDING]` stubs are excluded, so no answer can cite
+   text the corpus lacks); records `clarificationQuestions` output (date,
+   jurisdiction confirmation, procedural stage — asked only when missing
+   facts change applicability); schedules the runner exactly like the
+   other AI kinds. `retryJob` re-runs a failed/expired request carrying
+   question + snapshot + clarifications onto a fresh pending job (pending
+   jobs refuse retry). `listJobs` now exposes `legalSourceVersions`;
+   `getJob` already exposed snapshot + clarifications.
+2. **Invalid citation markers:** `invalidCitationMarkers` (pure,
+   unit-tested) flags bracketed markers that reference nothing verifiable
+   ("[IPC § 302]", "[BNS 2023, s.103]") and bare reporter cites
+   (AIR/SCC/SCR) — the runner persists them as FAILED checks, so a wrong
+   marker cannot pass as "cited" merely because a marker exists.
+3. **POCSO stays blocked:** `storedSourceForCheck` now maps the
+   `[INGESTION PENDING]` stub to body:null — the citation validator
+   treats un-ingested sources as blocked (verified in tests), keeping the
+   turn-7 promise mechanically enforced.
+4. **Frontend (src/pages/LegalIntel.tsx):** new "Model research — ask,
+   inspect, save" panel: submit (Enter or button, matter-scoped),
+   pending state that keeps the question visible, honest failure/expired
+   card with error text + "Retry without retyping", clarification cards,
+   answer with server-side citation-check rows (✓/✗ per citation, quote
+   verified / QUOTE NOT FOUND / PINPOINT INVALID), the verified banner
+   that explicitly disclaims passage-level legal support, provenance
+   panel (exact ingested versions, current-vs-newer flag, original-source
+   links, coverage-limits line incl. bounded judgments, unverified
+   schedules/provisos, POCSO exclusion), and the saved-jobs list for
+   reopen.
+5. **Access verification (backend tests):** unauthenticated submit/read
+   rejected; cross-tenant getJob returns null (job invisible) while
+   retryJob and citationReportForJob throw; owner save/reopen verified
+   with the snapshot surviving reopen unchanged.
+6. **Provenance read model:** `sourcesForKeys` returns the snapshot's
+   source rows (version, currentVersion, collectionDate, sourceUrl) for
+   the panel's "grounded in these exact source versions" display.
+
+### Honest separation of evidence tiers (demand: report separately)
+
+- **Automated verification (done):** convex push + tsc clean; **31 test
+  files, 502/502 tests pass** (baseline 498 + 4 new: invalid markers,
+  clarifications, full workflow incl. access matrix + retry + reopen,
+  ingested-text pass / POCSO block). No legal-correctness claims are made
+  from these tests — they verify SOFTWARE behavior on synthetic data.
+- **Model-backed execution (PENDING):** `OPENAI_API_KEY` is still not
+  configured on this deployment. Nothing was simulated. When added (see
+  docs/LEGAL_INTEL_MODEL_SETUP.md — dashboard/env only, never in chat or
+  source), run the 8-step checklist there: valid research, both eras,
+  insufficient-evidence refusal, POCSO unavailability, fabricated quote,
+  wrong pinpoint, uncited claim.
+- **Browser verification (BLOCKED):** probes of the managed dev server
+  from the execution sandbox returned no HTTP listener (000 on
+  5173/5174/3000/8080/4173, 29 Sep). docs/BROWSER_VERIFICATION.md now has
+  14 steps (11 original + 3 model-research steps) and stays PENDING —
+  not marked complete.
+- **Lawyer review (NOT DONE — nobody has reviewed):** no legal-accuracy
+  review has occurred; nothing here claims it.
+
+### Files touched
+
+- src/convex/ai.ts (prepareLegalResearch, retryJob, getJob/listJobs
+  snapshot exposure)
+- src/convex/aiRunner.ts (invalid-marker checks into the validation block)
+- src/convex/legalIntel.ts (storedSourceForCheck stub→not-ingested;
+  sourcesForKeys)
+- src/lib/legalIntel.ts (invalidCitationMarkers, clarificationQuestions)
+- src/pages/LegalIntel.tsx (model research panel)
+- src/convex/legalIntel.test.ts (+4 tests)
+- docs/BROWSER_VERIFICATION.md (14 steps + BLOCKED status + probe
+  evidence), ADVOKATE_REQUIREMENTS.md §26.6
 
 ---
 
