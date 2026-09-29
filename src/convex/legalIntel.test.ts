@@ -22,6 +22,7 @@ import {
   invalidCitationMarkers,
   clarificationQuestions,
 } from "../lib/legalIntel";
+import { LEGAL_DATE_KINDS } from "./schemaExtras";
 
 const modules: Record<string, () => Promise<unknown>> = (import.meta as unknown as {
   glob: (p: string) => Record<string, () => Promise<unknown>>;
@@ -491,7 +492,15 @@ describe("Advokate Legal Intelligence — real backend slice", () => {
     const { ownerId, matterId } = await seedFirm(t);
     const lawyer = asUser(t, ownerId);
 
-    // Submit — jurisdiction/dates resolve from the matter (defaults labelled).
+    // Confirm the matter facts first (turn 9: unconfirmed facts BLOCK the
+    // model, so the happy-path pipeline needs a complete profile).
+    await lawyer.mutation(api.legalIntel.setMatterProfile, {
+      matterId,
+      country: "in",
+      legalDates: [{ kind: LEGAL_DATE_KINDS[0], date: "2024-03-01" }],
+      proceduralStage: "trial",
+    });
+    // Submit — jurisdiction/dates resolve from the matter.
     const jobId = await lawyer.mutation(api.ai.prepareLegalResearch, {
       matterId,
       question:
@@ -504,8 +513,7 @@ describe("Advokate Legal Intelligence — real backend slice", () => {
     expect(job0).not.toBeNull();
     expect(job0!.status).toBe("pending");
     expect(job0!.inputNote).toMatch(/culpable homicide/i);
-    expect(job0!.clarifications).not.toBeNull();
-    expect(job0!.clarifications!.length).toBeGreaterThan(0); // unconfirmed jurisdiction + no stage
+    expect(job0!.clarifications ?? null).toBeNull(); // fully specified → no questions
     expect(job0!.legalSourceVersions).not.toBeNull(); // frozen snapshot (may be empty pre-ingestion)
 
     // Cross-tenant rejection: another firm's member cannot read or retry.
@@ -742,4 +750,128 @@ describe("Advokate Legal Intelligence — real backend slice", () => {
       /will not produce a substantive legal answer/,
     );
   });
+
+  // -------------------------------------------------------------------
+  // Turn 9 — the clarification gate is a real gate, not decoration.
+  // -------------------------------------------------------------------
+
+  it("clarification gate blocks the model until facts are supplied, then unblocks on retry", async () => {
+    const { ownerId, matterId } = await seedFirm(t);
+    const lawyer = asUser(t, ownerId);
+
+    // Fresh matter: no jurisdiction confirmation, no dates → submission is
+    // parked as blocked_clarification and the runner is NEVER scheduled.
+    const blockedId = await lawyer.mutation(api.ai.prepareLegalResearch, {
+      matterId,
+      question: "What notice period governs this dispute and under which code?",
+    });
+    const blocked = await lawyer.query(api.ai.getJob, { jobId: blockedId });
+    expect(blocked!.status).toBe("blocked_clarification");
+    expect(blocked!.inputNote).toMatch(/notice period/); // question preserved
+    expect(blocked!.clarifications!.length).toBeGreaterThan(0);
+    expect(blocked!.result ?? null).toBeNull(); // no fabricated answer
+
+    // The lawyer supplies the facts via the matter profile (confirmed
+    // jurisdiction + a governing date).
+    await lawyer.mutation(api.legalIntel.setMatterProfile, {
+      matterId,
+      country: "in",
+      legalDates: [{ kind: LEGAL_DATE_KINDS[0], date: "2024-03-01" }],
+      proceduralStage: "trial",
+    });
+
+    // Retrying the SAME request recomputes the gate and runs it.
+    const retryId = await lawyer.mutation(api.ai.retryJob, { jobId: blockedId });
+    expect(retryId).not.toBe(blockedId);
+    const retried = await lawyer.query(api.ai.getJob, { jobId: retryId });
+    expect(retried!.status).toBe("pending");
+    expect(retried!.clarifications ?? null).toBeNull(); // gate cleared
+
+    // (The pending path after the gate clears is exactly the retried job
+    // asserted above — one firm, one matter, no second seeding.)
+  });
+
+  it("runner-time recheck: revoked membership fails the scheduled run before the model is called", async () => {
+    const { ownerId, matterId } = await seedFirm(t);
+    const lawyer = asUser(t, ownerId);
+
+    await lawyer.mutation(api.legalIntel.setMatterProfile, {
+      matterId,
+      country: "in",
+      legalDates: [{ kind: LEGAL_DATE_KINDS[0], date: "2024-03-01" }],
+      proceduralStage: "trial",
+    });
+    const jobId = await lawyer.mutation(api.ai.prepareLegalResearch, {
+      matterId,
+      question: "What is the punishment for culpable homicide not amounting to murder?",
+    });
+
+    // The requester's membership is suspended BEFORE the scheduled
+    // runner claims the job (access withdrawn after submission).
+    await asUser(t, "system").run(async (ctx) => {
+      const job = await ctx.db.get(jobId);
+      const all = await ctx.db.query("memberships").collect();
+      const m = all.find(
+        (x) => x.orgId === job!.orgId && x.userId === job!.requestedById,
+      );
+      await ctx.db.patch(m!._id, { status: "suspended" }); // access withdrawn
+    });
+
+    // The claim now fails honestly: job failed, NO claim row → the model
+    // is never called and no duplicate run can occur.
+    const claim = await t.run((ctx) =>
+      ctx.runMutation(internal.ai.claimPendingJob, {
+        jobId,
+        occurrenceKey: "ai:" + jobId,
+      }),
+    );
+    expect(claim).toBeNull();
+    // With their only membership suspended the requester cannot even read
+    // the job — the failed state is verified by direct read (admin ctx).
+    const job = await asUser(t, "system").run((ctx) => ctx.db.get(jobId));
+    expect(job!.status).toBe("failed");
+    expect(job!.error).toMatch(/no longer has access/);
+    const claims = await t.run((ctx) => ctx.db.query("aiJobClaims").collect());
+    expect(claims.find((r) => r.occurrenceKey === "ai:" + jobId)).toBeUndefined();
+  });
+
+  it("concurrent claims: only the first claim wins — the model can never run twice", async () => {
+    const { ownerId, matterId } = await seedFirm(t);
+    const lawyer = asUser(t, ownerId);
+    await lawyer.mutation(api.legalIntel.setMatterProfile, {
+      matterId,
+      country: "in",
+      legalDates: [{ kind: LEGAL_DATE_KINDS[0], date: "2024-03-01" }],
+      proceduralStage: "trial",
+    });
+    const jobId = await lawyer.mutation(api.ai.prepareLegalResearch, {
+      matterId,
+      question: "Does the limitation act bar this claim filed in 2025?",
+    });
+
+    // Two racing claims with the same occurrence key (a retried job and
+    // its stale scheduled twin, say).
+    const first = await t.run((ctx) =>
+      ctx.runMutation(internal.ai.claimPendingJob, { jobId, occurrenceKey: "ai:" + jobId }),
+    );
+    expect(first).not.toBeNull();
+    const second = await t.run((ctx) =>
+      ctx.runMutation(internal.ai.claimPendingJob, { jobId, occurrenceKey: "ai:" + jobId }),
+    );
+    expect(second).toBeNull();
+  });
+
+  it("citation report with zero checks is unchecked — never a success banner", async () => {
+    const { ownerId, matterId } = await seedFirm(t);
+    const lawyer = asUser(t, ownerId);
+    const jobId = await lawyer.mutation(api.ai.prepareLegalResearch, {
+      matterId,
+      question: "A question about a contract dispute for the district court?",
+    });
+    const report = await lawyer.query(api.legalIntel.citationReportForJob, { jobId });
+    expect(report!.status).toBe("unchecked");
+    expect(report!.allVerified).toBe(false);
+    expect(report!.total).toBe(0);
+  });
+
 });

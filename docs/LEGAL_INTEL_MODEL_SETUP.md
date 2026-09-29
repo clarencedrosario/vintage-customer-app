@@ -1,10 +1,20 @@
 # Advokate AI — model configuration & verification checklist (§26.6, demand 6)
 
-Status: **Instructions current 2026-09-28.** `OPENAI_API_KEY` is NOT
+Status: **Instructions current 2026-09-29.** `OPENAI_API_KEY` is NOT
 configured on this deployment, so source-backed **generation** (tier 4) is
 pending. Everything below is how to configure it securely and what to run
 afterwards. Until then, the honest runner behavior is: an explicit
 "Live AI is not configured" error — nothing is fabricated.
+
+**Exact target (verified 29 Sep 2026):** the preview's Convex deployment is
+**moonlit-elk-307** (`https://moonlit-elk-307.convex.site`). Set the key as
+an environment variable **on that deployment**: Convex dashboard →
+moonlit-elk-307 → Settings → Environment Variables → add `OPENAI_API_KEY`
+(owner CLI alternative: `bunx convex env set OPENAI_API_KEY` from a trusted
+terminal — paste the value only there, never in chat). The runner uses model
+**gpt-4o-mini**; no other settings are required. Note: this deployment
+serves the dev preview — setting the key there exercises the real research
+workflow without touching any production deployment.
 
 ## 1. Secure configuration — hard rules
 

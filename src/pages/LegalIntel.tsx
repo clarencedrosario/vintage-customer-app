@@ -16,7 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { AlertTriangle, BookOpen, Globe, Loader2, RefreshCw, Save, Scale, Search, ShieldCheck, Sparkles } from "lucide-react";
+import { AlertTriangle, BookOpen, Globe, HelpCircle, Loader2, RefreshCw, Save, Scale, Search, ShieldCheck, Sparkles } from "lucide-react";
 import { countryName, normalizeCitation } from "@/lib/legalIntel";
 
 const STATUS_STAMP: Record<string, string> = {
@@ -532,6 +532,28 @@ export default function LegalIntel() {
                   reopen the workspace.
                 </p>
               )}
+              {job.status === "blocked_clarification" ? (
+                <div className="rounded-md border border-sky-300 bg-sky-50 p-3 text-sm text-sky-900 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-200">
+                  <p className="flex items-center gap-2 font-medium">
+                    <HelpCircle className="size-4 shrink-0" aria-hidden="true" />
+                    Missing facts that could change which law applies —
+                    no model answer was generated yet.
+                  </p>
+                  <ul className="mt-2 list-disc space-y-1 pl-4 text-xs">
+                    {(job.clarifications ?? []).map((c) => (
+                      <li key={c.slice(0, 40)}>{c}</li>
+                    ))}
+                  </ul>
+                  <p className="mt-2 text-xs">
+                    Record the missing facts on the matter (jurisdiction,
+                    governing date, procedural stage) above, then retry:
+                    the gate is re-checked at retry time.
+                  </p>
+                  <Button size="sm" variant="outline" className="mt-2" onClick={retry} disabled={askBusy}>
+                    <RefreshCw className="size-4" aria-hidden="true" /> Retry after updating the matter
+                  </Button>
+                </div>
+              ) : null}
               {job.status === "failed" || job.status === "expired" ? (
                 <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
                   <p className="flex items-center gap-2 font-medium">
@@ -548,9 +570,9 @@ export default function LegalIntel() {
                   </Button>
                 </div>
               ) : null}
-              {job.clarifications && job.clarifications.length > 0 && (
+              {job.status === "done" && job.clarifications && job.clarifications.length > 0 && (
                 <div className="rounded-md border border-sky-300 bg-sky-50 p-3 text-xs text-sky-900 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-200">
-                  <p className="font-medium">Focused clarifications before you rely on this answer</p>
+                  <p className="font-medium">Focused clarifications recorded with this request (facts that change applicability)</p>
                   <ul className="mt-1 list-disc space-y-1 pl-4">
                     {job.clarifications.map((c) => (
                       <li key={c.slice(0, 40)}>{c}</li>
@@ -560,17 +582,28 @@ export default function LegalIntel() {
               )}
               {job.status === "done" && job.result && (
                 <div className="space-y-3">
-                  {citationReport && citationReport.status !== "verified" && (
+                  {citationReport === undefined ? null : !citationReport ||
+                    citationReport.status === "unchecked" ? (
                     <p className="rounded-md border border-amber-300 bg-amber-50 p-3 text-xs font-medium text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
-                      {citationReport.status === "unchecked"
-                        ? "Not citation-validated — treat as unverified."
-                        : "Citation validation failed — this answer MUST NOT be treated as verified. Failed checks below."}
+                      Not citation-validated — this answer has NOT passed any
+                      citation checks and must be treated as unverified.
+                    </p>
+                  ) : null}
+                  {citationReport && citationReport.status === "needs_citation_review" && (
+                    <p className="rounded-md border border-amber-300 bg-amber-50 p-3 text-xs font-medium text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+                      Citation validation FAILED — this answer MUST NOT be
+                      treated as verified. The answer text is preserved below
+                      for review; failed checks are listed under it.
                     </p>
                   )}
                   {citationReport && citationReport.status === "verified" && (
                     <p className="flex items-center gap-2 rounded-md border border-emerald-300 bg-emerald-50 p-3 text-xs font-medium text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200">
                       <ShieldCheck className="size-4 shrink-0" aria-hidden="true" />
-                      All {citationReport.total} citation check(s) passed against stored source versions. This confirms the citations are real and quoted faithfully — it does NOT confirm the passages legally support the conclusions (a lawyer judgement).
+                      All {citationReport.total} citation check(s) passed
+                      against stored source versions: citations exist, resolve
+                      to the cited text, and quotes match the stored wording.
+                      This does NOT confirm the passages legally support the
+                      conclusions — that is a lawyer judgement.
                     </p>
                   )}
                   <div className="rounded-md border border-border bg-muted/40 p-3 text-sm">

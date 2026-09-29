@@ -2078,6 +2078,11 @@ export default defineSchema({
       v.literal("done"),
       v.literal("failed"),
       v.literal("expired"),
+      // Turn 9: facts that change applicability are missing (governing
+      // date, jurisdiction confirmation, procedural stage) — the model
+      // is NOT run; the question is preserved and the focused questions
+      // are shown. Retry after supplying the facts.
+      v.literal("blocked_clarification"),
     ),
     sourceIds: v.optional(v.array(v.id("aiSources"))),
     inputNote: v.optional(v.string()),

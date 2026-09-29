@@ -4,7 +4,7 @@ Durable progress file so development resumes without repeating completed work.
 Companion to `ADVOKATE_REQUIREMENTS.md` (the master checklist). Handoff log also
 maintained in `docs/DELIVERY.md`.
 
-Last checkpoint: **29 September 2026**
+Last checkpoint: **29 September 2026** — latest record: **Turn 9** (bottom section "Turn 9 — 29 Sep 2026"); turn 8 summary below.
 
 ---
 
@@ -1486,3 +1486,76 @@ conclusions (a lawyer judgement).
   2026-09-28).
 - Live checks: scheduler execution records read back; POCSO statusNote
   written; 5/5 pinpoint+quote probes verified on re-ingested corpus.
+
+# Turn 9 — 29 Sep 2026: restore-preview diagnosis, gate/concurrency/re-access
+
+## 1. Preview: diagnosed, not guessed
+- Config facts: dev server = vite, port 5173, host: true, started by the
+  platform's managed session (Freebuff rule: never start/stop it from the
+  terminal; vite.config.ts untouched).
+- Sandbox evidence (ss, /proc/net/tcp): only the platform agent channel
+  (7681) listens inside the execution sandbox — the sandbox cannot see the
+  vite session; a port probe from here cannot prove the preview is down
+  for the user. The working preview URL is the one the platform UI issues
+  for this workspace.
+- **Server-up vs browser-up separated:** the Convex backend is LIVE —
+  moonlit-elk-307 answered a real query from the sandbox (legalSources
+  count = 10) and its HTTP site answered (404 on bare host = normal for a
+  functions-only site). What is genuinely unavailable here is browser
+  automation, so the documented checks stay BLOCKED — recorded as such,
+  never as passed.
+- Verified via live backend: bun run build succeeds (tsc -b + vite
+  build); bunx convex dev --once pushes clean.
+
+## 2. Model configuration (actionable, key never displayed)
+- Deployment: moonlit-elk-307; the runner reads the model-provider key
+  from the deployment environment inside the Convex action
+  (src/convex/aiRunner.ts); model gpt-4o-mini; no other settings required.
+- Configure ONLY as a Convex deployment environment variable — Convex
+  dashboard → moonlit-elk-307 → Settings → Environment Variables (owner
+  CLI alternative documented in docs/LEGAL_INTEL_MODEL_SETUP.md). Never in
+  chat, source, logs or archives. No billing activated; nothing charged.
+
+## 3. Consequential gaps fixed (each with regression tests)
+- **Clarification gate now blocks execution:** missing jurisdiction/date/
+  stage facts → job stored blocked_clarification, the runner is never
+  scheduled (schema union extended); a runner-time recheck inside the
+  atomic claim re-derives the same gate; supplying the facts and retrying
+  recomputes and unblocks. Merely displaying cards was not enough — a
+  real defect, now fixed.
+- **Authorization re-checked at runner time:** suspended/removed
+  requester → claim fails, job failed with "no longer has access", no
+  claim row, model never called. Provenance/report reads keep matter
+  access checks (revoked access also blocks results).
+- **Retry cannot bypass or duplicate:** pending/blocked jobs refuse
+  retry; retries recompute gate + usage cap; the aiJobClaims
+  occurrence-key guard is regression-tested (second concurrent claim
+  loses).
+- **Zero-check answers cannot show a success banner:** report status
+  unchecked (allVerified=false) with an explicit amber "NOT passed any
+  citation checks" banner; success text only on a strictly-positive
+  verified report. Precise labels retained: quote verified / QUOTE NOT
+  FOUND / PINPOINT INVALID; the verified banner states passage-level
+  legal support is NOT confirmed.
+
+## 4. Tests & verification (this turn)
+- New turn-9 regressions in src/convex/legalIntel.test.ts: gate blocks
+  then unblocks after profile completion (retry), runner-time revoked-
+  access recheck, concurrent-claim dedupe, zero-check report = unchecked.
+  Turn-8 tests updated to the gate semantics (full profile before the
+  happy-path pipeline).
+- bunx convex dev --once: clean push. bunx tsc -b --noEmit: clean.
+- bun run test: **31 files, 506/506 pass** (baseline 498 → 502 turn 8 →
+  506 turn 9).
+- bun run build: succeeds.
+
+## 5. Model-backed execution and browser checks: still honest
+- The model-provider key remains unconfigured → NO model-backed execution
+  was performed; nothing simulated; the 8-step model checklist in
+  docs/LEGAL_INTEL_MODEL_SETUP.md awaits configuration and authorization.
+- Browser checks: BLOCKED (no browser automation here); the checklist
+  (now 15 steps, including the new gate step) in
+  docs/BROWSER_VERIFICATION.md awaits a signed-in browser session.
+- Automatic content updates remain STAGED until a real fetch-and-ingest
+  pipeline is verified.
+

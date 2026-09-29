@@ -471,6 +471,55 @@ export const claimPendingJob = internalMutation({
       .withIndex("by_occurrence", (q) => q.eq("occurrenceKey", args.occurrenceKey))
       .first();
     if (existing) return null; // already claimed (or retried) — never run twice
+    // Turn 9 — runner-time recheck (BEFORE the claim wins): matter access
+    // is re-verified now, because a scheduled run may execute after the
+    // requester's membership was revoked or suspended. A claim that fails
+    // this check marks the job failed honestly; the model is never called.
+    const membership = await ctx.db
+      .query("memberships")
+      .withIndex("by_org_user", (q) =>
+        q.eq("orgId", job.orgId).eq("userId", job.requestedById),
+      )
+      .unique();
+    if (!membership || membership.status !== "active") {
+      await ctx.db.patch(job._id, {
+        status: "failed",
+        error:
+          "The requester no longer has access to this matter, so the request was not run. Nothing was sent to the model.",
+        completedAt: Date.now(),
+      });
+      return null;
+    }
+    // Turn 9 — clarification gate at runner time: if facts that change
+    // applicability are still missing (matter profile unchanged since
+    // submission), the model is NOT run and the job is parked for retry
+    // after the profile is completed.
+    if (job.kind === "legal_research") {
+      const matter = await ctx.db.get(job.matterId);
+      const org = await ctx.db.get(job.orgId);
+      const j = resolveJurisdiction(
+        matter?.legalProfile ?? null,
+        org?.legalDefaults?.country ?? "in",
+      );
+      const d = governingLegalDate(
+        matter?.legalProfile ?? null,
+        new Date(Date.now() + 5.5 * 3_600_000).toISOString().slice(0, 10),
+      );
+      const clarifications = clarificationQuestions({
+        country: j.country,
+        jurisdictionConfirmed: j.confirmed,
+        legalDateKnown: !d.isAssumption,
+        proceduralStage: matter?.legalProfile?.proceduralStage ?? null,
+      });
+      if (clarifications.length > 0) {
+        await ctx.db.patch(job._id, {
+          status: "blocked_clarification",
+          clarifications,
+          completedAt: Date.now(),
+        });
+        return null;
+      }
+    }
     await ctx.db.insert("aiJobClaims", {
       occurrenceKey: args.occurrenceKey,
       jobId: args.jobId,
@@ -906,13 +955,33 @@ export const prepareLegalResearch = mutation({
 
     // Focused clarifications — only when missing facts change
     // applicability. The question itself is never lost: it stays in
-    // inputNote and the job still runs.
+    // inputNote.
     const clarifications = clarificationQuestions({
       country: j.country,
       jurisdictionConfirmed: j.confirmed,
       legalDateKnown: !d.isAssumption,
       proceduralStage: profile?.proceduralStage ?? null,
     });
+
+    // Turn 9 — the clarifications are a GATE, not decoration: when facts
+    // that change applicability are missing, the model is NOT run. The
+    // job is stored as blocked_clarification with the focused questions;
+    // supplying the facts (matter profile) and retrying runs it.
+    if (clarifications.length > 0) {
+      const blockedId = await ctx.db.insert("aiJobs", {
+        orgId: ac.org._id,
+        matterId: args.matterId,
+        kind: "legal_research",
+        status: "blocked_clarification",
+        inputNote: question.slice(0, 4000),
+        monthKey: key,
+        legalSourceVersions: sourceVersions,
+        clarifications,
+        requestedById: ac.user._id,
+        createdAt: Date.now(),
+      });
+      return blockedId;
+    }
 
     const id = await ctx.db.insert("aiJobs", {
       orgId: ac.org._id,
@@ -922,7 +991,6 @@ export const prepareLegalResearch = mutation({
       inputNote: question.slice(0, 4000),
       monthKey: key,
       legalSourceVersions: sourceVersions,
-      clarifications,
       requestedById: ac.user._id,
       createdAt: Date.now(),
     });
@@ -956,8 +1024,15 @@ export const retryJob = mutation({
     if (!job) throw new Error("Research request not found.");
     if (job.orgId !== ac.org._id) throw new Error("You do not have access to this matter.");
     await requireMatter(ctx, ac, job.matterId);
+    // Turn 9: pending AND blocked jobs cannot be retried while another
+    // attempt is in flight — a blocked job is retried only after the
+    // matter facts are supplied, and retry recomputes the gate so it can
+    // never bypass current permissions or a still-missing clarification.
     if (job.status === "pending") {
       throw new Error("This request is still being processed.");
+    }
+    if (job.status === "blocked_clarification" && job.kind !== "legal_research") {
+      throw new Error("This request is blocked pending clarification.");
     }
     // Usage cap for the retry's own cost.
     const key = monthKeyIST();
@@ -974,6 +1049,29 @@ export const retryJob = mutation({
         "The chamber's monthly AI usage allowance is exhausted. It resets next month; ask the firm owner to review usage.",
       );
     }
+    // Recompute the clarification gate at retry time (turn 9): the
+    // snapshot may be stale if the matter profile changed since the
+    // original request. Only legal_research jobs are gated.
+    let retryClarifications: typeof job.clarifications = undefined;
+    if (job.kind === "legal_research") {
+      const matter = await ctx.db.get(job.matterId);
+      const org = await ctx.db.get(job.orgId);
+      const j = resolveJurisdiction(
+        matter?.legalProfile ?? null,
+        org?.legalDefaults?.country ?? "in",
+      );
+      const d = governingLegalDate(
+        matter?.legalProfile ?? null,
+        new Date(Date.now() + 5.5 * 3_600_000).toISOString().slice(0, 10),
+      );
+      retryClarifications = clarificationQuestions({
+        country: j.country,
+        jurisdictionConfirmed: j.confirmed,
+        legalDateKnown: !d.isAssumption,
+        proceduralStage: matter?.legalProfile?.proceduralStage ?? null,
+      });
+    }
+
     const id = await ctx.db.insert("aiJobs", {
       orgId: job.orgId,
       matterId: job.matterId,
@@ -982,7 +1080,10 @@ export const retryJob = mutation({
       inputNote: job.inputNote,
       monthKey: key,
       legalSourceVersions: job.legalSourceVersions,
-      clarifications: job.clarifications,
+      clarifications:
+        retryClarifications && retryClarifications.length > 0
+          ? retryClarifications
+          : undefined,
       emailMessageId: job.emailMessageId,
       emailBody: job.emailBody,
       emailDigest: job.emailDigest,
@@ -992,6 +1093,17 @@ export const retryJob = mutation({
       requestedById: ac.user._id,
       createdAt: Date.now(),
     });
+
+    // Still-blocked after recompute → block the retry (NO scheduler call,
+    // so the model is not run); otherwise schedule normally.
+    if (retryClarifications && retryClarifications.length > 0) {
+      await ctx.db.patch(id, {
+        status: "blocked_clarification",
+        clarifications: retryClarifications,
+      });
+      return id;
+    }
+
     await ctx.scheduler.runAfter(0, internal.aiRunner.runJob, {
       jobId: id,
       occurrenceKey: `ai:${id}`,
