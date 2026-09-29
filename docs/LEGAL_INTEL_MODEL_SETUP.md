@@ -1,20 +1,36 @@
 # Advokate AI — model configuration & verification checklist (§26.6, demand 6)
 
-Status: **Instructions current 2026-09-29.** `OPENAI_API_KEY` is NOT
-configured on this deployment, so source-backed **generation** (tier 4) is
-pending. Everything below is how to configure it securely and what to run
-afterwards. Until then, the honest runner behavior is: an explicit
-"Live AI is not configured" error — nothing is fabricated.
+Status: **Updated 29 Sep 2026 after the live turn-10 checklist.** The
+runner was executed on the deployment and reports:
+`Live AI is not configured on this deployment (OPENAI_API_KEY missing)` —
+i.e. **the key is still not visible to moonlit-elk-307 itself**, despite
+having been added via the platform key UI. The platform's Keys/API-keys
+storage does not automatically populate **Convex deployment environment
+variables**; the key must be set on the deployment (step 1 below), which
+only the owner can do. Everything else about the workflow was verified
+live this turn (see `ADVOKATE_PROGRESS.md`, turn 10).
 
 **Exact target (verified 29 Sep 2026):** the preview's Convex deployment is
 **moonlit-elk-307** (`https://moonlit-elk-307.convex.site`). Set the key as
-an environment variable **on that deployment**: Convex dashboard →
-moonlit-elk-307 → Settings → Environment Variables → add `OPENAI_API_KEY`
-(owner CLI alternative: `bunx convex env set OPENAI_API_KEY` from a trusted
-terminal — paste the value only there, never in chat). The runner uses model
-**gpt-4o-mini**; no other settings are required. Note: this deployment
-serves the dev preview — setting the key there exercises the real research
-workflow without touching any production deployment.
+an environment variable **on that deployment** — this is the step that was
+missing:
+
+1. Convex dashboard → **moonlit-elk-307** → Settings → Environment
+   Variables → add `OPENAI_API_KEY` (value from your provider account).
+   Owner CLI alternative from the project root: `bunx convex env set
+   OPENAI_API_KEY` and paste the value when prompted — the terminal is the
+   only place the value is ever typed; never chat, never source.
+2. **Verify without exposing the value:** `bunx convex env list
+   --names-only` must list `OPENAI_API_KEY` (names only, no values). Then
+   submit any research request from the workspace: a done answer (or a
+   citation-flagged answer) proves the key works; the specific "Live AI is
+   not configured" error proves it is still missing. This is exactly how
+   the turn-10 checklist proved the deployment still lacked the key.
+
+The runner uses model **gpt-4o-mini**; no other settings are required.
+Note: this deployment serves the dev preview — setting the key there
+exercises the real research workflow without touching any production
+deployment.
 
 ## 1. Secure configuration — hard rules
 

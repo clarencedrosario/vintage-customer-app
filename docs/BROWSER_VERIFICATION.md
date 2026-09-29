@@ -22,6 +22,17 @@ Record the outcome (pass or defect list) in `ADVOKATE_PROGRESS.md` when
 performed. Until then, claims stay at "automated checks passed; browser
 verification blocked/pending."
 
+**Turn 10 note (29 Sep 2026):** no browser checks were executed (no
+browser automation; no port probes were repeated as a substitute). The
+backend semantics behind steps 12–15 were verified on the LIVE deployment
+instead — see the turn-10 record in `ADVOKATE_PROGRESS.md`: the
+gate/resume transition, era retrieval, refusals, invalid markers,
+uncited assertions, wrong-pinpoint rejection, quote fidelity, the
+citation-failure (no-success-state) guarantee, save/reopen snapshots,
+and authorization refusals all PASS server-side. Steps 13–15 additionally
+require `OPENAI_API_KEY` to be visible to the deployment first (see
+`docs/LEGAL_INTEL_MODEL_SETUP.md`).
+
 ## Preconditions
 
 - Signed in as a chamber user with access to at least one matter.

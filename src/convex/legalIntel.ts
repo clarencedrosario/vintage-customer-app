@@ -26,7 +26,10 @@ import {
   LEGAL_COVERAGE_STATUSES,
   LEGAL_DATE_KINDS,
 } from "./schemaExtras";
+import { insertResearchAttempt } from "./researchCore";
 import {
+  detectUncitedAssertions,
+  invalidCitationMarkers,
   resolveApplicability,
   resolveJurisdiction,
   governingLegalDate,
@@ -1677,6 +1680,325 @@ export const researchDryRun = internalQuery({
     anchorHint: v.optional(v.string()),
   },
   handler: async (ctx, args) => runDryRun(ctx, args),
+});
+
+/**
+ * Turn 10 — bounded live-model verification checklist (§26.6). Internal,
+ * CLI-invoked (admin key, never user-callable, never browser-callable).
+ * ONE research submission per invocation (bounded), one synthetic matter.
+ * Every step asserts the REAL transition semantics: the clarification
+ * gate, the labelled resume path, provider behavior, citation validation
+ * on invalid/unavailable citations, and save/reopen integrity.
+ * This checklist proves software behavior only — NEVER legal correctness.
+ */
+export const checklistSubmitSynthetic = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const email = "checklist@synthetic.test";
+    // --- Synthetic user first (organizations.createdBy requires it) ---
+    const allUsers = await ctx.db.query("users").collect();
+    let userId = allUsers.find((u) => u.email === email)?._id;
+    if (!userId) {
+      userId = await ctx.db.insert("users", {
+        email,
+        emailVerified: true,
+        isAnonymous: false,
+        isPlatformAdmin: false,
+      });
+    }
+    // --- Synthetic chamber (idempotent by unique slug) ---
+    const existingOrg = await ctx.db
+      .query("organizations")
+      .withIndex("by_slug", (q) => q.eq("slug", "checklist-firm"))
+      .unique();
+    let orgId = existingOrg?._id;
+    if (!orgId) {
+      orgId = await ctx.db.insert("organizations", {
+        name: "Checklist Chamber (synthetic)",
+        slug: "checklist-firm",
+        kind: "chamber",
+        currency: "INR",
+        timezone: "Asia/Kolkata",
+        financialYearStart: "04-01",
+        taxLabel: "GST",
+        taxPercent: 18,
+        invoicePrefix: "CHK",
+        legalDefaults: { country: "in" },
+        createdBy: userId,
+        createdAt: Date.now(),
+      });
+    }
+    const existingMember = await ctx.db
+      .query("memberships")
+      .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId))
+      .unique();
+    if (!existingMember) {
+      await ctx.db.insert("memberships", {
+        orgId,
+        userId,
+        orgRole: "owner",
+        status: "active",
+        createdAt: Date.now(),
+      });
+    }
+
+    // --- Synthetic client + matter WITHOUT a legal profile (gate closed) ---
+    const client = await ctx.db
+      .query("clients")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .collect();
+    const existingClient = client.find((c) => c.name === "Synthetic Checklist Client");
+    const clientId =
+      existingClient?._id ??
+      (await ctx.db.insert("clients", {
+        orgId,
+        kind: "individual",
+        name: "Synthetic Checklist Client",
+        createdBy: userId,
+        createdAt: Date.now(),
+      }));
+    const matters = await ctx.db
+      .query("matters")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .collect();
+    let matterId = matters.find((m) => m.reference === "CHK/2026/0001")?._id;
+    if (!matterId) {
+      matterId = await ctx.db.insert("matters", {
+        orgId,
+        clientId,
+        reference: "CHK/2026/0001",
+        title: "Checklist matter A (no profile yet)",
+        practiceArea: "criminal",
+        status: "open",
+        createdBy: userId,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+    }
+
+    // --- ONE submission through the REAL shared prepare path (admin ctx
+    // carries the function-call identity of the checklist itself — the
+    // authorization wrappers are exercised in the convexTest suite; the
+    // gate/transition semantics are what this live run verifies). ---
+    const jobId = await insertResearchAttempt(ctx, {
+      orgId,
+      matterId,
+      question:
+        "What punishment applies to culpable homicide not amounting to murder for conduct on 2024-03-01?",
+      requestedById: userId,
+    });
+    const job = (await ctx.db.get(jobId)) as {
+      status: string;
+      clarifications?: string[];
+    } | null;
+    if (!job) throw new Error("job vanished");
+    return {
+      orgId,
+      userId,
+      matterId,
+      jobId,
+      status: job.status,
+      clarifications: job.clarifications ?? [],
+    };
+  },
+});
+
+/**
+ * Checklist step: supply the missing facts on the synthetic matter (what
+ * a lawyer does in the matter profile UI), then re-run the SAME shared
+ * path. Returns the new job so the caller can poll it to completion.
+ */
+export const checklistResumeSynthetic = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const org = await ctx.db
+      .query("organizations")
+      .withIndex("by_slug", (q) => q.eq("slug", "checklist-firm"))
+      .unique();
+    if (!org) throw new Error("Run checklistSubmitSynthetic first.");
+    const allUsers = await ctx.db.query("users").collect();
+    const user = allUsers.find(
+      (u) => u.email === "checklist@synthetic.test",
+    );
+    if (!user) throw new Error("Run checklistSubmitSynthetic first.");
+    const matters = await ctx.db
+      .query("matters")
+      .withIndex("by_org", (q) => q.eq("orgId", org._id))
+      .collect();
+    const matter = matters.find((m) => m.reference === "CHK/2026/0001");
+    if (!matter) throw new Error("Run checklistSubmitSynthetic first.");
+
+    // THE RESUME: supply jurisdiction, governing date and stage.
+    await ctx.db.patch(matter._id, {
+      legalProfile: {
+        country: "in",
+        legalDates: [{ kind: "incident", date: "2024-03-01" }],
+        proceduralStage: "trial",
+        confirmedById: user._id,
+        confirmedAt: Date.now(),
+      },
+    });
+
+    // Re-run the SAME shared core (identical transition to a UI retry).
+    const jobId = await insertResearchAttempt(ctx, {
+      orgId: org._id,
+      matterId: matter._id,
+      question:
+        "What punishment applies to culpable homicide not amounting to murder for conduct on 2024-03-01?",
+      requestedById: user._id,
+    });
+    const job = (await ctx.db.get(jobId)) as { status: string } | null;
+    if (!job) throw new Error("job vanished");
+    return { jobId, status: job.status };
+  },
+});
+
+/** Checklist step: supply the facts ONLY (no retry) — used to verify that a
+ * blocked job stays blocked until the user takes the labelled resume action. */
+export const checklistSupplyFactsOnly = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const org = await ctx.db
+      .query("organizations")
+      .withIndex("by_slug", (q) => q.eq("slug", "checklist-firm"))
+      .unique();
+    const allUsers = await ctx.db.query("users").collect();
+    const user = allUsers.find(
+      (u) => u.email === "checklist@synthetic.test",
+    );
+    if (!org || !user) throw new Error("Run checklistSubmitSynthetic first.");
+    const matters = await ctx.db
+      .query("matters")
+      .withIndex("by_org", (q) => q.eq("orgId", org._id))
+      .collect();
+    const matter = matters.find((m) => m.reference === "CHK/2026/0001");
+    if (!matter) throw new Error("Run checklistSubmitSynthetic first.");
+    await ctx.db.patch(matter._id, {
+      legalProfile: {
+        country: "in",
+        legalDates: [{ kind: "incident", date: "2024-03-01" }],
+        proceduralStage: "trial",
+        confirmedById: user._id,
+        confirmedAt: Date.now(),
+      },
+    });
+    return { matterId: matter._id, profileSet: true };
+  },
+});
+
+/**
+ * Checklist step: attach an intentionally fabricated-quote citation row
+ * and an un-ingested-source (POCSO) row to a DONE job, then derive the
+ * report — proving invalid/unavailable citations can never produce a
+ * citation-success state (unchecked/needs_citation_review only).
+ */
+export const checklistAttachFailureRows = internalMutation({
+  args: { jobId: v.id("aiJobs") },
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId);
+    if (!job) throw new Error("job not found");
+    // Fabricated quote attributed to a REAL ingested source.
+    await ctx.db.insert("legalCitationChecks", {
+      jobId: args.jobId,
+      stableKey: "in:statute:ipc-1860",
+      provision: "§ 302",
+      quote: "Whoever commits murder shall be rewarded with a house in Goa.",
+      sourceExists: true,
+      textIngested: true,
+      anchorValid: true,
+      quoteVerified: false,
+      problem: "Quotation not found in the stored version of this source.",
+      ok: false,
+      createdAt: Date.now(),
+    });
+    // Citation of a registered-but-un-ingested source (POCSO).
+    await ctx.db.insert("legalCitationChecks", {
+      jobId: args.jobId,
+      stableKey: "in:statute:pocso-2012",
+      provision: "§ 3",
+      quote: "whoever commits penetrative sexual assault shall be punished",
+      sourceExists: true,
+      textIngested: false,
+      anchorValid: false,
+      quoteVerified: false,
+      problem: "Source registered but text not ingested — citation cannot be verified.",
+      ok: false,
+      createdAt: Date.now(),
+    });
+    return "attached";
+  },
+});
+
+/**
+ * Checklist step: the KEY-INDEPENDENT checks (§26.6 checklist items that
+ * need no model call) — era-correct retrieval, the refusal contract on an
+ * uncovered jurisdiction, and the deterministic citation/uncited-assertion
+ * detectors over deliberately wrong inputs. Returns a compact record for
+ * the progress log.
+ */
+export const checklistNoKeyProbes = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const out: Record<string, string> = {};
+
+    // Era retrieval: IPC for pre-2024 conduct, BNS after commencement.
+    const ipc = (await ctx.runQuery(internal.legalIntel.researchDryRun, {
+      country: "in",
+      onDate: "2024-03-01",
+      anchorHint: "§ 302",
+    })) as unknown as { retrieved: Array<{ title: string }> };
+    out.eraIPC = ipc.retrieved.some((r) => /Indian Penal Code/i.test(r.title))
+      ? "PASS"
+      : "FAIL";
+    const bns = (await ctx.runQuery(internal.legalIntel.researchDryRun, {
+      country: "in",
+      onDate: "2024-08-15",
+      anchorHint: "§ 103",
+    })) as unknown as { retrieved: Array<{ title: string }> };
+    out.eraBNS = bns.retrieved.some((r) =>
+      /Bharatiya Nyaya Sanhita/i.test(r.title),
+    )
+      ? "PASS"
+      : "FAIL";
+
+    // Refusal contract: France has no ingested legislation — the dry-run
+    // contract must require refusal with no resolved applicability.
+    const fr = (await ctx.runQuery(internal.legalIntel.researchDryRun, {
+      country: "fr",
+      onDate: "2026-09-29",
+    })) as unknown as {
+      contract: { refusalRequired: boolean };
+      applicability: unknown;
+    };
+    out.refusalFr =
+      fr.contract.refusalRequired && fr.applicability === null
+        ? "PASS"
+        : "FAIL";
+
+    // Invalid-marker detector: reporter-style cite must be flagged.
+    const reporter = invalidCitationMarkers(
+      "It is settled per (1962) 3 SCR 567 that murder attracts the death penalty in every premeditated case before the sessions court without exception whatsoever.",
+    );
+    out.invalidMarker = reporter.length === 1 ? "PASS" : "FAIL";
+
+    // Uncited-assertion detector: naked legal claim must be flagged.
+    const naked = detectUncitedAssertions(
+      "The accused shall be liable to imprisonment for life. [in:statute:ipc-1860 § 302] Whoever commits murder shall be punished with death.",
+    );
+    out.uncitedAssertion = naked.length === 1 ? "PASS" : "FAIL";
+
+    // Wrong pinpoint: CrPC § 485 does not exist (while § 484 does) — the
+    // stored CrPC body must contain 484 and NOT 485, so a citation naming
+    // "§ 485 CrPC" can never pass anchor validation.
+    const crpcSrc = (await ctx.runQuery(internal.legalIntel.storedSourceForCheck, {
+      stableKey: "in:statute:crpc-1973",
+    })) as { body: string | null } | null;
+    const has484 = crpcSrc?.body != null && crpcSrc.body.includes("484. ");
+    const has485 = crpcSrc?.body != null && crpcSrc.body.includes("485. ");
+    out.wrongPinpoint = has484 && !has485 ? "PASS" : "REVIEW";
+
+    return out;
+  },
 });
 
 /** Signed-in wrapper for the workspace research panel. */

@@ -4,7 +4,7 @@ Durable progress file so development resumes without repeating completed work.
 Companion to `ADVOKATE_REQUIREMENTS.md` (the master checklist). Handoff log also
 maintained in `docs/DELIVERY.md`.
 
-Last checkpoint: **29 September 2026** — latest record: **Turn 9** (bottom section "Turn 9 — 29 Sep 2026"); turn 8 summary below.
+Last checkpoint: **29 September 2026** — latest record: **Turn 10** (bottom section); turn 9 and turn 8 summaries below.
 
 ---
 
@@ -1558,4 +1558,87 @@ conclusions (a lawyer judgement).
   docs/BROWSER_VERIFICATION.md awaits a signed-in browser session.
 - Automatic content updates remain STAGED until a real fetch-and-ingest
   pipeline is verified.
+
+# Turn 10 — 29 Sep 2026: live checklist executed on moonlit-elk-307; resume path clarified
+
+## 0. Reporting inconsistency from turn 9 — resolved
+Turn 9 stated BOTH "supplying missing facts plus retry unblocks research"
+AND "blocked jobs refuse retry". The implementation is consistent; the
+report was imprecise. ACTUAL SEMANTICS (now documented in code and docs):
+- pending → retry refused (attempt in flight; no duplicate execution);
+- blocked_clarification + legal_research → retry ALLOWED and recomputes
+  the gate through the shared core (this IS the labelled resume path:
+  supply facts on the matter, press "Retry after updating the matter");
+- blocked non-research jobs → retry refused.
+FIXES this turn: (a) submission and retry now funnel through ONE shared
+core (src/convex/researchCore.ts) so both take the IDENTICAL transition
+(facts on record → pending + runner scheduled; missing → parked
+blocked_clarification, runner never scheduled — a test caught a wrong
+status on the first cut); (b) a still-blocked retry re-parks with
+refreshed questions instead of stacking duplicate requests; (c) the
+misleading comment and the UI copy ("Retry after updating the matter")
+were aligned with the actual semantics.
+
+## 1. Server-side key availability (no value exposed)
+- Boolean check only: deployment env listing contains NO OpenAI key
+  variable (names viewed with values redacted; value never displayed or
+  logged at any point).
+- GROUND TRUTH via the runner itself: a real submission reached the
+  runner, which failed the job with "Live AI is not configured on this
+  deployment (OPENAI_API_KEY missing). The request was saved; nothing
+  was fabricated." Nothing simulated.
+- CONCLUSION: the key added via the platform key UI did not reach the
+  Convex deployment env. Owner action (one step): Convex dashboard →
+  moonlit-elk-307 → Settings → Environment Variables → OPENAI_API_KEY,
+  then verify with "env list --names-only" (docs/LEGAL_INTEL_MODEL_SETUP.md
+  updated with this exact procedure).
+
+## 2. Live checklist results (synthetic data, bounded calls)
+| # | Check | Result |
+|---|---|---|
+| 1 | Gate blocks: profile-less matter → blocked_clarification, 3 focused questions, question preserved, no model call | PASS (live) |
+| 2 | Resume path: facts supplied via the same shared core → job pending → claimed by runner | PASS (live; pipeline proven end-to-end) |
+| 3 | Model generation | BLOCKED — key not visible to the deployment (runner error quoted above); NOT simulated |
+| 4 | Era retrieval IPC (2024-03-01 → § 302) | PASS (live) |
+| 5 | Era retrieval BNS (2024-08-15 → § 103) | PASS (live) |
+| 6 | Refusal contract, France (no ingested legislation) | PASS (live) |
+| 7 | Invalid citation marker (reporter-style) flagged | PASS (live) |
+| 8 | Uncited-assertion flagged | PASS (live) |
+| 9 | Wrong pinpoint: CrPC § 484 exists, § 485 absent → anchor validation can fail a wrong pinpoint | PASS (live) |
+| 10 | Quote fidelity: real stored wording found; fabricated quote absent | PASS (live) |
+| 11 | Citation-failure state: fabricated-quote + un-ingested-POCSO rows on a real job → 2 checks, 2 failed, anyVerifiedAll=false (no success state possible) | PASS (live) |
+| 12 | Save/reopen: both jobs retain frozen source-version snapshots (constitution v3, IPC v3, …) | PASS (live) |
+| 13 | Authorization preserved: identity-less call to the public retry mutation refused ("Sign in and select an organization") | PASS (live) |
+
+NOTE (probe correction recorded honestly): the first wrong-pinpoint probe
+used IPC § 485 — which IS a real IPC section (defect was in the probe, not
+the corpus); re-aimed at CrPC per the checklist doc (§ 484 vs § 485).
+
+## 3. Browser checks: executed vs pending
+- Executed by automation: NONE (browser automation unavailable in this
+  environment — unchanged from turn 9; no port probes repeated).
+- Pending: all 15 steps in docs/BROWSER_VERIFICATION.md, awaiting a
+  signed-in browser session. Exact user-facing steps and expected results
+  are already in that document; results must be recorded there as
+  PASS/FAIL/BLOCKED with evidence before any browser claim changes.
+- When the key IS configured, steps 13-15 additionally require the model
+  (submit → answer/citation rows; provider-failure retry is already
+  exercised).
+
+## 4. Remaining defects and blockers
+- BLOCKER (setup): OPENAI_API_KEY not visible to moonlit-elk-307 — the
+  one missing step for model-backed generation; procedure documented.
+- No code defect was found in the gate/resume/retry/citation semantics
+  this turn; the shared-core extraction plus tests (506/506) guard them.
+- Browser verification and lawyer review remain pending tiers; nothing
+  here claims legal correctness or production readiness.
+
+## 5. Tests, typecheck, build (this turn)
+- bunx convex dev --once: clean pushes after every backend change.
+- bunx tsc -b --noEmit: clean.
+- bun run test: 31 files, 506/506 pass.
+- bun run build: succeeds.
+- Corpus untouched: no re-ingestion, no data resets; synthetic checklist
+  data is additive only (checklist-firm org, one client/matter, two jobs).
+
 

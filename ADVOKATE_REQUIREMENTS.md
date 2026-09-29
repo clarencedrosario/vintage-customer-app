@@ -474,32 +474,41 @@ topics and jurisdictions expand in measured phases.
   reopen. Provider-unavailable runs fail honestly ("Live AI is not
   configured") — never simulated answers. Access verified: unauthenticated
   rejected, cross-tenant read returns null + mutation/report throws.
-- **The clarification gate is a real gate (turn 9):** when facts that
-  change applicability are missing, `prepareLegalResearch` stores the job
-  as `blocked_clarification` and NEVER schedules the runner — merely
-  displaying clarification cards was insufficient. Supplying the facts
-  (matter profile: confirmed jurisdiction, governing date, stage) and
-  retrying recomputes the gate and only then runs the model. The same
-  gate is re-checked at runner time inside the atomic claim, so a job
-  whose matter facts are still missing can never reach the model.
-- **Authorization re-checked at runner time and on every read (turn 9):**
-  `claimPendingJob` re-verifies the requester's membership status BEFORE
-  the claim wins — a suspended/removed requester's scheduled run fails
-  honestly with "no longer has access" and the model is never called.
-  Provenance/report queries (`sourceVersionsForJob`,
-  `citationReportForJob`) keep enforcing org + matter membership at read
-  time, so revoked access also blocks results and provenance.
+- **The clarification gate is a real gate (turn 9; live-verified turn 10):**
+  when facts that change applicability are missing, the shared submission
+  core stores the job as `blocked_clarification` and NEVER schedules the
+  runner — merely displaying clarification cards was insufficient. The
+  LABELLED RESUME PATH (clarified turn 10): supply the facts on the matter
+  profile, then press "Retry after updating the matter" — `retryJob`
+  recomputes the gate through the same shared core; facts supplied → the
+  job runs; still missing → it is re-parked with refreshed questions.
+  Only PENDING jobs and blocked NON-research jobs refuse retry. Verified
+  live on 29 Sep: submission on a profile-less matter → blocked with 3
+  focused questions; after facts supplied the same core produced a
+  pending job that reached the runner.
+- **Authorization re-checked at runner time and on every read (turn 9,
+  live turn 10):** `claimPendingJob` re-verifies the requester's
+  membership status BEFORE the claim wins — a suspended/removed
+  requester's scheduled run fails honestly with "no longer has access"
+  and the model is never called. Provenance/report queries
+  (`sourceVersionsForJob`, `citationReportForJob`) keep enforcing org +
+  matter membership at read time, and the public mutations keep refusing
+  identity-less calls (observed live: "Sign in and select an
+  organization").
 - **Retry cannot duplicate execution (turn 9):** pending and
   blocked_clarification jobs refuse retry; retries recompute the gate and
   usage cap, and execution is guarded by the existing `aiJobClaims`
   occurrence-key table — a second concurrent claim with the same key
   loses, so the model can never run twice for one request (regression
   tested).
-- **Zero-check answers can never show a success banner (turn 9):**
-  `citationReportForJob` reports `unchecked` (allVerified=false) when no
-  usable checks exist, and the UI renders an explicit amber "NOT passed
-  any citation checks" banner in that state — success text appears only
-  on a strictly-positive verified report.
+- **Zero-check answers can never show a success banner (turn 9; live
+  turn 10):** `citationReportForJob` reports `unchecked`
+  (allVerified=false) when no usable checks exist, and the UI renders an
+  explicit amber "NOT passed any citation checks" banner in that state —
+  success text appears only on a strictly-positive verified report.
+  Live-verified with fabricated-quote + un-ingested-source (POCSO) rows
+  attached to a real job: report = 2 checks, 2 failed, anyVerifiedAll
+  = false.
 - **POCSO stays blocked (turn 8):** `storedSourceForCheck` treats the
   `[INGESTION PENDING]` stub as NOT ingested, so citations from
   un-ingested sources are validator-blocked until real text arrives.
