@@ -415,6 +415,85 @@ export function detectUncitedAssertions(text: string): string[] {
   return flags.slice(0, 20);
 }
 
+/**
+ * Invalid citation-marker detection (26.6, turn 8): an answer may carry
+ * plausibly-formatted markers that do NOT reference a registered stable
+ * key ("[IPC § 302]", "[BNS 2023, s.103]", bare reporter cites like
+ * "(1962) 3 SCR 567"). detectUncitedAssertions only catches sentences
+ * with NO marker; this catches WRONG markers so a fabricated-looking
+ * citation cannot pass as "cited". Every flagged marker must either be
+ * expressed as a verifiable stable-key citation or removed. Pure —
+ * unit-tested; the runner persists these as failed checks.
+ */
+export function invalidCitationMarkers(text: string): string[] {
+  const sentences = text
+    .replace(/\s+/g, " ")
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  // Bracketed citation-like markers that contain no stable key and no
+  // pinpoint form we can validate (§ n / para n / page n).
+  const MARKER = /\[([^\]\n]{2,80})\]/g;
+  const KNOWN =
+    /in:[a-z0-9][a-z0-9:\-]*|§\s*\d|\bpara(?:graph)?\s+\d|\bpage\s+\d|\bp\.\s?\d/i;
+  // Reporter-style legal citations (AIR/SCC/SCR/…) with no stable key —
+  // they name authority the corpus cannot verify.
+  const REPORTER =
+    /\b(?:AIR\s+\d{4}|\(\d{4}\)\s*\d+\s*SCC|\d+\s+SCC|\d+\s+SCR|\d{1,4}\s+Cri\s?L\.?J|\d{1,4}\s+MLJ)/i;
+  const out: string[] = [];
+  for (const s of sentences) {
+    MARKER.lastIndex = 0;
+    let flagged = false;
+    let m: RegExpExecArray | null;
+    while ((m = MARKER.exec(s)) !== null) {
+      const inner = m[1] ?? "";
+      if (!KNOWN.test(inner)) {
+        out.push(`Invalid citation marker [${inner}] in: "${s.slice(0, 200)}"`);
+        flagged = true;
+        break;
+      }
+    }
+    if (flagged) continue;
+    if (REPORTER.test(s) && !/in:[a-z0-9][a-z0-9:\-]*/.test(s)) {
+      out.push(
+        `Reporter-style citation without a verifiable stable key in: "${s.slice(0, 200)}"`,
+      );
+    }
+  }
+  return out.slice(0, 20);
+}
+
+/**
+ * Focused clarification questions (26.6, turn 8): asked ONLY when missing
+ * facts change applicability — never as filler. Each question carries the
+ * reason it matters. Pure — unit-tested; prepareLegalResearch records the
+ * returned list on the job so the lawyer sees what to supply.
+ */
+export function clarificationQuestions(input: {
+  country: string;
+  jurisdictionConfirmed: boolean;
+  legalDateKnown: boolean;
+  proceduralStage?: string | null;
+}): string[] {
+  const out: string[] = [];
+  if (!input.legalDateKnown) {
+    out.push(
+      "Which date should the law be taken as of (date of conduct/agreement/filing)? The governing date decides which version applies — in India, conduct before 1 July 2024 generally stays under the IPC/CrPC/Evidence Act where savings apply; later conduct falls under the BNS/BNSS/BSA.",
+    );
+  }
+  if (!input.jurisdictionConfirmed) {
+    out.push(
+      `Please confirm the governing jurisdiction — ${input.country} is currently assumed from the matter profile or the firm default and has not been confirmed by a lawyer. A governing-law clause or cross-border factors should be recorded on the matter.`,
+    );
+  }
+  if (input.country.trim().toLowerCase() === "in" && !input.proceduralStage) {
+    out.push(
+      "What procedural stage is the matter at (pre-litigation, inquiry/trial, appeal, execution)? Proceedings after 1 July 2024 follow the BNSS even where the offence predates the BNS, so the stage changes which procedure code applies.",
+    );
+  }
+  return out.slice(0, 4);
+}
+
 /** Validate one citation against the stored corpus. Pure. */
 export function checkCitation(
   citation: CitationToVerify,

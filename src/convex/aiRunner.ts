@@ -527,24 +527,40 @@ export const runJob = internalAction({
     // every check is persisted, and a failed report prepends a blocking
     // banner so the answer can never present itself as verified.
     if (payload.kind === "legal_research") {
-      const { extractCitations, checkCitation, detectUncitedAssertions } = await import("../lib/legalIntel");
+      const { extractCitations, checkCitation, detectUncitedAssertions, invalidCitationMarkers } = await import("../lib/legalIntel");
       const citations = extractCitations(result.text).slice(0, 10);
       // Substantive sentences with NO citation marker are themselves
       // validation failures: they are persisted as failed checks so the
       // answer cannot be presented as verified.
       const uncited = detectUncitedAssertions(result.text);
+      // Plausibly-formatted markers that do NOT reference a registered
+      // stable key ("[IPC § 302]", reporter cites) are invalid, not
+      // "cited": they are persisted as failed checks too.
+      const invalidMarkers = invalidCitationMarkers(result.text);
+      const checks: Array<{
+        stableKey: string;
+        provision?: string;
+        quote?: string;
+        sourceExists: boolean;
+        textIngested: boolean;
+        anchorValid: boolean | null;
+        quoteVerified: boolean | null;
+        problem?: string;
+        ok: boolean;
+      }> = [];
+      for (const problem of invalidMarkers) {
+        checks.push({
+          stableKey: "(invalid citation marker)",
+          quote: problem.slice(0, 500),
+          sourceExists: false,
+          textIngested: false,
+          anchorValid: false,
+          quoteVerified: false,
+          problem,
+          ok: false,
+        });
+      }
       if (citations.length > 0) {
-        const checks: Array<{
-          stableKey: string;
-          provision?: string;
-          quote?: string;
-          sourceExists: boolean;
-          textIngested: boolean;
-          anchorValid: boolean | null;
-          quoteVerified: boolean | null;
-          problem?: string;
-          ok: boolean;
-        }> = [];
         for (const c of citations) {
           const stored = await ctx.runQuery(internal.legalIntel.storedSourceForCheck, {
             stableKey: c.stableKey,
@@ -586,23 +602,36 @@ export const runJob = internalAction({
           result.text =
             `⚠ CITATION VALIDATION FAILED — this draft is marked needs_citation_review and MUST NOT be treated as verified.\n${failures}\n\n---\n\n${result.text}`;
         }
-      } else if (uncited.length > 0) {
-        // Citations exist nowhere but substantive claims do — same gate.
+      } else if (uncited.length > 0 || invalidMarkers.length > 0) {
+        // Citations exist nowhere but substantive claims and/or invalid
+        // markers do — same gate.
         result.text =
-          `⚠ CITATION VALIDATION FAILED — ${uncited.length} substantive assertion(s) carry no citation marker (see validation rows). This draft MUST NOT be treated as verified.\n\n---\n\n${result.text}`;
+          `⚠ CITATION VALIDATION FAILED — ${uncited.length} substantive assertion(s) carry no citation marker and ${invalidMarkers.length} citation marker(s) are not verifiable stable keys (see validation rows). This draft MUST NOT be treated as verified.\n\n---\n\n${result.text}`;
         await ctx.runMutation(internal.legalIntel.attachCitationChecks, {
           jobId: args.jobId,
-          checks: uncited.map((sentence) => ({
-            stableKey: "(no citation given)",
-            quote: sentence,
-            sourceExists: false,
-            textIngested: false,
-            anchorValid: false,
-            quoteVerified: false,
-            problem:
-              "Substantive assertion without any citation marker — must be cited to a verified source or removed.",
-            ok: false,
-          })),
+          checks: [
+            ...invalidMarkers.map((problem) => ({
+              stableKey: "(invalid citation marker)",
+              quote: problem.slice(0, 500),
+              sourceExists: false,
+              textIngested: false,
+              anchorValid: false,
+              quoteVerified: false,
+              problem,
+              ok: false,
+            })),
+            ...uncited.map((sentence) => ({
+              stableKey: "(no citation given)",
+              quote: sentence,
+              sourceExists: false,
+              textIngested: false,
+              anchorValid: false,
+              quoteVerified: false,
+              problem:
+                "Substantive assertion without any citation marker — must be cited to a verified source or removed.",
+              ok: false,
+            })),
+          ],
         });
       } else {
         // No citations and no substantive assertions: nothing to validate,

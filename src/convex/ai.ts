@@ -11,6 +11,7 @@ import {
   resolveJurisdiction,
   governingLegalDate,
   researchContextBlock,
+  clarificationQuestions,
 } from "../lib/legalIntel";
 
 // =====================================================================
@@ -764,6 +765,10 @@ export const getJob = query({
       transcript: job.transcript ?? null,
       storageId: job.storageId ?? null,
       inputNote: job.inputNote ?? null,
+      // Legal research: the request-time source-version snapshot and any
+      // focused clarification questions recorded at submission.
+      legalSourceVersions: job.legalSourceVersions ?? null,
+      clarifications: job.clarifications ?? null,
       sources: sources.filter((x): x is NonNullable<typeof x> => x !== null),
       requestedByName: requester?.name ?? requester?.email ?? "Member",
       createdAt: job.createdAt,
@@ -873,6 +878,41 @@ export const prepareLegalResearch = mutation({
       );
     }
 
+    // Jurisdiction/date context resolved NOW so the job carries the exact
+    // source-version snapshot and any focused clarification questions.
+    const matter = await ctx.db.get(args.matterId);
+    const org = await ctx.db.get(ac.org._id);
+    const profile = matter?.legalProfile ?? null;
+    const j = resolveJurisdiction(profile, org?.legalDefaults?.country ?? "in");
+    const d = governingLegalDate(
+      profile,
+      new Date(Date.now() + 5.5 * 3_600_000).toISOString().slice(0, 10),
+    );
+
+    // Source-version snapshot (26.6): the versions the answer will be
+    // grounded in, frozen at request time so save/reopen preserves WHICH
+    // text was used even after newer versions are ingested later.
+    const legalRows = await ctx.db
+      .query("legalSources")
+      .withIndex("by_country", (q) => q.eq("country", j.country))
+      .collect();
+    const sourceVersions: { stableKey: string; version: number }[] = [];
+    for (const s of legalRows) {
+      const v = s.latestVersion ? await ctx.db.get(s.latestVersion) : null;
+      if (!v || v.body.startsWith("[INGESTION PENDING]")) continue;
+      sourceVersions.push({ stableKey: s.stableKey, version: v.version });
+    }
+
+    // Focused clarifications — only when missing facts change
+    // applicability. The question itself is never lost: it stays in
+    // inputNote and the job still runs.
+    const clarifications = clarificationQuestions({
+      country: j.country,
+      jurisdictionConfirmed: j.confirmed,
+      legalDateKnown: !d.isAssumption,
+      proceduralStage: profile?.proceduralStage ?? null,
+    });
+
     const id = await ctx.db.insert("aiJobs", {
       orgId: ac.org._id,
       matterId: args.matterId,
@@ -880,6 +920,8 @@ export const prepareLegalResearch = mutation({
       status: "pending",
       inputNote: question.slice(0, 4000),
       monthKey: key,
+      legalSourceVersions: sourceVersions,
+      clarifications,
       requestedById: ac.user._id,
       createdAt: Date.now(),
     });
@@ -887,6 +929,68 @@ export const prepareLegalResearch = mutation({
     // The joined library is stored on the job via sourceIds-less path:
     // the runner reads it from jobForRunner, which assembles the
     // synthetic FIRM KNOWLEDGE source from approved entries.
+    await ctx.scheduler.runAfter(0, internal.aiRunner.runJob, {
+      jobId: id,
+      occurrenceKey: `ai:${id}`,
+    });
+    return id;
+  },
+});
+
+/**
+ * Retry a failed/expired job WITHOUT losing the user's question (26.6,
+ * turn 8): the original inputNote, source-version snapshot and
+ * clarifications are carried onto a fresh pending job scheduled the same
+ * way. Access rules identical to the original request; any chamber member
+ * with note.write on this matter may retry what a colleague started.
+ */
+export const retryJob = mutation({
+  args: { jobId: v.id("aiJobs") },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    if (!can(ac, "note.write")) {
+      throw new Error("You need note-writing permission to use AI assistance.");
+    }
+    const job = await ctx.db.get(args.jobId);
+    if (!job) throw new Error("Research request not found.");
+    if (job.orgId !== ac.org._id) throw new Error("You do not have access to this matter.");
+    await requireMatter(ctx, ac, job.matterId);
+    if (job.status === "pending") {
+      throw new Error("This request is still being processed.");
+    }
+    // Usage cap for the retry's own cost.
+    const key = monthKeyIST();
+    const month = await ctx.db
+      .query("aiJobs")
+      .withIndex("by_org_month", (q) => q.eq("orgId", ac.org._id).eq("monthKey", key))
+      .collect();
+    const used = month.reduce(
+      (s, r) => s + (r.promptTokens ?? 0) + (r.completionTokens ?? 0),
+      0,
+    );
+    if (used >= MONTHLY_TOKEN_LIMIT) {
+      throw new Error(
+        "The chamber's monthly AI usage allowance is exhausted. It resets next month; ask the firm owner to review usage.",
+      );
+    }
+    const id = await ctx.db.insert("aiJobs", {
+      orgId: job.orgId,
+      matterId: job.matterId,
+      kind: job.kind,
+      status: "pending",
+      inputNote: job.inputNote,
+      monthKey: key,
+      legalSourceVersions: job.legalSourceVersions,
+      clarifications: job.clarifications,
+      emailMessageId: job.emailMessageId,
+      emailBody: job.emailBody,
+      emailDigest: job.emailDigest,
+      sourceIds: job.sourceIds,
+      transcript: job.transcript,
+      storageId: job.storageId,
+      requestedById: ac.user._id,
+      createdAt: Date.now(),
+    });
     await ctx.scheduler.runAfter(0, internal.aiRunner.runJob, {
       jobId: id,
       occurrenceKey: `ai:${id}`,

@@ -379,9 +379,11 @@ export const freshness = query({
       }
     }
     const STALE_MS = 180 * 24 * 3600_000;
-    return sources
-      .map((s) => {
+    return Promise.all(
+      sources
+      .map(async (s) => {
         const last = lastBySource.get(s._id);
+        const v = s.latestVersion ? await ctx.db.get(s.latestVersion) : null;
         return {
           stableKey: s.stableKey,
           title: s.title,
@@ -389,9 +391,59 @@ export const freshness = query({
           lastSuccessfulAt: last?.at ?? null,
           stale: !last || Date.now() - last.at > STALE_MS,
           outcome: last?.outcome ?? null,
+          // Real usable text present? (registered-but-uningested sources
+          // like POCSO surface here, with their precise status note)
+          hasText: !!v && !v.body.startsWith("[INGESTION PENDING]"),
+          statusNote: s.statusNote ?? null,
         };
       })
-      .sort((a, b) => a.title.localeCompare(b.title));
+    ).then((rows) => rows.sort((a, b) => a.title.localeCompare(b.title)));
+  },
+});
+
+/**
+ * Provenance lookup for a saved research job (26.6, turn 8): resolve the
+ * job's request-time source-version snapshot to per-source title, ingested
+ * version, collection date and retrieval URL — what the reopened answer
+ * displays as "grounded in these exact versions".
+ */
+export const sourceVersionsForJob = query({
+  args: { jobId: v.id("aiJobs") },
+  handler: async (ctx, args) => {
+    await requireSignedIn(ctx);
+    const job = await ctx.db.get(args.jobId);
+    if (!job) return null;
+    const ac = await requireAccess(ctx);
+    if (job.orgId !== ac.org._id) {
+      throw new Error("You do not have access to this matter.");
+    }
+    await requireMatter(ctx, ac, job.matterId);
+    const out: {
+      stableKey: string;
+      version: number;
+      title: string;
+      collectionDate: string;
+      sourceUrl: string;
+      currentVersion: number | null;
+    }[] = [];
+    for (const ref of job.legalSourceVersions ?? []) {
+      const s = await ctx.db
+        .query("legalSources")
+        .withIndex("by_stable_key", (q) => q.eq("stableKey", ref.stableKey))
+        .first();
+      if (!s) continue;
+      out.push({
+        stableKey: ref.stableKey,
+        version: ref.version,
+        title: s.title,
+        collectionDate: s.collectionDate,
+        sourceUrl: s.sourceUrl,
+        currentVersion: s.latestVersion
+          ? (await ctx.db.get(s.latestVersion))?.version ?? null
+          : null,
+      });
+    }
+    return out;
   },
 });
 
@@ -1437,6 +1489,16 @@ export const citationReportForJob = query({
   args: { jobId: v.id("aiJobs") },
   handler: async (ctx, args) => {
     await requireSignedIn(ctx);
+    // Matter-scoped access (turn 8): the report exists on an aiJob that
+    // belongs to a matter — reading it requires the same access as the
+    // job itself, so cross-tenant or non-member reads are refused.
+    const job = await ctx.db.get(args.jobId);
+    if (!job) return null;
+    const ac = await requireAccess(ctx);
+    if (job.orgId !== ac.org._id) {
+      throw new Error("You do not have access to this matter.");
+    }
+    await requireMatter(ctx, ac, job.matterId);
     const rows = await ctx.db
       .query("legalCitationChecks")
       .withIndex("by_job", (q) => q.eq("jobId", args.jobId))

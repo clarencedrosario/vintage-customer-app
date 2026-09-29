@@ -2102,6 +2102,19 @@ export default defineSchema({
     // For morning briefings: the access-checked digest of yesterday's
     // filed inbound emails, built at request time over the IST day.
     emailDigest: v.optional(v.string()),
+    // Legal research (26.6): the exact source-version snapshot the answer
+    // was grounded in. Save/reopen therefore preserves source-version
+    // references even when newer versions are ingested later (historical
+    // reproducibility — the reopened answer shows WHICH text it used).
+    legalSourceVersions: v.optional(
+      v.array(
+        v.object({ stableKey: v.string(), version: v.number() }),
+      ),
+    ),
+    // Focused clarification questions recorded at request time when
+    // missing facts affect applicability (no governing date recorded,
+    // jurisdiction unconfirmed). The user question is NEVER lost.
+    clarifications: v.optional(v.array(v.string())),
     requestedById: v.id("users"),
     createdAt: v.number(),
     completedAt: v.optional(v.number()),
