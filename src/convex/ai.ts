@@ -7,6 +7,7 @@ import {
   query,
 } from "./_generated/server";
 import { can, requireAccess, requireMatter } from "./access";
+import { insertResearchAttempt } from "./researchCore";
 import {
   resolveJurisdiction,
   governingLegalDate,
@@ -39,7 +40,7 @@ export const PENDING_TIMEOUT_MS = 30 * 60 * 1000;
 
 const MAX_SOURCE_CHARS = 200_000;
 const MAX_PAGES = 200;
-const MONTHLY_TOKEN_LIMIT = 2_000_000; // usage cap per org per month
+export const MONTHLY_TOKEN_LIMIT = 2_000_000; // usage cap per org per month
 
 /** YYYY-MM in India/Asia/Kolkata for the usage meter. */
 export function monthKeyIST(at = Date.now()): string {
@@ -883,126 +884,17 @@ export const prepareLegalResearch = mutation({
     const question = args.question.trim();
     if (!question) throw new Error("State the legal question to research.");
 
-    // Usage cap (same policy as prepareJob).
-    const key = monthKeyIST();
-    const month = await ctx.db
-      .query("aiJobs")
-      .withIndex("by_org_month", (q) => q.eq("orgId", ac.org._id).eq("monthKey", key))
-      .collect();
-    const used = month.reduce(
-      (s, r) => s + (r.promptTokens ?? 0) + (r.completionTokens ?? 0),
-      0,
-    );
-    if (used >= MONTHLY_TOKEN_LIMIT) {
-      throw new Error(
-        "The chamber's monthly AI usage allowance is exhausted. It resets next month; ask the firm owner to review usage.",
-      );
-    }
-
-    // Approved firm-knowledge entries only — drafts are never research.
-    const entries = await ctx.db
-      .query("knowledgeEntries")
-      .withIndex("by_org", (q) => q.eq("orgId", ac.org._id))
-      .collect();
-    const approved = entries
-      .filter((e) => e.state === "approved")
-      .sort((a, b) => b.updatedAt - a.updatedAt)
-      .slice(0, 20);
-
-    // Latest version body per entry.
-    const knowledgeParts: string[] = [];
-    for (const e of approved) {
-      const versions = await ctx.db
-        .query("knowledgeVersions")
-        .withIndex("by_entry", (q) => q.eq("entryId", e._id))
-        .collect();
-      const latest = versions.sort((a, b) => b.version - a.version)[0];
-      if (!latest) continue;
-      const kindLabel =
-        e.kind === "authority" ? "Saved authority"
-        : e.kind === "precedent" ? "Precedent"
-        : e.kind === "template" ? "Template"
-        : "Research note";
-      knowledgeParts.push(
-        `[${kindLabel}] ${e.title} (v${latest.version}${latest.sourceRef ? `; ref: ${latest.sourceRef}` : ""}${latest.sourceUrl ? `; url: ${latest.sourceUrl}` : ""})\n${(latest.body ?? "").slice(0, 6_000)}`,
-      );
-    }
-
-    // Jurisdiction/date context resolved NOW so the job carries the exact
-    // source-version snapshot and any focused clarification questions.
-    const matter = await ctx.db.get(args.matterId);
-    const org = await ctx.db.get(ac.org._id);
-    const profile = matter?.legalProfile ?? null;
-    const j = resolveJurisdiction(profile, org?.legalDefaults?.country ?? "in");
-    const d = governingLegalDate(
-      profile,
-      new Date(Date.now() + 5.5 * 3_600_000).toISOString().slice(0, 10),
-    );
-
-    // Source-version snapshot (26.6): the versions the answer will be
-    // grounded in, frozen at request time so save/reopen preserves WHICH
-    // text was used even after newer versions are ingested later.
-    const legalRows = await ctx.db
-      .query("legalSources")
-      .withIndex("by_country", (q) => q.eq("country", j.country))
-      .collect();
-    const sourceVersions: { stableKey: string; version: number }[] = [];
-    for (const s of legalRows) {
-      const v = s.latestVersion ? await ctx.db.get(s.latestVersion) : null;
-      if (!v || v.body.startsWith("[INGESTION PENDING]")) continue;
-      sourceVersions.push({ stableKey: s.stableKey, version: v.version });
-    }
-
-    // Focused clarifications — only when missing facts change
-    // applicability. The question itself is never lost: it stays in
-    // inputNote.
-    const clarifications = clarificationQuestions({
-      country: j.country,
-      jurisdictionConfirmed: j.confirmed,
-      legalDateKnown: !d.isAssumption,
-      proceduralStage: profile?.proceduralStage ?? null,
-    });
-
-    // Turn 9 — the clarifications are a GATE, not decoration: when facts
-    // that change applicability are missing, the model is NOT run. The
-    // job is stored as blocked_clarification with the focused questions;
-    // supplying the facts (matter profile) and retrying runs it.
-    if (clarifications.length > 0) {
-      const blockedId = await ctx.db.insert("aiJobs", {
-        orgId: ac.org._id,
-        matterId: args.matterId,
-        kind: "legal_research",
-        status: "blocked_clarification",
-        inputNote: question.slice(0, 4000),
-        monthKey: key,
-        legalSourceVersions: sourceVersions,
-        clarifications,
-        requestedById: ac.user._id,
-        createdAt: Date.now(),
-      });
-      return blockedId;
-    }
-
-    const id = await ctx.db.insert("aiJobs", {
+    // Turn 10: submission funnels through the SHARED research core
+    // (src/convex/researchCore.ts), so submit and retry take the
+    // identical clarification-gate transition: facts on record -> the job
+    // goes pending and the runner is scheduled; facts missing -> the job
+    // is parked blocked_clarification and the runner is never scheduled.
+    return insertResearchAttempt(ctx, {
       orgId: ac.org._id,
       matterId: args.matterId,
-      kind: "legal_research",
-      status: "pending",
-      inputNote: question.slice(0, 4000),
-      monthKey: key,
-      legalSourceVersions: sourceVersions,
+      question,
       requestedById: ac.user._id,
-      createdAt: Date.now(),
     });
-
-    // The joined library is stored on the job via sourceIds-less path:
-    // the runner reads it from jobForRunner, which assembles the
-    // synthetic FIRM KNOWLEDGE source from approved entries.
-    await ctx.scheduler.runAfter(0, internal.aiRunner.runJob, {
-      jobId: id,
-      occurrenceKey: `ai:${id}`,
-    });
-    return id;
   },
 });
 
@@ -1024,24 +916,43 @@ export const retryJob = mutation({
     if (!job) throw new Error("Research request not found.");
     if (job.orgId !== ac.org._id) throw new Error("You do not have access to this matter.");
     await requireMatter(ctx, ac, job.matterId);
-    // Turn 9: pending AND blocked jobs cannot be retried while another
-    // attempt is in flight — a blocked job is retried only after the
-    // matter facts are supplied, and retry recomputes the gate so it can
-    // never bypass current permissions or a still-missing clarification.
+    // Retry rules (turns 9-10): PENDING refuses - an attempt is in
+    // flight, never a duplicate execution. A blocked_clarification LEGAL
+    // RESEARCH job is exactly the labelled resume path: the gate is
+    // recomputed in the shared core (facts supplied -> runs; still
+    // missing -> re-parked with refreshed questions). Blocked
+    // non-research jobs refuse.
     if (job.status === "pending") {
       throw new Error("This request is still being processed.");
     }
     if (job.status === "blocked_clarification" && job.kind !== "legal_research") {
       throw new Error("This request is blocked pending clarification.");
     }
-    // Usage cap for the retry's own cost.
+
+    if (job.kind === "legal_research") {
+      // Turn 10: legal-research retries funnel through the SAME shared
+      // core as submission - identical gate recompute, usage cap and
+      // transition - carrying the original frozen source-version snapshot
+      // so the record keeps WHICH text was in force when first asked.
+      return insertResearchAttempt(ctx, {
+        orgId: job.orgId,
+        matterId: job.matterId,
+        question: job.inputNote ?? "",
+        requestedById: ac.user._id,
+        carriedSourceVersions: job.legalSourceVersions ?? [],
+      });
+    }
+
+    // Other kinds keep the direct retry path: their inputs live on the
+    // original job (filed email, transcript, extracted sources) and there
+    // is no clarification gate for them.
     const key = monthKeyIST();
     const month = await ctx.db
       .query("aiJobs")
       .withIndex("by_org_month", (q) => q.eq("orgId", ac.org._id).eq("monthKey", key))
       .collect();
     const used = month.reduce(
-      (s, r) => s + (r.promptTokens ?? 0) + (r.completionTokens ?? 0),
+      (s2, r) => s2 + (r.promptTokens ?? 0) + (r.completionTokens ?? 0),
       0,
     );
     if (used >= MONTHLY_TOKEN_LIMIT) {
@@ -1049,29 +960,6 @@ export const retryJob = mutation({
         "The chamber's monthly AI usage allowance is exhausted. It resets next month; ask the firm owner to review usage.",
       );
     }
-    // Recompute the clarification gate at retry time (turn 9): the
-    // snapshot may be stale if the matter profile changed since the
-    // original request. Only legal_research jobs are gated.
-    let retryClarifications: typeof job.clarifications = undefined;
-    if (job.kind === "legal_research") {
-      const matter = await ctx.db.get(job.matterId);
-      const org = await ctx.db.get(job.orgId);
-      const j = resolveJurisdiction(
-        matter?.legalProfile ?? null,
-        org?.legalDefaults?.country ?? "in",
-      );
-      const d = governingLegalDate(
-        matter?.legalProfile ?? null,
-        new Date(Date.now() + 5.5 * 3_600_000).toISOString().slice(0, 10),
-      );
-      retryClarifications = clarificationQuestions({
-        country: j.country,
-        jurisdictionConfirmed: j.confirmed,
-        legalDateKnown: !d.isAssumption,
-        proceduralStage: matter?.legalProfile?.proceduralStage ?? null,
-      });
-    }
-
     const id = await ctx.db.insert("aiJobs", {
       orgId: job.orgId,
       matterId: job.matterId,
@@ -1080,10 +968,6 @@ export const retryJob = mutation({
       inputNote: job.inputNote,
       monthKey: key,
       legalSourceVersions: job.legalSourceVersions,
-      clarifications:
-        retryClarifications && retryClarifications.length > 0
-          ? retryClarifications
-          : undefined,
       emailMessageId: job.emailMessageId,
       emailBody: job.emailBody,
       emailDigest: job.emailDigest,
@@ -1093,20 +977,9 @@ export const retryJob = mutation({
       requestedById: ac.user._id,
       createdAt: Date.now(),
     });
-
-    // Still-blocked after recompute → block the retry (NO scheduler call,
-    // so the model is not run); otherwise schedule normally.
-    if (retryClarifications && retryClarifications.length > 0) {
-      await ctx.db.patch(id, {
-        status: "blocked_clarification",
-        clarifications: retryClarifications,
-      });
-      return id;
-    }
-
     await ctx.scheduler.runAfter(0, internal.aiRunner.runJob, {
       jobId: id,
-      occurrenceKey: `ai:${id}`,
+      occurrenceKey: "ai:" + id,
     });
     return id;
   },
