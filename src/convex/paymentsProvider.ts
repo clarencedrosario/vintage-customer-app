@@ -14,28 +14,63 @@
 // ===============================================================
 
 import { v } from "convex/values";
-import { action, internalAction, internalMutation, internalQuery } from "./_generated/server";
+import {
+  action,
+  internalAction,
+  internalMutation,
+} from "./_generated/server";
+import type { ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import crypto from "crypto";
 
 const API = "https://api.razorpay.com/v1";
 
-function creds(): { keyId: string; keySecret: string } | null {
+/** CJ GLOBAL's platform account — ONLY for CJ GLOBAL's own revenue. */
+function deploymentCreds(): { keyId: string; keySecret: string } | null {
   const keyId = process.env.RAZORPAY_KEY_ID;
   const keySecret = process.env.RAZORPAY_KEY_SECRET;
   if (!keyId || !keySecret) return null;
   return { keyId, keySecret };
 }
 
-async function rz(path: string, method: "GET" | "POST", body?: unknown) {
-  const c = creds();
+/**
+ * Merchant credentials for a call. Firm-money flows pass an orgId and
+ * use THE FIRM's connected account (encrypted at rest in orgMerchants);
+ * platform-money flows (subscriptions, promotions) use the deployment
+ * keys. Firm money can never flow through the platform account.
+ */
+async function credsFor(
+  ctx: ActionCtx,
+  orgId?: Id<"organizations">,
+): Promise<{ keyId: string; keySecret: string; orgId?: Id<"organizations"> }> {
+  if (orgId) {
+    const firm = await ctx.runQuery(internal.orgMerchants.getCredentialInternal, {
+      orgId,
+    });
+    if (!firm) {
+      throw new Error(
+        "This firm has no connected Razorpay merchant account. Connect it in Billing — the platform account never collects client money.",
+      );
+    }
+    return { keyId: firm.keyId, keySecret: firm.keySecret, orgId };
+  }
+  const c = deploymentCreds();
   if (!c) throw new Error("RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET are not set.");
-  const auth = Buffer.from(`${c.keyId}:${c.keySecret}`).toString("base64");
+  return c;
+}
+
+async function rz(
+  auth: { keyId: string; keySecret: string },
+  path: string,
+  method: "GET" | "POST",
+  body?: unknown,
+) {
+  const basic = Buffer.from(`${auth.keyId}:${auth.keySecret}`).toString("base64");
   const res = await fetch(`${API}${path}`, {
     method,
     headers: {
-      Authorization: `Basic ${auth}`,
+      Authorization: `Basic ${basic}`,
       "Content-Type": "application/json",
     },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -82,17 +117,22 @@ export const verifyAndReconcileWebhook = internalAction({
         payment?: { entity?: Record<string, unknown> };
         payment_link?: { entity?: Record<string, unknown> };
       };
-    };
+    } | null = null;
+    try {
+      event = JSON.parse(args.rawBody);
+    } catch {
+      return { ok: false, status: 400, body: "Invalid JSON." };
+    }
     try {
       event = JSON.parse(args.rawBody);
     } catch {
       return { ok: false, status: 400, body: "Invalid JSON." };
     }
 
-    const eventType = event.event ?? "unknown";
-    const eventId = event.id ?? `sig-${expected.slice(0, 24)}`;
-    const payment = event.payload?.payment?.entity;
-    const link = event.payload?.payment_link?.entity;
+    const eventType = event?.event ?? "unknown";
+    const eventId = event?.id ?? `sig-${expected.slice(0, 24)}`;
+    const payment = event?.payload?.payment?.entity;
+    const link = event?.payload?.payment_link?.entity;
 
     // The provider's own currency and method travel with the payment —
     // the reconciler validates currency against the organization and
@@ -103,7 +143,6 @@ export const verifyAndReconcileWebhook = internalAction({
       payment && typeof payment.method === "string" && payment.method
         ? payment.method
         : undefined;
-
     const providerPaymentId =
       payment && typeof payment.id === "string" ? payment.id : "";
     const providerOrderId =
@@ -198,6 +237,119 @@ export const verifyAndReconcileWebhook = internalAction({
   },
 });
 
+/**
+ * Reconcile a FIRM-merchant webhook: the signature is checked against
+ * the specific firm's own webhook secret (orgMerchants), and every
+ * money event carries the orgId so reconciliation can enforce
+ * tenant association server-side. The deployment webhook secret never
+ * verifies a firm event.
+ */
+export const verifyAndReconcileFirmWebhook = internalAction({
+  args: {
+    rawBody: v.string(),
+    signature: v.string(),
+    orgId: v.id("organizations"),
+  },
+  handler: async (ctx, args) => {
+    const cred = await ctx.runQuery(internal.orgMerchants.getCredentialInternal, {
+      orgId: args.orgId,
+    });
+    if (!cred?.webhookSecret) {
+      return {
+        ok: false,
+        status: 503,
+        body: "Firm webhook secret not configured.",
+      };
+    }
+    const expected = crypto
+      .createHmac("sha256", cred.webhookSecret)
+      .update(args.rawBody)
+      .digest("hex");
+    const a = Buffer.from(expected);
+    const b = Buffer.from(args.signature);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      return { ok: false, status: 400, body: "Invalid signature." };
+    }
+
+    let event: {
+      event?: string;
+      id?: string;
+      payload?: {
+        payment?: { entity?: Record<string, unknown> };
+        payment_link?: { entity?: Record<string, unknown> };
+      };
+    } | null = null;
+    try {
+      event = JSON.parse(args.rawBody);
+    } catch {
+      return { ok: false, status: 400, body: "Invalid JSON." };
+    }
+
+    const eventType = event?.event ?? "unknown";
+    const eventId = event?.id ?? `sig-${expected.slice(0, 24)}`;
+    const payment = event?.payload?.payment?.entity;
+    const link = event?.payload?.payment_link?.entity;
+
+    const providerPaymentId =
+      payment && typeof payment.id === "string" ? payment.id : "";
+    const providerOrderId =
+      payment && typeof payment.order_id === "string" ? payment.order_id : undefined;
+    const paymentLinkId =
+      (link && typeof link.id === "string" ? link.id : undefined) ??
+      (payment && typeof payment.payment_link === "string"
+        ? payment.payment_link
+        : undefined);
+    const referenceId =
+      (link && typeof link.reference_id === "string" ? link.reference_id : undefined) ??
+      (payment && typeof payment.notes === "object" && payment.notes !== null
+        ? ((payment.notes as Record<string, unknown>).number as string | undefined)
+        : undefined);
+    const currency =
+      payment && typeof payment.currency === "string" ? payment.currency : undefined;
+    const method =
+      payment && typeof payment.method === "string" && payment.method
+        ? payment.method
+        : undefined;
+
+    const reconciles =
+      eventType === "payment.captured" ||
+      eventType === "payment_link.paid" ||
+      eventType === "order.paid";
+
+    // No SaaS routing here by construction: firm webhooks can never
+    // touch CJ GLOBAL's subscription ledger — notes.kind is ignored.
+    if (reconciles && providerPaymentId) {
+      await ctx.runMutation(internal.billing.reconcileWebhookInternal, {
+        eventId,
+        eventType,
+        payloadJson: args.rawBody,
+        providerPaymentId,
+        providerOrderId,
+        paymentLinkId,
+        referenceId,
+        amountMinor: typeof payment?.amount === "number" ? payment.amount : 0,
+        currency,
+        method,
+        orgId: args.orgId,
+      });
+    } else {
+      await ctx.runMutation(internal.billing.reconcileWebhookInternal, {
+        eventId,
+        eventType,
+        payloadJson: args.rawBody,
+        providerPaymentId: providerPaymentId || "n/a",
+        providerOrderId,
+        paymentLinkId,
+        referenceId,
+        amountMinor: 0,
+        orgId: args.orgId,
+        logOnly: true,
+      });
+    }
+    return { ok: true, status: 200, body: "OK" };
+  },
+});
+
 // -----------------------------------------------------------------
 // Payment link creation (invoice + consultation)
 // -----------------------------------------------------------------
@@ -209,9 +361,14 @@ export const createInvoicePaymentLink = internalAction({
     clientName: v.string(),
     clientEmail: v.optional(v.string()),
     clientPhone: v.optional(v.string()),
+    // Firm-money flow: ALWAYS the firm's own account. Omitted only by
+    // platform-money callers (subscriptions/promotions), which use
+    // dedicated actions.
+    orgId: v.id("organizations"),
   },
   handler: async (ctx, args) => {
-    const body = await rz("/payment_links", "POST", {
+    const auth = await credsFor(ctx, args.orgId);
+    const body = await rz(auth, "/payment_links", "POST", {
       amount: args.amountMinor,
       currency: "INR",
       accept_partial: false,
@@ -223,8 +380,10 @@ export const createInvoicePaymentLink = internalAction({
         contact: args.clientPhone,
       },
       notify: { sms: false, email: false },
-      notes: { number: args.invoiceNumber },
-      // UPI QR + every enabled checkout method come with the link.
+      notes: {
+        number: args.invoiceNumber,
+        ...(args.orgId ? { orgId: args.orgId } : {}),
+      },
     });
     const id = String(body.id);
     const shortUrl = typeof body.short_url === "string" ? body.short_url : "";
@@ -244,10 +403,13 @@ export const createConsultationPaymentLink = internalAction({
     clientEmail: v.optional(v.string()),
     clientPhone: v.optional(v.string()),
     amountMinor: v.number(),
+    // Firm-money flow: ALWAYS the firm's own account.
+    orgId: v.id("organizations"),
   },
   handler: async (ctx, args) => {
     const referenceId = `consult-${Date.now()}`;
-    const body = await rz("/payment_links", "POST", {
+    const auth = await credsFor(ctx, args.orgId);
+    const body = await rz(auth, "/payment_links", "POST", {
       amount: args.amountMinor,
       currency: "INR",
       accept_partial: false,
@@ -259,7 +421,11 @@ export const createConsultationPaymentLink = internalAction({
         contact: args.clientPhone,
       },
       notify: { sms: false, email: false },
-      notes: { kind: "consultation", reference: referenceId },
+      notes: {
+        kind: "consultation",
+        reference: referenceId,
+        ...(args.orgId ? { orgId: args.orgId } : {}),
+      },
     });
     const id = String(body.id);
     const shortUrl = typeof body.short_url === "string" ? body.short_url : "";
@@ -308,7 +474,7 @@ export const startSubscriptionCheckout = action({
       }
       return { url: pre.url, reused: true };
     }
-    const body = await rz("/payment_links", "POST", {
+    const body = await rz(deploymentCreds() ?? (() => { throw new Error("RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET are not set."); })(), "/payment_links", "POST", {
       amount: pre.amountMinor,
       currency: "INR",
       accept_partial: false,
@@ -344,7 +510,9 @@ export const createSubscriptionPaymentLink = internalAction({
   },
   handler: async (ctx, args) => {
     const referenceId = `sub-${args.subscriptionId.slice(-8)}-${Date.now()}`;
-    const body = await rz("/payment_links", "POST", {
+    const auth = deploymentCreds();
+    if (!auth) throw new Error("RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET are not set.");
+    const body = await rz(auth, "/payment_links", "POST", {
       amount: args.amountMinor,
       currency: "INR",
       accept_partial: false,
@@ -381,7 +549,12 @@ export const createPromotionPaymentLink = internalAction({
   },
   handler: async (ctx, args) => {
     const referenceId = `promo-${args.promotionId.slice(-8)}-${Date.now()}`;
-    const body = await rz("/payment_links", "POST", {
+    // Platform revenue: the buying org pays CJ GLOBAL, so this uses the
+    // DEPLOYMENT account on purpose — the orgId arg identifies the
+    // buyer, not the merchant.
+    const auth = deploymentCreds();
+    if (!auth) throw new Error("RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET are not set.");
+    const body = await rz(auth, "/payment_links", "POST", {
       amount: args.amountMinor,
       currency: "INR",
       accept_partial: false,
@@ -426,8 +599,16 @@ export const refundPayment = internalAction({
     reason: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    // Credential resolution sits INSIDE the try: a firm that has
+    // disconnected (or was never connected) must produce an honestly
+    // FAILED refund request — never a request stuck as "requested".
     try {
+      const payment = await ctx.runQuery(internal.billing.getPaymentRowInternal, {
+        paymentRowId: args.paymentRowId,
+      });
+      const auth = await credsFor(ctx, payment?.orgId);
       const body = await rz(
+        auth,
         `/payments/${args.providerPaymentId}/refund`,
         "POST",
         {

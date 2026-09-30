@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation, query, internalMutation, MutationCtx } from "./_generated/server";
+import { mutation, query, internalMutation, internalQuery, MutationCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import {
   getAccessContext,
@@ -868,9 +868,14 @@ export const createPaymentLink = mutation({
     }
     const balance = invoice.totalMinor - invoice.amountPaidMinor;
     if (balance <= 0) throw new Error("Nothing outstanding on this invoice.");
-    if (!providerConfigured()) {
+    // Client money collects through THE FIRM'S OWN Razorpay account
+    // (owner decision, 30 Sep 2026) — never the platform account.
+    const merchant = await ctx.runQuery(internal.orgMerchants.getActiveInternal, {
+      orgId: ac.org._id,
+    });
+    if (!merchant) {
       throw new Error(
-        "Online payments are not configured yet — add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET. Manual payment recording stays available.",
+        "Connect your firm's own Razorpay account in Billing to create payment links — client payments are never collected through the platform account. Manual payment recording stays available.",
       );
     }
 
@@ -884,6 +889,7 @@ export const createPaymentLink = mutation({
         clientName: clientDoc?.name ?? "Client",
         clientEmail: clientDoc?.email,
         clientPhone: clientDoc?.phone,
+        orgId: ac.org._id,
       },
     );
 
@@ -938,9 +944,14 @@ export const createConsultation = mutation({
     if (!Number.isInteger(args.amountMinor) || args.amountMinor <= 0) {
       throw new Error("Amount must be a positive number of paise.");
     }
-    if (!providerConfigured()) {
+    // Consultation fees are the firm's revenue: the FIRM'S OWN Razorpay
+    // account collects them (owner decision, 30 Sep 2026).
+    const merchant = await ctx.runQuery(internal.orgMerchants.getActiveInternal, {
+      orgId: ac.org._id,
+    });
+    if (!merchant) {
       throw new Error(
-        "Online payments are not configured yet — add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET.",
+        "Connect your firm's own Razorpay account in Billing to charge consultation fees — client payments are never collected through the platform account.",
       );
     }
 
@@ -964,6 +975,7 @@ export const createConsultation = mutation({
         clientEmail: args.clientEmail?.trim(),
         clientPhone: args.clientPhone?.trim(),
         amountMinor: args.amountMinor,
+        orgId: ac.org._id,
       },
     );
     return { id, requested: true };
@@ -1021,6 +1033,9 @@ export const reconcileWebhookInternal = internalMutation({
     currency: v.optional(v.string()),
     method: v.optional(v.string()),
     logOnly: v.optional(v.boolean()), // non-money event: audit only
+    // Set ONLY by the firm-webhook verifier after signature verification
+    // against that firm's own secret: the event must belong to this org.
+    orgId: v.optional(v.id("organizations")),
   },
   handler: async (ctx, args) => {
     const existing = await ctx.db
@@ -1066,6 +1081,22 @@ export const reconcileWebhookInternal = internalMutation({
     }
 
     const orgId = invoice?.orgId ?? consultation?.orgId ?? promotion?.orgId;
+    // Firm-webhook events carry the org they verified against; a target
+    // in ANY other org is a cross-tenant forgery attempt — log it on the
+    // claimed org and apply nothing.
+    if (args.orgId && orgId && orgId !== args.orgId) {
+      await ctx.db.insert("paymentEvents", {
+        orgId: args.orgId,
+        eventId: args.eventId,
+        eventType: args.eventType,
+        payload: args.payloadJson.slice(0, 8000),
+        handled: true,
+        handledAt: Date.now(),
+        note: "RECONCILIATION EXCEPTION — verified firm event does not belong to this firm. Nothing applied.",
+        createdAt: Date.now(),
+      });
+      return { applied: false, reason: "cross-tenant" };
+    }
     if (!orgId) {
       if (existing) {
         await ctx.db.patch(existing._id, {
@@ -1580,6 +1611,14 @@ export const attachRefundInternal = internalMutation({
     await ctx.db.patch(args.paymentRowId, {
       refundIds: [...(payment.refundIds ?? []), args.refundId],
     });
+  },
+});
+
+/** Internal: one payments row by id (merchant routing for refunds). */
+export const getPaymentRowInternal = internalQuery({
+  args: { paymentRowId: v.id("payments") },
+  handler: async (ctx, args) => {
+    return (await ctx.db.get(args.paymentRowId)) ?? null;
   },
 });
 

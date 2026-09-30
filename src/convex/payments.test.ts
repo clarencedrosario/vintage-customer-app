@@ -1,8 +1,9 @@
 import { describe, expect, it, beforeEach, afterAll, vi } from "vitest";
 import { convexTest } from "convex-test";
 import schema from "./schema";
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { FunctionReference } from "convex/server";
+import { encryptSecret, decryptSecret } from "./crypto";
 import crypto from "node:crypto";
 
 // Typed locally so the file compiles regardless of how fresh the
@@ -711,6 +712,12 @@ describe("Refund lifecycle (requested → processed | failed)", () => {
     await asUser(t, "system").run(async (ctx) => {
       await ctx.db.patch(userId as never, { activeOrgId: orgId });
     });
+    // Refunds are issued on whichever merchant account captured the
+    // money — connect the firm's account (fetch is mocked below).
+    await asUser(t, userId).mutation(api.orgMerchants.connect, {
+      keyId: "rzp_test_abcdef12",
+      keySecret: "firm_secret_value_1",
+    });
     await deliver(
       t,
       capturedEvent({ eventId: "evt_rf1", paymentId: "pay_rf", amountMinor: 50_000 }),
@@ -829,5 +836,240 @@ describe("Refund lifecycle (requested → processed | failed)", () => {
       vi.unstubAllGlobals();
       vi.useRealTimers();
     }
+  });
+});
+
+describe("Merchant ownership (firm money collects through the firm's own account)", () => {
+  let t: ReturnType<typeof convexTest>;
+
+  beforeEach(() => {
+    t = convexTest(schema, modules);
+    process.env.RAZORPAY_WEBHOOK_SECRET = WEBHOOK_SECRET;
+    // Master key for encrypting firm credentials at rest.
+    process.env.RAZORPAY_KEY_SECRET = "platform_master_key_for_encryption";
+  });
+
+  afterAll(() => {
+    delete process.env.RAZORPAY_WEBHOOK_SECRET;
+    delete process.env.RAZORPAY_KEY_SECRET;
+  });
+
+  it("stores firm credentials encrypted and never returns the secret", async () => {
+    const { userId, orgId } = await seedBillingOrg(t);
+    await asUser(t, "system").run(async (ctx) => {
+      await ctx.db.patch(userId as never, { activeOrgId: orgId });
+    });
+
+    const res = await asUser(t, userId).mutation(api.orgMerchants.connect, {
+      keyId: "rzp_test_abcdef12",
+      keySecret: "firm_secret_value_1",
+      webhookSecret: "firm_whsec_1",
+    });
+    expect(res.mode).toBe("test");
+    expect(res.keyIdLast4).toBe("ef12");
+
+    // The stored row holds ciphertext only.
+    const rows = await asUser(t, "system").run((ctx) =>
+      ctx.db.query("orgMerchants").collect(),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.encryptedSecret).not.toContain("firm_secret_value_1");
+    expect(rows[0]!.encryptedWebhookSecret).not.toContain("firm_whsec_1");
+
+    // Rotation supersedes the old row (only one active).
+    await asUser(t, userId).mutation(api.orgMerchants.connect, {
+      keyId: "rzp_test_ffff2222",
+      keySecret: "firm_secret_value_2",
+    });
+    const rows2 = await asUser(t, "system").run((ctx) =>
+      ctx.db.query("orgMerchants").collect(),
+    );
+    expect(rows2.filter((r) => r.active)).toHaveLength(1);
+    expect(rows2.find((r) => r.active)!.keyId).toBe("rzp_test_ffff2222");
+
+    // Status exposes metadata, never secrets.
+    const st = await asUser(t, userId).query(api.orgMerchants.status, {});
+    expect(st.connected).toBe(true);
+    expect(JSON.stringify(st)).not.toContain("firm_secret_value_2");
+  });
+
+  it("refuses invoice payment links until the firm connects its own account", async () => {
+    const { userId, orgId, invoiceId } = await seedBillingOrg(t);
+    await asUser(t, "system").run(async (ctx) => {
+      await ctx.db.patch(userId as never, { activeOrgId: orgId });
+    });
+
+    // Even with platform keys configured, client-invoice collection is
+    // refused — the platform account must never collect firm money.
+    process.env.RAZORPAY_KEY_ID = "rzp_test_platform";
+    try {
+      await expect(
+        asUser(t, userId).mutation(api.billing.createPaymentLink, {
+          invoiceId: invoiceId as never,
+        }),
+      ).rejects.toThrow(/Connect your firm's own Razorpay account/);
+
+      // After connecting the firm's account, the link request succeeds.
+      await asUser(t, userId).mutation(api.orgMerchants.connect, {
+        keyId: "rzp_test_abcdef12",
+        keySecret: "firm_secret_value_1",
+      });
+      const ok = await asUser(t, userId).mutation(
+        api.billing.createPaymentLink,
+        { invoiceId: invoiceId as never },
+      );
+      expect(ok.requested).toBe(true);
+    } finally {
+      delete process.env.RAZORPAY_KEY_ID;
+    }
+  });
+
+  it("verifies firm webhooks against the FIRM's secret and enforces tenant scope", async () => {
+    const { userId, orgId, invoiceId } = await seedBillingOrg(t);
+    await asUser(t, "system").run(async (ctx) => {
+      await ctx.db.patch(userId as never, { activeOrgId: orgId });
+    });
+    await asUser(t, userId).mutation(api.orgMerchants.connect, {
+      keyId: "rzp_test_abcdef12",
+      keySecret: "firm_secret_value_1",
+      webhookSecret: "firm_whsec_1",
+    });
+
+    const firmEvent = successEvent({
+      eventId: "evt_firm1",
+      eventType: "payment_link.paid",
+      paymentId: "pay_firm1",
+      amountMinor: 50_000,
+      invoiceNumber: "WH/2026/0001",
+      linkId: "link_firm1",
+    });
+    const { raw, signature } = signedBody(firmEvent);
+
+    // Signed with the platform secret → rejected (different merchant).
+    const wrongSecret = await t.action(
+      internal.paymentsProvider.verifyAndReconcileFirmWebhook,
+      { rawBody: raw, signature, orgId: orgId as never },
+    );
+    expect(wrongSecret.ok).toBe(false);
+    expect(wrongSecret.status).toBe(400);
+
+    // Signed with the FIRM's webhook secret → applied to the firm's
+    // invoice, and the notes carry the firm's orgId.
+    const firmSigned = crypto
+      .createHmac("sha256", "firm_whsec_1")
+      .update(raw)
+      .digest("hex");
+    const ok = await t.action(
+      internal.paymentsProvider.verifyAndReconcileFirmWebhook,
+      { rawBody: raw, signature: firmSigned, orgId: orgId as never },
+    );
+    expect(ok.ok).toBe(true);
+    const invoice = await asUser(t, "system").run((ctx) => ctx.db.get(invoiceId));
+    expect(invoice!.amountPaidMinor).toBe(50_000);
+    expect(invoice!.status).toBe("paid");
+
+    // A cross-tenant attempt: the rival firm holds its OWN valid webhook
+    // secret, but the event's reference names ANOTHER firm's invoice.
+    // The signature verifies; tenant scope must still refuse.
+    const otherOrgId = await asUser(t, "system").run(async (ctx) => {
+      const uid = await ctx.db.insert("users", {
+        email: "rival@synthetic.test",
+        emailVerified: true,
+        isAnonymous: false,
+        isPlatformAdmin: false,
+      });
+      const oid = await ctx.db.insert("organizations", {
+        name: "Rival Chamber",
+        slug: "rival-firm",
+        kind: "chamber",
+        currency: "INR",
+        timezone: "Asia/Kolkata",
+        financialYearStart: "04-01",
+        taxLabel: "GST",
+        taxPercent: 18,
+        invoicePrefix: "INV",
+        createdBy: uid,
+        createdAt: Date.now(),
+      });
+      const { encryptSecret } = await import("./crypto");
+      await ctx.db.insert("orgMerchants", {
+        orgId: oid,
+        provider: "razorpay",
+        keyId: "rzp_test_rival111",
+        encryptedSecret: encryptSecret(
+          process.env.RAZORPAY_KEY_SECRET!,
+          `orgMerchant:${oid}:secret`,
+          "rival_secret",
+        ),
+        encryptedWebhookSecret: encryptSecret(
+          process.env.RAZORPAY_KEY_SECRET!,
+          `orgMerchant:${oid}:webhook`,
+          "rival_whsec_1",
+        ),
+        keyIdLast4: "r111",
+        mode: "test",
+        active: true,
+        createdBy: uid,
+        createdAt: Date.now(),
+      });
+      return oid;
+    });
+    const forged = successEvent({
+      eventId: "evt_forged1",
+      eventType: "payment.captured",
+      paymentId: "pay_forged1",
+      amountMinor: 10_000,
+      invoiceNumber: "WH/2026/0001", // the FIRST firm's invoice number
+    });
+    const raw2 = JSON.stringify(forged);
+    const sig2 = crypto
+      .createHmac("sha256", "rival_whsec_1")
+      .update(raw2)
+      .digest("hex");
+    const res = await t.action(
+      internal.paymentsProvider.verifyAndReconcileFirmWebhook,
+      { rawBody: raw2, signature: sig2, orgId: otherOrgId as never },
+    );
+    expect(res.ok).toBe(true); // accepted for processing…
+
+    // …but the reconciler refused: no money moved anywhere, and the
+    // exception is on the record.
+    const rivalRows = await asUser(t, "system").run(async (ctx) =>
+      (await ctx.db.query("payments").collect()).filter(
+        (p) => p.providerPaymentId === "pay_forged1",
+      ),
+    );
+    expect(rivalRows).toHaveLength(0);
+    const exceptions = await asUser(t, "system").run(async (ctx) =>
+      (await ctx.db.query("paymentEvents").collect()).filter(
+        (e) => e.eventId === "evt_forged1",
+      ),
+    );
+    expect(exceptions).toHaveLength(1);
+    expect(exceptions[0]!.note).toContain("does not belong");
+  });
+
+  it("encryptSecret round-trips and rejects tampering or wrong context", () => {
+    const master = "platform_master_key_for_encryption";
+    const blob = encryptSecret(master, "orgMerchant:x:secret", "s3cret-value");
+    expect(decryptSecret(master, "orgMerchant:x:secret", blob)).toBe("s3cret-value");
+
+    // Wrong context → auth failure (ciphertext is bound to its purpose).
+    expect(() =>
+      decryptSecret(master, "orgMerchant:y:secret", blob),
+    ).toThrow(/authentication failed/);
+
+    // Tampered ciphertext → auth failure.
+    const bytes = Buffer.from(blob, "base64");
+    bytes[20] ^= 0x01;
+    const tampered = bytes.toString("base64");
+    expect(() =>
+      decryptSecret(master, "orgMerchant:x:secret", tampered),
+    ).toThrow(/authentication failed/);
+
+    // Wrong master key → auth failure.
+    expect(() =>
+      decryptSecret("other_master", "orgMerchant:x:secret", blob),
+    ).toThrow(/authentication failed/);
   });
 });

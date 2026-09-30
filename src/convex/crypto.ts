@@ -223,3 +223,143 @@ export function base32Decode(s: string): Uint8Array {
   }
   return Uint8Array.from(out);
 }
+
+// ---------------------------------------------------------------------
+// Authenticated encryption for stored secrets (per-firm merchant
+// credentials). The Convex sandbox has no WebCrypto, so this is an
+// ENCRYPT-THEN-MAC stream construction on the primitives above:
+//   key = HMAC(masterKey, "enc") | HMAC(masterKey, "mac")  (32+32 bytes)
+//   ciphertext = plaintext XOR HMAC(key_enc, counter_block_n)
+//   tag = HMAC(key_mac, associated_data || ciphertext)
+// The HMAC-as-PRF counter construction is NIST SP 800-108 style; the
+// tag covers the AD (context string) so ciphertexts cannot be moved
+// between rows or contexts. Constant-time-ish tag comparison.
+// ---------------------------------------------------------------------
+
+function hexToBytes(hex: string): Uint8Array {
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+}
+
+function bytesToBase64(b: Uint8Array): string {
+  let s = "";
+  for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]!);
+  return btoa(s);
+}
+
+function base64ToBytes(s: string): Uint8Array {
+  const raw = atob(s);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+const HKDF_INFO_ENC = "advokate-secret-enc-v1";
+const HKDF_INFO_MAC = "advokate-secret-mac-v1";
+
+function deriveKeys(masterKey: string): { enc: Uint8Array; mac: Uint8Array } {
+  const enc = hexToBytes(hmacSha256Hex(masterKey, HKDF_INFO_ENC));
+  const mac = hexToBytes(hmacSha256Hex(masterKey, HKDF_INFO_MAC));
+  return { enc, mac };
+}
+
+function hmacBytesRaw(keyBytes: Uint8Array, message: Uint8Array): Uint8Array {
+  // HMAC with binary key + binary message (RFC 2104), on sha256Bytes.
+  const blockSize = 64;
+  let key = keyBytes;
+  if (key.length > blockSize) key = sha256Bytes(key);
+  const padded = new Uint8Array(blockSize);
+  padded.set(key);
+  const inner = new Uint8Array(blockSize + message.length);
+  for (let i = 0; i < blockSize; i++) inner[i] = padded[i]! ^ 0x36;
+  inner.set(message, blockSize);
+  const innerHash = sha256Bytes(inner);
+  const outer = new Uint8Array(blockSize + innerHash.length);
+  for (let i = 0; i < blockSize; i++) outer[i] = padded[i]! ^ 0x5c;
+  outer.set(innerHash, blockSize);
+  return sha256Bytes(outer);
+}
+
+/**
+ * Encrypt a UTF-8 secret under a master key. Returns
+ * base64(iv || ciphertext || tag). The context string binds the
+ * ciphertext to its purpose/row (pass e.g. "orgMerchant:<id>:secret").
+ */
+export function encryptSecret(
+  masterKey: string,
+  context: string,
+  plaintext: string,
+): string {
+  const { enc, mac } = deriveKeys(masterKey);
+  const iv = sha256Bytes(
+    new TextEncoder().encode(`${context}:${Date.now()}:${Math.random()}`),
+  ).slice(0, 16);
+  const msg = new TextEncoder().encode(plaintext);
+  const ct = new Uint8Array(msg.length);
+  let counter = 0;
+  for (let off = 0; off < msg.length; off += 32) {
+    const block = new Uint8Array(iv.length + 4);
+    block.set(iv);
+    new DataView(block.buffer).setUint32(iv.length, counter, false);
+    const ks = hmacBytesRaw(enc, block);
+    for (let i = 0; i < 32 && off + i < msg.length; i++) {
+      ct[off + i] = msg[off + i]! ^ ks[i]!;
+    }
+    counter += 1;
+  }
+  const ad = new TextEncoder().encode(context);
+  const macInput = new Uint8Array(2 + ad.length + 2 + ct.length);
+  new DataView(macInput.buffer).setUint16(0, ad.length, false);
+  macInput.set(ad, 2);
+  new DataView(macInput.buffer).setUint16(2 + ad.length, ct.length, false);
+  macInput.set(ct, 4 + ad.length);
+  const tag = hmacBytesRaw(mac, macInput);
+  const out = new Uint8Array(iv.length + ct.length + tag.length);
+  out.set(iv);
+  out.set(ct, iv.length);
+  out.set(tag, iv.length + ct.length);
+  return bytesToBase64(out);
+}
+
+/**
+ * Decrypt a value produced by encryptSecret. Throws when the tag does
+ * not verify (wrong key, tampered ciphertext, wrong context).
+ */
+export function decryptSecret(
+  masterKey: string,
+  context: string,
+  blob: string,
+): string {
+  const { enc, mac } = deriveKeys(masterKey);
+  const data = base64ToBytes(blob);
+  if (data.length < 16 + 32) throw new Error("Corrupt secret blob.");
+  const iv = data.slice(0, 16);
+  const tag = data.slice(data.length - 32);
+  const ct = data.slice(16, data.length - 32);
+  const ad = new TextEncoder().encode(context);
+  const macInput = new Uint8Array(2 + ad.length + 2 + ct.length);
+  new DataView(macInput.buffer).setUint16(0, ad.length, false);
+  macInput.set(ad, 2);
+  new DataView(macInput.buffer).setUint16(2 + ad.length, ct.length, false);
+  macInput.set(ct, 4 + ad.length);
+  const expected = hmacBytesRaw(mac, macInput);
+  let diff = 0;
+  for (let i = 0; i < 32; i++) diff |= expected[i]! ^ tag[i]!;
+  if (diff !== 0) throw new Error("Secret authentication failed.");
+  const msg = new Uint8Array(ct.length);
+  let counter = 0;
+  for (let off = 0; off < ct.length; off += 32) {
+    const block = new Uint8Array(iv.length + 4);
+    block.set(iv);
+    new DataView(block.buffer).setUint32(iv.length, counter, false);
+    const ks = hmacBytesRaw(enc, block);
+    for (let i = 0; i < 32 && off + i < ct.length; i++) {
+      msg[off + i] = ct[off + i]! ^ ks[i]!;
+    }
+    counter += 1;
+  }
+  return new TextDecoder().decode(msg);
+}
