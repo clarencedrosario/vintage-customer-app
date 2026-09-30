@@ -1,0 +1,193 @@
+  // =====================================================================
+  // §28 — INDEPENDENTLY DEVELOPED LEGAL WORKSPACE (timeline, brief,
+  // drafting revisions, processing status, provenance, audit chain)
+  // =====================================================================
+
+  // Case timeline: lawyer-curated chronology. The AI only PROPOSES
+  // entries; each carries its source (document version + pinpoint),
+  // a date-precision label, and a correction history. When a document
+  // changes, affected approved entries are flagged "needs_review" —
+  // never silently rewritten.
+  matterTimeline: defineTable({
+    orgId: v.id("organizations"),
+    matterId: v.id("matters"),
+    // "event" = something happened; "document" = a document bears this
+    // date; "filing" = filed in court; "proposed_deadline" = calculated.
+    entryKind: v.union(
+      v.literal("event"),
+      v.literal("document"),
+      v.literal("filing"),
+      v.literal("proposed_deadline"),
+    ),
+    title: v.string(),
+    detail: v.optional(v.string()),
+    date: v.string(), // YYYY-MM-DD
+    datePrecision: v.union(
+      v.literal("exact"),
+      v.literal("approximate"),
+      v.literal("uncertain"),
+    ),
+    // Source provenance.
+    sourceDocumentId: v.optional(v.id("matterDocuments")),
+    sourceAiSourceId: v.optional(v.id("aiSources")),
+    sourceRefs: v.optional(
+      v.array(
+        v.object({
+          page: v.optional(v.number()),
+          paragraph: v.optional(v.number()),
+          quote: v.optional(v.string()),
+        }),
+      ),
+    ),
+    // proposed → approved | corrected (new version) | rejected | merged
+    status: v.union(
+      v.literal("proposed"),
+      v.literal("approved"),
+      v.literal("rejected"),
+      v.literal("merged_into"),
+      v.literal("needs_review"),
+    ),
+    mergedIntoId: v.optional(v.id("matterTimeline")),
+    // The timeline entry this row supersedes (correction chain).
+    supersedesId: v.optional(v.id("matterTimeline")),
+    supersededById: v.optional(v.id("matterTimeline")),
+    proposedBy: v.optional(v.string()),
+    approvedById: v.optional(v.id("users")),
+    approvedAt: v.optional(v.number()),
+    rejectedReason: v.optional(v.string()),
+    // Source-change bookkeeping: the analysis/inputs snapshot this entry
+    // was approved against; a changed source flips status to needs_review.
+    approvedInputsHash: v.optional(v.string()),
+    version: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_matter", ["matterId"])
+    .index("by_matter_status", ["matterId", "status"])
+    .index("by_org", ["orgId"]),
+
+  // Correction/approval history for timeline entries (append-only).
+  matterTimelineRevisions: defineTable({
+    orgId: v.id("organizations"),
+    matterId: v.id("matters"),
+    entryId: v.id("matterTimeline"),
+    priorStatus: v.string(),
+    priorDate: v.optional(v.string()),
+    priorTitle: v.optional(v.string()),
+    newStatus: v.string(),
+    newDate: v.optional(v.string()),
+    newTitle: v.optional(v.string()),
+    changedById: v.id("users"),
+    note: v.optional(v.string()),
+    createdAt: v.number(),
+  }).index("by_entry", ["entryId"]),
+
+  // Source-linked matter brief: structured, versioned, approval-gated.
+  matterBriefs: defineTable({
+    orgId: v.id("organizations"),
+    matterId: v.id("matters"),
+    briefVersion: v.number(),
+    status: v.union(v.literal("proposed"), v.literal("approved")),
+    proceduralPosition: v.string(),
+    keyFacts: v.array(
+      v.object({
+        text: v.string(),
+        // Link to a supporting passage (fact id or document pinpoint).
+        refKind: v.union(v.literal("fact"), v.literal("document")),
+        refId: v.optional(v.string()),
+        refLabel: v.optional(v.string()),
+        disputed: v.boolean(),
+      }),
+    ),
+    disputedPoints: v.array(v.string()),
+    relevantDocuments: v.array(
+      v.object({ documentId: v.string(), name: v.string() }),
+    ),
+    recentDevelopments: v.array(v.string()),
+    outstandingQuestions: v.array(v.string()),
+    proposedNextActions: v.array(v.string()),
+    // Verified quotation vs AI interpretation is recorded per section.
+    interpretationNote: v.string(),
+    inputsHash: v.string(),
+    stale: v.boolean(),
+    changesFromPrior: v.array(v.string()),
+    generatedBy: v.string(),
+    approvedById: v.optional(v.id("users")),
+    approvedAt: v.optional(v.number()),
+    createdAt: v.number(),
+  })
+    .index("by_matter", ["matterId"])
+    .index("by_org", ["orgId"]),
+
+  // Drafting workspace: proposed edits on a template use — each with
+  // reason, a real diff, and lawyer accept/reject/undo. "One-click
+  // improvement" = approve a PROPOSED edit; never autonomous.
+  draftRevisions: defineTable({
+    orgId: v.id("organizations"),
+    matterId: v.id("matters"),
+    useId: v.id("templateUses"),
+    proposedById: v.optional(v.string()), // model name / rule id
+    // Original excerpt → proposed replacement (true diff pair).
+    originalExcerpt: v.string(),
+    proposedExcerpt: v.string(),
+    reason: v.string(),
+    riskLevel: v.optional(
+      v.union(v.literal("info"), v.literal("caution"), v.literal("high")),
+    ),
+    // proposed → accepted | rejected | undone
+    status: v.union(
+      v.literal("proposed"),
+      v.literal("accepted"),
+      v.literal("rejected"),
+      v.literal("undone"),
+    ),
+    resolvedById: v.optional(v.id("users")),
+    resolvedAt: v.optional(v.number()),
+    // Undo support: the use body before/after acceptance.
+    bodyBefore: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_use", ["useId"])
+    .index("by_org", ["orgId"]),
+
+  // Risk comments pinned to a draft use (potential-risk flags with
+  // reasons; lawyer reviews, nothing auto-edits).
+  draftRiskComments: defineTable({
+    orgId: v.id("organizations"),
+    useId: v.id("templateUses"),
+    matterId: v.id("matters"),
+    excerpt: v.string(),
+    concern: v.string(),
+    reason: v.string(),
+    sourceKey: v.optional(v.string()),
+    // open → addressed | dismissed
+    status: v.union(v.literal("open"), v.literal("addressed"), v.literal("dismissed")),
+    resolvedById: v.optional(v.id("users")),
+    createdAt: v.number(),
+  })
+    .index("by_use", ["useId"])
+    .index("by_org", ["orgId"]),
+
+  // Third-party provenance register (originality/licence compliance).
+  thirdPartyProvenance: defineTable({
+    orgId: v.id("organizations"),
+    asset: v.string(), // library, font, dataset, template source...
+    version: v.optional(v.string()),
+    origin: v.string(), // where it came from
+    licence: v.string(), // SPDX id or "proprietary (CJ GLOBAL)"
+    noticeRequired: v.boolean(),
+    noticeLocation: v.optional(v.string()),
+    usageScope: v.string(),
+    // open | cleared | flagged_for_review
+    status: v.union(
+      v.literal("open"),
+      v.literal("cleared"),
+      v.literal("flagged_for_review"),
+    ),
+    note: v.optional(v.string()),
+    recordedById: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_status", ["orgId", "status"]),

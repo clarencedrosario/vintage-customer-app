@@ -164,7 +164,11 @@ function detectDuplicatesInDb(
  */
 export const analyseSource = mutation({
   args: { aiSourceId: v.id("aiSources") },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<{
+    analysisVersion: number;
+    proposed: number;
+    dates: number;
+  }> => {
     const ac = await requireAccess(ctx);
     requireCapability(ac, "ai.use");
     const src = await ctx.db.get(args.aiSourceId);
@@ -182,8 +186,46 @@ export const analyseSource = mutation({
       throw new Error("Matter write access required to run analysis.");
     }
 
-    const text = src.text;
+    // Delegate to the shared internal core so the direct path and the
+    // queued/background path cannot drift apart.
+    const r = (await ctx.runMutation(
+      internal.matterIntelligence.analyseSourceInternal,
+      {
+        aiSourceId: src._id,
+        existingAnalysisId: undefined,
+        requestedById: ac.user._id,
+      },
+    )) as { analysisVersion: number; proposedFacts: number; dates: number };
+    return {
+      analysisVersion: r.analysisVersion,
+      proposed: r.proposedFacts,
+      dates: r.dates,
+    };
+  },
+});
+
+/**
+ * Shared analysis core: deterministic extraction; creates (or fills) an
+ * analysis row. The queued/background path passes existingAnalysisId to
+ * fill the visible queue row in place.
+ */
+export const analyseSourceInternal = internalMutation({
+  args: {
+    aiSourceId: v.id("aiSources"),
+    existingAnalysisId: v.optional(v.id("documentAnalyses")),
+    requestedById: v.optional(v.id("users")),
+  },
+  handler: async (ctx, args) => {
+    const src = await ctx.db.get(args.aiSourceId);
+    if (!src) throw new Error("Source not found.");
+    if (!src.documentId) {
+      throw new Error("Source is not linked to a filed document.");
+    }
     const documentId = src.documentId as Id<"matterDocuments">;
+    const matter = await ctx.db.get(src.matterId);
+    if (!matter) throw new Error("Matter not found.");
+    const ac = { org: { _id: src.orgId }, user: { _id: args.requestedById ?? src.addedById } };
+    const text = src.text;
     const prior = await ctx.db
       .query("documentAnalyses")
       .withIndex("by_document", (q) => q.eq("documentId", documentId))
@@ -328,7 +370,33 @@ export const analyseSource = mutation({
       });
     }
 
-    await ctx.db.insert("documentAnalyses", {
+    if (args.existingAnalysisId) {
+      const existingRow = await ctx.db.get(args.existingAnalysisId);
+      if (!existingRow) throw new Error("Queued analysis row missing.");
+      await ctx.db.patch(args.existingAnalysisId, {
+        analysisVersion,
+        status: "proposed",
+        proposedFacts: proposedFacts.map((f) => ({ ...f, status: "allegation" as const })),
+        dates: dates.map(({ date, context }) => ({ date, context })),
+        parties: [...parties],
+        obligations,
+        amounts: amounts.map(({ amountMinor, context }) => ({ amountMinor, context })),
+        issues,
+        duplicatesOfDocumentId,
+        missingInformation,
+        model: "deterministic",
+        createdById: ac.user._id,
+        processingStatus: "done",
+        processingAttempts: (existingRow.processingAttempts ?? 0),
+      });
+      return {
+        analysisVersion,
+        proposedFacts: proposedFacts.length,
+        dates: dates.length,
+        analysisId: args.existingAnalysisId,
+      };
+    }
+    const analysisId = await ctx.db.insert("documentAnalyses", {
       orgId: ac.org._id,
       matterId: src.matterId,
       documentId: src.documentId,
@@ -346,11 +414,18 @@ export const analyseSource = mutation({
       model: "deterministic",
       createdById: ac.user._id,
       createdAt: Date.now(),
+      processingStatus: "done",
+      processingAttempts: 1,
     });
-
-    return { analysisVersion, proposed: proposedFacts.length, dates: dates.length };
+    return {
+      analysisVersion,
+      proposedFacts: proposedFacts.length,
+      dates: dates.length,
+      analysisId,
+    };
   },
 });
+
 
 /** Analyses for a matter (latest first). */
 export const analyses = query({
@@ -1076,5 +1151,123 @@ export const summaries = query({
     return rows
       .filter((r) => r.orgId === ac.org._id)
       .sort((a, b) => b.summaryVersion - a.summaryVersion);
+  },
+});
+
+// ---------------------------------------------------------------------
+// §28.2 — Background processing with visible status, retries and
+// optional batch scheduling. The deterministic core is marked queued →
+// done within the mutation; the async wrapper pattern gives the lawyer
+// an honest, retryable processing trail instead of a silent flash.
+// ---------------------------------------------------------------------
+
+/** Queue (or re-queue) analysis for a source: visible processing trail. */
+export const requestAnalysis = mutation({
+  args: {
+    aiSourceId: v.id("aiSources"),
+    batchLabel: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    requireCapability(ac, "ai.use");
+    const src = await ctx.db.get(args.aiSourceId);
+    if (!src || src.orgId !== ac.org._id) {
+      throw new Error("Source not found in this organization.");
+    }
+    const prior = await ctx.db
+      .query("documentAnalyses")
+      .withIndex("by_matter", (q) => q.eq("matterId", src.matterId))
+      .collect();
+    const running = prior.find(
+      (p) => p.aiSourceId === src._id && p.processingStatus === "queued",
+    );
+    if (running) {
+      return { analysisId: running._id, status: "queued" as const, reused: true };
+    }
+    const documentId = src.documentId;
+    if (!documentId) {
+      throw new Error("This source is not linked to a filed document — file the document first, then analyse it.");
+    }
+    const id = await ctx.db.insert("documentAnalyses", {
+      orgId: ac.org._id,
+      matterId: src.matterId,
+      documentId,
+      aiSourceId: src._id,
+      analysisVersion: prior.filter((p) => p.aiSourceId === src._id).length + 1,
+      status: "proposed",
+      proposedFacts: [],
+      dates: [],
+      parties: [],
+      obligations: [],
+      amounts: [],
+      issues: [],
+      missingInformation: [],
+      model: "deterministic",
+      createdById: ac.user._id,
+      createdAt: Date.now(),
+      processingStatus: "queued",
+      processingAttempts: 0,
+      scheduledFor: args.batchLabel,
+    });
+    return { analysisId: id, status: "queued" as const, reused: false };
+  },
+});
+
+/** Run a queued analysis (idempotent; records attempts and errors). */
+export const runQueuedAnalysis = mutation({
+  args: { analysisId: v.id("documentAnalyses") },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    requireCapability(ac, "ai.use");
+    const a = await ctx.db.get(args.analysisId);
+    if (!a || a.orgId !== ac.org._id) throw new Error("Analysis not found.");
+    if (a.processingStatus === "done") return { done: true, reused: true };
+    await ctx.db.patch(a._id, {
+      processingStatus: "running",
+      processingAttempts: (a.processingAttempts ?? 0) + 1,
+    });
+    try {
+      // Reuse the deterministic core by importing its logic through the
+      // internal mutation (same transaction guarantees).
+      const src = a.aiSourceId ? await ctx.db.get(a.aiSourceId) : null;
+      if (!src) throw new Error("Source row missing for this analysis.");
+      await ctx.runMutation(internal.matterIntelligence.analyseSourceInternal, {
+        aiSourceId: src._id,
+        existingAnalysisId: a._id,
+      });
+      await ctx.db.patch(a._id, { processingStatus: "done", lastError: undefined });
+      return { done: true, reused: false };
+    } catch (err) {
+      await ctx.db.patch(a._id, {
+        processingStatus: "failed",
+        lastError: err instanceof Error ? err.message.slice(0, 500) : "Unknown error.",
+      });
+      throw err;
+    }
+  },
+});
+
+/** Processing status for the matter workspace (visible queue). */
+export const processingQueue = query({
+  args: { matterId: v.id("matters") },
+  handler: async (ctx, args) => {
+    const ac = await getAccessContext(ctx);
+    if (!ac) return [];
+    const rows = await ctx.db
+      .query("documentAnalyses")
+      .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))
+      .collect();
+    return rows
+      .filter((r) => r.orgId === ac.org._id && r.processingStatus !== undefined)
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .map((r) => ({
+        analysisId: r._id,
+        documentId: r.documentId,
+        status: r.processingStatus,
+        attempts: r.processingAttempts ?? 0,
+        lastError: r.lastError,
+        scheduledFor: r.scheduledFor,
+        createdAt: r.createdAt,
+      }));
   },
 });
