@@ -4,7 +4,7 @@ Durable progress file so development resumes without repeating completed work.
 Companion to `ADVOKATE_REQUIREMENTS.md` (the master checklist). Handoff log also
 maintained in `docs/DELIVERY.md`.
 
-Last checkpoint: **29 September 2026** — latest record: **Turn 10** (bottom section); turn 9 and turn 8 summaries below.
+Last checkpoint: **30 September 2026** — latest record: **Turn 11** (bottom section); turn 10 and turn 9 summaries below.
 
 ---
 
@@ -1641,4 +1641,118 @@ the corpus); re-aimed at CrPC per the checklist doc (§ 484 vs § 485).
 - Corpus untouched: no re-ingestion, no data resets; synthetic checklist
   data is additive only (checklist-firm org, one client/matter, two jobs).
 
+---
 
+# Turn 11 — 30 Sep 2026: Razorpay bounded verification checks
+
+Prior turn added a Razorpay integration (preserved, not built this turn)
+plus 6 fixture tests and a setup doc whose framing overstated
+verification. The user demanded 7 bounded checks before calling the
+integration "fully verified". All 7 addressed this turn; two real
+code defects were found and fixed.
+
+## 1. Evidence tiers made explicit (doc)
+docs/RAZORPAY_SETUP.md rewritten around four tiers: (1) automated
+fixture tests — done, 13 payments tests, 519 total green; (2) real
+Razorpay TEST-MODE API + webhook execution — BLOCKED, keys absent;
+(3) browser checkout — BLOCKED, automation unavailable (15 pending steps
+in docs/BROWSER_VERIFICATION.md); (4) live operation — deliberately out
+of scope. No "real provider end-to-end" claim is made anywhere. The doc
+also states plainly which checkout methods exist: payment links only
+(UPI QR + merchant-enabled methods); no checkout.js, no Razorpay
+Subscriptions, no Route splits are implemented.
+
+## 2. Merchant ownership surfaced as an unresolved business decision (doc + ASK)
+The current single-RAZORPAY_KEY_* design routes ALL flows through CJ
+GLOBAL's account. Correct for CJ GLOBAL's own subscriptions and
+(promotion purchases, pending confirmation) — but law-firm invoice
+payments and consultation fees are the FIRM's revenue; collecting them
+through CJ GLOBAL's account would commingle client money. The setup doc
+now lays out the three options (per-firm merchant connections; Razorpay
+Route/Marketplace linked accounts; collections disabled for firm money)
+and collection of invoices/consultations must NOT be enabled live until
+the owner chooses. The question was put to the user this turn.
+
+## 3. Cross-event-type dedupe (code defect found and fixed)
+Before: reconciliation deduped ONLY on provider event id, so
+payment.captured + payment_link.paid + order.paid naming ONE payment
+inserted THREE payments rows and posted THREE payment journals (the
+amount cap prevented over-allocation but not triple records). The SaaS
+reconciler had the same hole and would have applied a subscription
+renewal up to three times.
+Now: payments table has a by_provider_payment index; whichever event
+arrives first applies once and later event types are logged in
+paymentEvents (with a "duplicate across event types" note) without
+touching state; the SaaS reconciler refuses a providerPaymentId that
+already renewed the subscription. Fixture-tested in both orders
+(order.paid-first out-of-order case included): exactly one record, one
+allocation, one journal; subscriptionInvoices length 1; period extended
+once.
+
+## 4. Excess money recorded, never discarded (code defect fixed)
+Before: over-payments were silently capped and the excess vanished from
+records (audit note only). Now: the captured amount is allocated to the
+invoice up to the balance and the remainder becomes an unappliedCredits
+row (status excess_received) plus a LIABILITY journal against new chart
+account 2400 "Unapplied Customer Credits" (Bank Dr / 2400 Cr) — the
+customer's money stays on the books, visible and refundable. Full
+over-payments on already-settled invoices record 100% as unapplied
+credit the same way. Schema additions: unappliedCredits and
+refundRequests tables (both indexed).
+
+## 5. Refund + renewal semantics (code + doc)
+Refunds moved to a real state machine: requestRefund (billing.payment
+capability) creates a refundRequests row (status "requested") and marks
+the payment refund_pending BEFORE the provider call; the books (invoice
+amountPaid, payment refundedMinor/partial status, refund journal) move
+ONLY on provider confirmation (markRefundProcessedInternal); provider
+rejection records "failed" with the reason and moves nothing; retries
+after failure are possible (lock released); over-refunding is refused
+against the remaining refundable amount. A REAL DEFECT was caught by
+the fixture test: the refund journal dedupe key was refund:<amount>, so
+two distinct partial refunds of the same amount on one payment collided
+and the second journal never posted — the key is now refund:<refundRequestId>.
+Renewals documented honestly: manual per-period payment links, NOT
+recurring subscriptions; no mandate/subscription lifecycle events; if
+recurring is ever enabled, Razorpay Subscriptions events must be
+integrated rather than assuming ordinary payment events suffice.
+
+## 6. Server-side validation of webhook-authorized money (code)
+A valid signature alone no longer authorizes invoice association: the
+event's link/order ids must match the invoice's STORED paymentLinkId/
+paymentOrderId (mismatch → RECONCILIATION EXCEPTION audit entry, nothing
+applied); event currency must equal the organization's billing currency
+(mismatch → refused); provider-reported currency and payment method are
+now recorded on the payments row instead of assuming UPI; non-money
+events (payment.failed, refund.*) are audit-logged only and never touch
+invoice state. Tampered-reference and wrong-currency fixture tests pass.
+
+## 7. Real test-mode execution + browser steps — still blocked
+RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET / RAZORPAY_WEBHOOK_SECRET are
+absent from deployment moonlit-elk-307; the tier-2 checklist (8 steps,
+section 4 of docs/RAZORPAY_SETUP.md) is written and ready but NOT
+executed. Browser checkout (tier 3) remains blocked by environment
+limits. Secrets stay in the Convex deployment env vars only (platform
+Keys tab / dashboard; verify via env list --names-only); no test-mode
+live charges, no live mode.
+
+## Environment/tooling notes (this turn)
+- The str_replace quirk hit schema.ts, finance.ts and billing.ts again;
+  the validated bun splice script pattern (anchor-checked) was used.
+- The platform guard now blocks terminal commands while Convex files are
+  type-broken, and convex dev --once refuses to write _generated while
+  its own typecheck fails — the working sequence is:
+  convex dev --once --typecheck=disable (to regenerate), then tsc.
+- The stale _generated snapshot produced confusing "does not exist on
+  type" errors that persisted even for runtime-correct code.
+
+## State at end of turn
+- bunx convex dev --once: clean (schema pushed: by_provider_payment
+  index, unappliedCredits, refundRequests, account 2400).
+- bunx tsc -b --noEmit: clean.
+- bun run test: 32 files, 519/519 pass (13 payments tests).
+- OPEN QUESTIONS FOR OWNER: merchant-ownership decision (section 1 of
+  docs/RAZORPAY_SETUP.md); Razorpay test keys for tier-2 execution;
+  OPENAI_API_KEY still not visible to the deployment (model checklist
+  steps 3, 13–15 still blocked). Browser verification pending. Nothing
+  here claims legal correctness or production readiness.

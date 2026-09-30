@@ -648,6 +648,28 @@ export const reconcileSaasPaymentInternal = internalMutation({
       .withIndex("by_link", (q) => q.eq("paymentLinkId", args.paymentLinkId!))
       .collect();
     const sub = subs[0];
+
+    // Cross-event-type dedupe: payment.captured, payment_link.paid and
+    // order.paid can ALL announce the same underlying payment. The event
+    // id differs, so the by_event check above passes for each of them —
+    // dedupe on the provider PAYMENT id instead: a payment that has
+    // already renewed a subscription never renews anything again.
+    if (sub && sub.providerPaymentId && sub.providerPaymentId === args.providerPaymentId) {
+      const dupNote = `Duplicate across event types for payment ${args.providerPaymentId} — already applied.`;
+      if (existing) {
+        await ctx.db.patch(existing._id, { handledAt: now(), note: dupNote });
+      } else {
+        await ctx.db.insert("saasPaymentEvents", {
+          eventId: args.eventId,
+          eventType: args.eventType,
+          payload: args.payloadJson.slice(0, 8000),
+          note: dupNote,
+          handledAt: now(),
+          createdAt: now(),
+        });
+      }
+      return { applied: false, reason: "payment-already-recorded" };
+    }
     if (!sub) {
       if (existing) {
         await ctx.db.patch(existing._id, { handledAt: now(), note: "No matching subscription." });

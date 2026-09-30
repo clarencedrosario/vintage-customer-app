@@ -1137,11 +1137,23 @@ export const reconcileWebhookInternal = internalMutation({
           )),
         });
       }
+      const dupNote = `Duplicate across event types for payment ${args.providerPaymentId}.`;
       if (existing) {
         await ctx.db.patch(existing._id, {
           handled: true,
           handledAt: Date.now(),
-          note: `Duplicate across event types for payment ${args.providerPaymentId}.`,
+          note: dupNote,
+        });
+      } else {
+        await ctx.db.insert("paymentEvents", {
+          orgId,
+          eventId: args.eventId,
+          eventType: args.eventType,
+          payload: args.payloadJson.slice(0, 8000),
+          handled: true,
+          handledAt: Date.now(),
+          note: dupNote,
+          createdAt: Date.now(),
         });
       }
       return { applied: false, reason: "payment-already-recorded" };
@@ -1168,11 +1180,23 @@ export const reconcileWebhookInternal = internalMutation({
             `RECONCILIATION EXCEPTION — event ${args.eventType} (${args.eventId}) for ${fmtINR(args.amountMinor)} names link/order ${args.paymentLinkId ?? "—"}/${args.providerOrderId ?? "—"} but invoice ${invoice.number} stores ${storedLink ?? "—"}/${storedOrder ?? "—"}. Money NOT applied; review before acting.`,
           )),
         });
+        const mismatchNote = "Association mismatch — not applied.";
         if (existing) {
           await ctx.db.patch(existing._id, {
             handled: true,
             handledAt: Date.now(),
-            note: "Association mismatch — not applied.",
+            note: mismatchNote,
+          });
+        } else {
+          await ctx.db.insert("paymentEvents", {
+            orgId,
+            eventId: args.eventId,
+            eventType: args.eventType,
+            payload: args.payloadJson.slice(0, 8000),
+            handled: true,
+            handledAt: Date.now(),
+            note: mismatchNote,
+            createdAt: Date.now(),
           });
         }
         return { applied: false, reason: "association-mismatch" };
@@ -1229,6 +1253,7 @@ export const reconcileWebhookInternal = internalMutation({
           providerPaymentId: args.providerPaymentId,
           providerOrderId: args.providerOrderId,
           currency: args.currency,
+          createdAt: Date.now(),
         });
         await ctx.db.insert("unappliedCredits", {
           orgId: invoice.orgId,
@@ -1283,6 +1308,7 @@ export const reconcileWebhookInternal = internalMutation({
         providerPaymentId: args.providerPaymentId,
         providerOrderId: args.providerOrderId,
         currency: args.currency,
+        createdAt: Date.now(),
       });
       // Excess money is never discarded from the records: the invoice
       // allocation is capped, and the remainder is an explicitly tracked
@@ -1487,6 +1513,7 @@ export const markRefundProcessedInternal = internalMutation({
         amountMinor: request.amountMinor,
         reason: request.reason?.trim() || "Provider refund",
         actorId: request.requestedById ?? invoice.createdBy,
+        refundRequestId: args.refundRequestId,
       });
     }
     return { applied: true };

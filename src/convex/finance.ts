@@ -754,6 +754,10 @@ export const postRefundJournalInternal = internalMutation({
     amountMinor: v.number(),
     reason: v.string(),
     actorId: v.id("users"),
+    // Dedupe scope: two DISTINCT refunds of the same amount on the same
+    // payment are legitimate (two partial refunds) and must each post —
+    // only a replay of the SAME refund request is a duplicate.
+    refundRequestId: v.optional(v.id("refundRequests")),
   },
   handler: async (ctx, args) => {
     const payment = await ctx.db.get(args.paymentId);
@@ -772,7 +776,9 @@ export const postRefundJournalInternal = internalMutation({
     const dedupeKey = journalDedupeKey(
       "billing",
       payment._id,
-      `refund:${args.amountMinor}`,
+      args.refundRequestId
+        ? `refund:${args.refundRequestId}`
+        : `refund:${args.amountMinor}`,
     );
     const dupe = await ctx.db
       .query("journalEntries")
