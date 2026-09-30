@@ -2320,6 +2320,292 @@ export default defineSchema({
     storageId: v.optional(v.id("_storage")),
   }).index("by_org", ["orgId"]),
 
+  // =====================================================================
+  // ADVANCED MATTER INTELLIGENCE & AI LEGAL ASSOCIATE (section 27)
+  // =====================================================================
+
+  // Lawyer-curated facts of a matter. Every fact carries an explicit
+  // epistemic status; the AI may PROPOSE facts but only a lawyer moves
+  // anything into "confirmed". Corrections are versioned, never
+  // destructive.
+  matterFacts: defineTable({
+    orgId: v.id("organizations"),
+    matterId: v.id("matters"),
+    // Stable within the matter so versions/corrections can reference
+    // the same fact across rows.
+    factKey: v.string(),
+    statement: v.string(),
+    // "allegation" = claimed by a party, unverified.
+    // "extracted" = AI-proposed from a source, awaiting review.
+    // "disputed" = contradicted by another source/fact.
+    // "confirmed" = lawyer-verified (and only these feed summaries and
+    // draft pre-fill).
+    status: v.union(
+      v.literal("allegation"),
+      v.literal("extracted"),
+      v.literal("disputed"),
+      v.literal("confirmed"),
+      v.literal("rejected"),
+    ),
+    // The document + the versioned extracted-text row the fact came
+    // from (source-linking; aiSources rows are per version/page).
+    sourceDocumentId: v.optional(v.id("matterDocuments")),
+    sourceAiSourceId: v.optional(v.id("aiSources")),
+    // Precise pinpoint references (page/paragraph/page:para).
+    sourceRefs: v.optional(
+      v.array(
+        v.object({
+          page: v.optional(v.number()),
+          paragraph: v.optional(v.number()),
+          quote: v.optional(v.string()),
+        }),
+      ),
+    ),
+    // Corroboration/contradiction links between facts.
+    contradictsFactId: v.optional(v.id("matterFacts")),
+    supersededById: v.optional(v.id("matterFacts")),
+    // Structured bits the extractor may propose (all optional).
+    occurredOn: v.optional(v.string()), // YYYY-MM-DD
+    partyName: v.optional(v.string()),
+    amountMinor: v.optional(v.number()),
+    // Governance.
+    proposedBy: v.optional(v.string()), // "ai" | userId
+    proposedById: v.optional(v.id("users")),
+    confirmedById: v.optional(v.id("users")),
+    confirmedAt: v.optional(v.number()),
+    rejectedReason: v.optional(v.string()),
+    correctionOfId: v.optional(v.id("matterFacts")), // version chain
+    version: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_matter", ["matterId"])
+    .index("by_org", ["orgId"])
+    .index("by_fact_key", ["matterId", "factKey"]),
+
+  // Version history for fact corrections (the chain, not just the tip).
+  matterFactRevisions: defineTable({
+    orgId: v.id("organizations"),
+    matterId: v.id("matters"),
+    factId: v.id("matterFacts"),
+    priorStatus: v.string(),
+    priorStatement: v.string(),
+    newStatus: v.string(),
+    newStatement: v.string(),
+    changedById: v.id("users"),
+    note: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_fact", ["factId"]),
+
+  // Contradiction candidates detected between facts/documents.
+  matterContradictions: defineTable({
+    orgId: v.id("organizations"),
+    matterId: v.id("matters"),
+    factAId: v.id("matterFacts"),
+    factBId: v.id("matterFacts"),
+    // "open" → "resolved_favoring_a" | "resolved_favoring_b" | "not_a_contradiction"
+    status: v.union(
+      v.literal("open"),
+      v.literal("resolved_favoring_a"),
+      v.literal("resolved_favoring_b"),
+      v.literal("not_a_contradiction"),
+    ),
+    explanation: v.optional(v.string()),
+    resolvedById: v.optional(v.id("users")),
+    resolvedAt: v.optional(v.number()),
+    createdAt: v.number(),
+  })
+    .index("by_matter_status", ["matterId", "status"]),
+
+  // AI document analyses (facts/dates/parties/obligations/amounts/issues)
+  // per document version; regenerate → new analysis row, old preserved.
+  documentAnalyses: defineTable({
+    orgId: v.id("organizations"),
+    matterId: v.id("matters"),
+    documentId: v.id("matterDocuments"),
+    aiSourceId: v.optional(v.id("aiSources")),
+    analysisVersion: v.number(),
+    status: v.union(
+      v.literal("proposed"),
+      v.literal("reviewed"),
+    ),
+    proposedFacts: v.array(
+      v.object({
+        factKey: v.string(),
+        statement: v.string(),
+        status: v.literal("allegation"),
+        page: v.optional(v.number()),
+        paragraph: v.optional(v.number()),
+        quote: v.optional(v.string()),
+        occurredOn: v.optional(v.string()),
+        partyName: v.optional(v.string()),
+        amountMinor: v.optional(v.number()),
+      }),
+    ),
+    dates: v.array(
+      v.object({ date: v.string(), context: v.optional(v.string()) }),
+    ),
+    parties: v.array(v.string()),
+    obligations: v.array(
+      v.object({ text: v.string(), ref: v.optional(v.string()) }),
+    ),
+    amounts: v.array(
+      v.object({ amountMinor: v.number(), context: v.optional(v.string()) }),
+    ),
+    issues: v.array(v.string()),
+    duplicatesOfDocumentId: v.optional(v.id("matterDocuments")),
+    missingInformation: v.array(v.string()),
+    model: v.optional(v.string()),
+    createdById: v.optional(v.id("users")),
+    createdAt: v.number(),
+  })
+    .index("by_document", ["documentId"])
+    .index("by_matter", ["matterId"]),
+
+  // Versioned, citation-checked matter summaries.
+  matterSummaries: defineTable({
+    orgId: v.id("organizations"),
+    matterId: v.id("matters"),
+    summaryVersion: v.number(),
+    body: v.string(),
+    // Content hash of inputs — changes when sources change; a mismatch
+    // marks older summaries stale (prior versions preserved).
+    inputsHash: v.string(),
+    stale: v.boolean(),
+    // Per-citation backend checks (same machinery as the research
+    // workspace: quote verification ≠ conclusion support — that call
+    // stays with the lawyer).
+    citationChecks: v.optional(
+      v.array(
+        v.object({
+          stableKey: v.string(),
+          anchorValid: v.boolean(),
+          quoteVerified: v.boolean(),
+          note: v.optional(v.string()),
+        }),
+      ),
+    ),
+    findings: v.array(
+      v.object({
+        kind: v.string(), // obligation|defined_term|inconsistency|missing_clause|compliance|question
+        passage: v.string(),
+        sourceKey: v.optional(v.string()),
+        explanation: v.string(),
+        missingFacts: v.optional(v.string()),
+        suggestedStep: v.optional(v.string()),
+      }),
+    ),
+    generatedBy: v.optional(v.string()), // model name or "deterministic"
+    createdById: v.optional(v.id("users")),
+    createdAt: v.number(),
+  })
+    .index("by_matter", ["matterId"]),
+
+  // Governed template library (target 300+; count reported honestly).
+  draftTemplates: defineTable({
+    orgId: v.id("organizations"),
+    key: v.string(),
+    title: v.string(),
+    docType: v.string(), // legal_notice|petition|agreement|affidavit|...
+    practiceArea: v.string(),
+    jurisdiction: v.string(), // "in", "in-mh", "eu-…" — matter jurisdiction wins when set
+    version: v.number(),
+    reviewDueOn: v.optional(v.string()),
+    authorSource: v.string(),
+    usageRights: v.string(),
+    approvalStatus: v.union(
+      v.literal("draft"),
+      v.literal("approved"),
+      v.literal("retired"),
+    ),
+    approvedById: v.optional(v.id("users")),
+    approvedAt: v.optional(v.number()),
+    requiredFields: v.array(
+      v.object({
+        key: v.string(),
+        label: v.string(),
+        kind: v.union(
+          v.literal("text"),
+          v.literal("date"),
+          v.literal("amount"),
+          v.literal("party"),
+          v.literal("court"),
+        ),
+        required: v.boolean(),
+        prefillFrom: v.optional(v.string()), // approved-fact/matter field key
+      }),
+    ),
+    optionalClauses: v.array(
+      v.object({
+        key: v.string(),
+        label: v.string(),
+        body: v.string(),
+        isDefault: v.boolean(),
+      }),
+    ),
+    bodyTemplate: v.string(),
+    instructions: v.string(),
+    limitations: v.string(),
+    createdById: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_status", ["orgId", "approvalStatus"]),
+
+  // A lawyer's use of a template on a matter (rendered draft snapshot).
+  templateUses: defineTable({
+    orgId: v.id("organizations"),
+    matterId: v.id("matters"),
+    templateId: v.id("draftTemplates"),
+    templateVersion: v.number(),
+    // Filled values, provenance-tagged (approved fact vs user-typed).
+    values: v.array(
+      v.object({
+        key: v.string(),
+        value: v.string(),
+        source: v.union(
+          v.literal("approved_fact"),
+          v.literal("matter_field"),
+          v.literal("user"),
+          v.literal("missing"),
+        ),
+      }),
+    ),
+    renderedBody: v.string(),
+    missingPlaceholders: v.array(v.string()),
+    createdById: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_matter", ["matterId"])
+    .index("by_template", ["templateId"]),
+
+  // AI-suggested tasks awaiting lawyer approval (never auto-created).
+  taskSuggestions: defineTable({
+    orgId: v.id("organizations"),
+    matterId: v.id("matters"),
+    title: v.string(),
+    rationale: v.string(),
+    // Source of the suggestion (order id, document, approved fact...).
+    sourceKind: v.union(
+      v.literal("order"),
+      v.literal("document"),
+      v.literal("approved_fact"),
+      v.literal("hearing"),
+    ),
+    sourceId: v.optional(v.string()),
+    sourceRef: v.optional(v.string()),
+    proposedDueOn: v.optional(v.string()), // calculated proposal only
+    dueBasis: v.optional(v.string()), // e.g. "order date + 30 days"
+    // proposed → approved (task created) | dismissed
+    status: v.union(v.literal("proposed"), v.literal("approved"), v.literal("dismissed")),
+    approvedById: v.optional(v.id("users")),
+    dismissedReason: v.optional(v.string()),
+    createdTaskId: v.optional(v.id("tasks")),
+    createdAt: v.number(),
+  })
+    .index("by_matter_status", ["matterId", "status"]),
   // ---------------- GitHub integration ----------------
   // One row per organization. The token lives ONLY in the server-side
   // environment (Keys tab → GITHUB_TOKEN); the browser never sees it.
