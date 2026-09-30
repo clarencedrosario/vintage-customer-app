@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { mutation, query, type MutationCtx } from "./_generated/server";
 import { requireAccess, requireCapability, getAccessContext } from "./access";
 import { sha256Hex } from "./crypto";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -10,6 +10,26 @@ import type { Doc, Id } from "./_generated/dataModel";
 // are preserved. A document change flags affected APPROVED entries as
 // "needs_review" instead of silently rewriting the accepted chronology.
 // =====================================================================
+
+/**
+ * Binding hash for an approved entry: the exact source TEXT the entry
+ * was approved against ("none" when the entry has no AI source), plus
+ * its title/date. When the underlying source row's text changes (new
+ * version), the recomputed hash no longer matches the stored one —
+ * that mismatch is what flips the entry to needs_review. Title/date
+ * alone would never change and could not detect a source edit.
+ */
+async function sourceBindingHash(
+  ctx: MutationCtx,
+  sourceAiSourceId: Id<"aiSources"> | undefined,
+  title: string,
+  date: string,
+): Promise<string> {
+  if (!sourceAiSourceId) return sha256Hex(`none:${title}:${date}`);
+  const src = (await ctx.db.get(sourceAiSourceId)) as Doc<"aiSources"> | null;
+  const contentHash = src ? sha256Hex(src.text) : "none";
+  return sha256Hex(`${contentHash}:${title}:${date}`);
+}
 
 /** All timeline entries for a matter (newest date first). */
 export const list = query({
@@ -112,6 +132,60 @@ export const proposeFromAnalysis = mutation({
   },
 });
 
+/**
+ * Lawyer adds an entry directly (from instructions, hearings or approved
+ * updates — not from an AI extraction). A lawyer-authored entry IS the
+ * human approval, so it enters the chronology approved, with provenance
+ * `lawyer` and its own binding hash for later source-change sweeps.
+ */
+export const proposeEntry = mutation({
+  args: {
+    matterId: v.id("matters"),
+    entryKind: v.union(
+      v.literal("event"),
+      v.literal("document"),
+      v.literal("filing"),
+      v.literal("proposed_deadline"),
+    ),
+    title: v.string(),
+    date: v.string(),
+    detail: v.optional(v.string()),
+    datePrecision: v.optional(
+      v.union(v.literal("exact"), v.literal("approximate"), v.literal("uncertain")),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    requireCapability(ac, "note.write");
+    const matter = await ctx.db.get(args.matterId);
+    if (!matter || matter.orgId !== ac.org._id) {
+      throw new Error("Matter not found in this organization.");
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(args.date)) {
+      throw new Error("Date must be YYYY-MM-DD.");
+    }
+    if (!args.title.trim()) throw new Error("Title is required.");
+    const id = (await ctx.db.insert("matterTimeline", {
+      orgId: ac.org._id,
+      matterId: args.matterId,
+      entryKind: args.entryKind,
+      title: args.title.trim().slice(0, 300),
+      detail: args.detail?.trim().slice(0, 500),
+      date: args.date,
+      datePrecision: args.datePrecision ?? "exact",
+      status: "approved",
+      proposedBy: "lawyer",
+      approvedById: ac.user._id,
+      approvedAt: Date.now(),
+      approvedInputsHash: await sourceBindingHash(ctx, undefined, args.title.trim(), args.date),
+      version: 1,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })) as Id<"matterTimeline">;
+    return { entryId: id };
+  },
+});
+
 /** Lawyer approves a proposed entry. */
 export const approve = mutation({
   args: { entryId: v.id("matterTimeline") },
@@ -141,10 +215,9 @@ export const approve = mutation({
       status: "approved",
       approvedById: ac.user._id,
       approvedAt: Date.now(),
-      // Snapshot the current source inputs so later changes are detectable.
-      approvedInputsHash: sha256Hex(
-        `${e.sourceAiSourceId ?? "none"}:${e.title}:${e.date}`,
-      ),
+      // Snapshot the exact source text this entry was approved against
+      // so later source changes are detectable.
+      approvedInputsHash: await sourceBindingHash(ctx, e.sourceAiSourceId, e.title, e.date),
       updatedAt: Date.now(),
     });
     return { approved: true };
@@ -212,7 +285,7 @@ export const correct = mutation({
       proposedBy: e.proposedBy,
       approvedById: ac.user._id,
       approvedAt: Date.now(),
-      approvedInputsHash: sha256Hex(`${e.sourceAiSourceId ?? "none"}:${args.title}:${args.date}`),
+      approvedInputsHash: await sourceBindingHash(ctx, e.sourceAiSourceId, args.title.trim(), args.date),
       version: e.version + 1,
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -319,14 +392,19 @@ export const flagAffectedBySourceChange = mutation({
       .query("matterTimeline")
       .withIndex("by_matter", (q) => q.eq("matterId", src.matterId))
       .collect();
+    // sourceBindingHash re-reads the CURRENT source text, so any entry
+    // approved against an older text no longer matches.
     let flagged = 0;
     for (const e of entries) {
       if (e.status !== "approved") continue;
       if (e.sourceAiSourceId !== args.aiSourceId) continue;
-      const currentHash = sha256Hex(`${e.sourceAiSourceId ?? "none"}:${e.title}:${e.date}`);
-      // The source snapshot changed → review (hash equality is the
-      // cheap detector; the analysis layer re-runs for detail).
-      if (e.approvedInputsHash && e.approvedInputsHash !== currentHash) {
+      const currentHash = e.approvedInputsHash
+        ? await sourceBindingHash(ctx, e.sourceAiSourceId, e.title, e.date)
+        : undefined;
+      // The source text changed since approval → review (the hash
+      // mismatch is the detector; the accepted chronology itself is
+      // never rewritten here).
+      if (e.approvedInputsHash && currentHash && e.approvedInputsHash !== currentHash) {
         await ctx.db.patch(e._id, { status: "needs_review", updatedAt: Date.now() });
         flagged += 1;
       }

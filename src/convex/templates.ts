@@ -559,6 +559,13 @@ export const saveUse = mutation({
     if (t.approvalStatus !== "approved") {
       throw new Error("Only APPROVED templates can be used for drafting — approve it first.");
     }
+    // Tenant isolation: a draft may only be filed under a matter of the
+    // SAME organization (a cross-tenant matterId would leak the draft
+    // into another firm's workspace).
+    const matter = await ctx.db.get(args.matterId);
+    if (!matter || matter.orgId !== ac.org._id) {
+      throw new Error("Matter not found in this organization.");
+    }
     if (args.renderedBody.length > MAX_TEMPLATE_BODY) {
       throw new Error("Rendered draft too large.");
     }

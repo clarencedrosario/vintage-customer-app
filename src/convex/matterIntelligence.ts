@@ -878,23 +878,38 @@ export const health = query({
     const now = Date.now();
     const today = todayIST();
 
-    const [tasks, contradictions, analyses, facts] = await Promise.all([
-      ctx.db.query("tasks").collect(),
-      ctx.db
-        .query("matterContradictions")
-        .withIndex("by_matter_status", (q) =>
-          q.eq("matterId", args.matterId).eq("status", "open"),
-        )
-        .collect(),
-      ctx.db
-        .query("documentAnalyses")
-        .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))
-        .collect(),
-      ctx.db
-        .query("matterFacts")
-        .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))
-        .collect(),
-    ]);
+    const [tasks, contradictions, analyses, facts, orders, hearings, docRequests] =
+      await Promise.all([
+        ctx.db.query("tasks").collect(),
+        ctx.db
+          .query("matterContradictions")
+          .withIndex("by_matter_status", (q) =>
+            q.eq("matterId", args.matterId).eq("status", "open"),
+          )
+          .collect(),
+        ctx.db
+          .query("documentAnalyses")
+          .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))
+          .collect(),
+        ctx.db
+          .query("matterFacts")
+          .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))
+          .collect(),
+        ctx.db
+          .query("orders")
+          .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))
+          .collect(),
+        ctx.db
+          .query("hearings")
+          .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))
+          .collect(),
+        ctx.db
+          .query("documentRequests")
+          .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))
+          .collect(),
+      ]);
+
+    const FOURTEEN_DAYS = 14 * 86_400_000;
 
     // 1. Overdue tasks (explicit: status not done, dueAt in the past).
     const matterTasks = (tasks as Doc<"tasks">[]).filter(
@@ -962,10 +977,93 @@ export const health = query({
           : "No stale summaries.",
         inputs: staleSummaries.slice(0, 5).map((s) => ({ id: s._id, version: s.summaryVersion })),
       },
+      // §28.4 — extended operational indicators. Same discipline:
+      // deterministic rules, visible inputs, no probabilities. Orders
+      // are matter-scoped (no orgId) — the matter was org-verified above.
+      {
+        key: "unreviewed_orders",
+        status:
+          orders.filter((o) => o.reviewedAt === undefined).length > 0
+            ? "attention"
+            : "ok",
+        reason:
+          orders.filter((o) => o.reviewedAt === undefined).length > 0
+            ? `${orders.filter((o) => o.reviewedAt === undefined).length} order(s) not yet marked reviewed.`
+            : "All orders reviewed.",
+        inputs: orders
+          .filter((o) => o.reviewedAt === undefined)
+          .slice(0, 5)
+          .map((o) => ({ id: o._id, title: o.title, passedOn: o.passedOn })),
+      },
+      {
+        key: "missing_evidence",
+        status:
+          analyses.some(
+            (a) => a.orgId === ac.org._id && (a.missingInformation ?? []).length > 0,
+          )
+            ? "attention"
+            : "ok",
+        reason: analyses.some(
+          (a) => a.orgId === ac.org._id && (a.missingInformation ?? []).length > 0,
+        )
+          ? "Extraction flagged missing or unclear material in analysed document(s)."
+          : "No missing-material flags from extraction.",
+        inputs: analyses
+          .filter((a) => a.orgId === ac.org._id && (a.missingInformation ?? []).length > 0)
+          .slice(0, 5)
+          .map((a) => ({ id: a._id, missing: (a.missingInformation ?? []).slice(0, 3) })),
+      },
+      {
+        key: "upcoming_hearings",
+        status:
+          hearings.some(
+            (h) =>
+              h.status === "scheduled" && h.at >= now - 6 * 3600_000 && h.at <= now + FOURTEEN_DAYS,
+          )
+            ? "attention"
+            : "ok",
+        reason: hearings.some(
+          (h) =>
+            h.status === "scheduled" && h.at >= now - 6 * 3600_000 && h.at <= now + FOURTEEN_DAYS,
+        )
+          ? `Scheduled hearing(s) within the next 14 days.`
+          : "No scheduled hearings in the next 14 days.",
+        inputs: hearings
+          .filter(
+            (h) =>
+              h.status === "scheduled" && h.at >= now - 6 * 3600_000 && h.at <= now + FOURTEEN_DAYS,
+          )
+          .slice(0, 5)
+          .map((h) => ({ id: h._id, title: h.title, at: h.at, court: h.court })),
+      },
+      {
+        key: "unanswered_client_requests",
+        status:
+          docRequests.filter((r) => r.orgId === ac.org._id && r.status === "requested").length > 0
+            ? "attention"
+            : "ok",
+        reason:
+          docRequests.filter((r) => r.orgId === ac.org._id && r.status === "requested").length > 0
+            ? `${docRequests.filter((r) => r.orgId === ac.org._id && r.status === "requested").length} client document request(s) awaiting upload.`
+            : "No unanswered client document requests.",
+        inputs: docRequests
+          .filter((r) => r.orgId === ac.org._id && r.status === "requested")
+          .slice(0, 5)
+          .map((r) => ({ id: r._id, title: r.title, dueAt: r.dueAt })),
+      },
     ];
 
     void today;
-    return { indicators, checkedAt: now };
+    return {
+      indicators,
+      // §28.4: the rule set is documented and versioned — changes to
+      // thresholds/rules bump the version so historical reads of the
+      // dashboard remain interpretable.
+      rulesVersion: "v1",
+      rulesNote:
+        "Deterministic threshold rules with visible inputs. Operational health only — separate from legal merits. No probabilities, no unexplained scores.",
+      checkedAt: now,
+    };
   },
 });
 
