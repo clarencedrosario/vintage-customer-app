@@ -95,11 +95,18 @@ export const proposeFromAnalysis = mutation({
     for (const d of analysis.dates) {
       const context = (d.context ?? "").toLowerCase();
       // Date-kind classification from the surrounding text (deterministic;
-      // ambiguous cases are marked uncertain).
+      // ambiguous cases are marked uncertain). Explicit legal-event
+      // language ("cause of action arose") marks an EVENT even when a
+      // document word appears in the same sentence window.
       let entryKind: "event" | "document" | "filing" | "proposed_deadline" = "event";
       let precision: "exact" | "approximate" | "uncertain" = "exact";
-      if (/filed|instituted|registered|presented/.test(context)) entryKind = "filing";
-      else if (/dated|agreement|invoice|notice|receipt|deed/.test(context)) entryKind = "document";
+      if (/cause of action|arose|defaulted/.test(context)) {
+        entryKind = "event";
+      } else if (/filed|instituted|registered|presented/.test(context)) {
+        entryKind = "filing";
+      } else if (/dated|agreement|invoice|notice|receipt|deed/.test(context)) {
+        entryKind = "document";
+      }
       if (/approx|around|on or about|circa/.test(context)) precision = "approximate";
       if (/unclear|illegible|not legible/.test(context)) precision = "uncertain";
 

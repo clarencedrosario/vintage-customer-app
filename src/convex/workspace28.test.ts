@@ -426,11 +426,8 @@ describe("§28 independently developed workspace", () => {
     // TAMPER: modify a chained row's detail directly in the database —
     // exactly what a tamper-evident log exists to catch.
     const target = await asUser(t, "system").run(async (ctx) => {
-      const rows = await ctx.db
-        .query("auditLog")
-        .withIndex("by_org", (q) => q.eq("orgId", orgId as never))
-        .collect();
-      return rows.find((r) => r.seq === 2)!;
+      const rows = await ctx.db.query("auditLog").collect();
+      return rows.find((r) => String(r.orgId) === String(orgId) && r.seq === 2);
     });
     await asUser(t, "system").run(async (ctx) =>
       ctx.db.patch(target!._id, { detail: "TAMPERED DETAIL" }),
@@ -531,15 +528,48 @@ describe("§28 independently developed workspace", () => {
     expect(p!.extractedDatesAwaitingReview).toEqual([]);
 
     // A proposed task suggestion lands ONLY in the AI-proposals bucket
-    // (proposed dates are never shown as verified deadlines).
-    await owner.mutation(api.taskSuggestions.proposeFromMatter, {
+    // (proposed dates are never shown as verified deadlines). Seed a
+    // REVIEWED analysis with missing material so proposeFromMatter has
+    // something real to propose from.
+    const documentId = await asUser(t, "system").run(async (ctx) =>
+      ctx.db.insert("matterDocuments", {
+        matterId: matterId as never,
+        uploaderId: ownerId as never,
+        name: "Plaint (synthetic)",
+        kind: "document" as const,
+        visibility: "internal" as const,
+        createdAt: now,
+      }),
+    );
+    const sourceId = await owner.mutation(api.ai.addSource, {
+      matterId: matterId as never,
+      documentId: documentId as never,
+      name: "Plaint (synthetic)",
+      role: "our_client",
+      text: "Notice dated 12/05/2025. Amount of Rs. 4,50,000 remains unpaid.",
+      extraction: "text_layer",
+    });
+    await owner.mutation(api.matterIntelligence.analyseSource, {
+      aiSourceId: sourceId as never,
+    });
+    const analyses = await owner.query(api.matterIntelligence.analyses, {
       matterId: matterId as never,
     });
+    // Importing proposals marks the analysis reviewed (the lawyer has
+    // seen its output) — that is what makes its missing-material flag
+    // eligible for task proposals.
+    await owner.mutation(api.matterIntelligence.importAnalysisFacts, {
+      analysisId: analyses[0]!._id as never,
+    });
+    const proposalResult = await owner.mutation(api.taskSuggestions.proposeFromMatter, {
+      matterId: matterId as never,
+    });
+    expect(proposalResult.created).toBeGreaterThanOrEqual(1);
     const p2 = await owner.query(api.dailyPriorities.priorities, {
       matterId: matterId as never,
     });
     expect(p2!.counts.proposedTasks).toBeGreaterThanOrEqual(1);
-    expect(p2!.aiProposalsAwaitingApproval[0]!.dueBasis).toBeDefined();
+    expect(p2!.aiProposalsAwaitingApproval[0]!.rationale).toBeDefined();
   });
 
   it("provenance register: seeds actual dependencies, flags the uncertain licence, blocks non-admin edits", async () => {

@@ -99,7 +99,7 @@ export const append = mutation({
       prevHash,
       entryHash,
     })) as Id<"auditLog">;
-    return { seq, entryHash, id };
+    return { seq, entryHash, prevHash, id };
   },
 });
 

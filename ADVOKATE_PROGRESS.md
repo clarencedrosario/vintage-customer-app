@@ -4,7 +4,7 @@ Durable progress file so development resumes without repeating completed work.
 Companion to `ADVOKATE_REQUIREMENTS.md` (the master checklist). Handoff log also
 maintained in `docs/DELIVERY.md`.
 
-Last checkpoint: **30 September 2026** — latest record: **Turn 11** (bottom section); turn 10 and turn 9 summaries below.
+Last checkpoint: **30 September 2026** — latest record: **Turn 14** (bottom section); turn 13 and earlier summaries below.
 
 ---
 
@@ -1939,3 +1939,117 @@ HONEST LIMITS / BLOCKED
 - Two-way calendar sync + cause-list auto-matching: staged.
 - DPDP/privacy review and qualified legal review: OUTSTANDING, recorded.
 - Browser verification of the new workspace surfaces: pending as usual.
+
+## Turn-14 — 30 Sep 2026: Independently Developed Legal Workspace Features (§28)
+
+Implemented the §28 functional specification as original Advokate work on the
+existing modules — nothing duplicated, no competitor content used. Neutral
+working module names; not represented as trademark-cleared.
+
+### BUILT (all new code in src/convex/, schema already pushed turn-14 start)
+
+- **matterBriefs.ts** — source-linked, versioned, approval-gated briefs:
+  procedural position from the matter's legal profile; key facts ONLY from
+  lawyer-confirmed facts (each with source-ref label or an honest "no
+  reference" path); disputed/allegation/extracted points land in
+  disputedPoints labelled NOT established / UNVERIFIED; recent developments
+  from APPROVED chronology entries only; outstanding questions from
+  analyses' missing-information flags (+ an explicit no-confirmed-facts
+  warning); proposed next actions are suggestions only. inputsHash staleness:
+  regeneration with unchanged inputs returns "unchanged" honestly (no
+  version churn); changed inputs create a proposed version, mark prior
+  versions stale (preserved, never deleted) and record changesFromPrior
+  (per-section counts + procedural-position change). Stale versions refuse
+  approval; proposeBrief re-checks org/matter; approve requires note.write.
+  interpretationNote states verified-vs-machine-assembled and that reviewing
+  sources reduces but does not eliminate error.
+- **draftingRevisions.ts** — proposed edits on template uses as true diff
+  pairs: excerpt must EXIST in the current draft (stale proposals refused),
+  duplicates collapsed onto the open proposal, reason mandatory, riskLevel
+  info/caution/high. accept applies the replace AND snapshots bodyBefore;
+  undo restores the EXACT prior body and marks the row undone (traceable,
+  not an erasure); reject records the decision. addRiskComment /
+  resolveRiskComment pin potential-risk flags (excerpt/concern/reason/
+  sourceKey) that never auto-edit the draft. "One-click improvement" =
+  lawyer-approved proposed edit.
+- **dailyPriorities.ts** — per matter-day consolidation of REAL work items:
+  overdue tasks + open overdue deadlines, scheduled hearings in a
+  configurable window (cancelled/adjourned excluded), upcoming open
+  deadlines, unreviewed orders, unanswered document requests (status
+  "requested"), AI task proposals awaiting approval — with proposed
+  timeline dates + suggestion dueBasis kept in SEPARATE labelled buckets
+  (extracted/proposed dates never displayed as lawyer-verified deadlines).
+- **auditChain.ts** — hash chain over the existing auditLog: append computes
+  seq = max+1 (by_org_seq) and prevHash from the last entryHash (genesis
+  64×"0"), entryHash = sha256(prevHash|seq|actorId|action|detail|createdAt);
+  verify walks the org chain and reports seq breaks, linkage breaks,
+  recomputed-hash mismatches, and unchained legacy rows; backfillLegacy
+  folds pre-chain rows in createdAt order (idempotent). Coexists with the
+  legacy fail-silent writer. Copy positions this as tamper-EVIDENT, not
+  immutable (database remains the trust root).
+- **provenanceRegister.ts** — in-app third-party provenance register seeded
+  with the ACTUAL dependencies (react/react-dom/react-router/recharts/zod/
+  tailwind/framer-motion/@noble MIT, lucide ISC, @convex-dev/auth
+  Apache-2.0) and in-house template content (`proprietary (CJ GLOBAL)`);
+  Convex's source-available licence seeded as flagged_for_review with the
+  uncertainty stated; idempotent seed; owner/admin-only updateStatus.
+- **health extension (matterIntelligence.ts)** — 4 new indicators
+  (unreviewed_orders, missing_evidence, upcoming_hearings ≤14d,
+  unanswered_client_requests) with visible inputs, plus rulesVersion "v1"
+  and an operational-health ≠ legal-merits note; no probabilities/scores
+  (existing regex assertion still passes).
+- **caseTimeline.ts hardening** — the source-change detector previously
+  hashed only title:date (could never detect a source edit); approval now
+  binds to a hash of the CURRENT SOURCE TEXT + title/date, so
+  flagAffectedBySourceChange actually flips affected approved entries to
+  needs_review. Added proposeEntry (lawyer-authored entry, provenance
+  "lawyer") and event-language classification ("cause of action arose" =
+  event, not document).
+- **templates.ts tenant fix** — saveUse now verifies the matter belongs to
+  the caller's org (a cross-tenant matterId previously slipped past the
+  template check). Caught while writing the §28 tests.
+
+### TESTS
+
+- NEW workspace28.test.ts (8 tests): timeline lifecycle (propose →
+  approve → lawyer correction chains versions → source-text change flags
+  needs_review on corrected entries → re-approve → reject/merge; lawyer
+  entry enters approved); brief generate/unchanged/approve/staleness/
+  changesFromPrior/stale-refusal; revision propose/dupe-collapse/
+  refuse-foreign-excerpt/accept-with-bodyBefore/undo-restores-exact-body/
+  re-accept-refused + risk comment open→addressed; audit chain (legacy
+  backfill in createdAt order → verify ok → direct DB tamper → verify
+  fails at exact seq "Hash mismatch at seq 2"); daily priorities
+  composition (cancelled hearing excluded, deadline-source overdue,
+  reviewed-analysis proposal lands in AI bucket with rationale); provenance
+  seed honesty + idempotence + owner status update; health extended keys +
+  rulesVersion; cross-tenant denials across briefs/drafts/timeline/
+  priorities/audit.
+- Suite: **35 files / 539 tests green** (baseline 34/531 + 8 new).
+  bunx convex dev --once push clean; bun tsc -b --noEmit clean.
+
+### DOCS
+
+- docs/PROVENANCE.md (originality statement, verified licence table with
+  Convex flagged, data/font/dataset policy, template content provenance,
+  notices, register maintenance rules).
+- docs/DPDP_REVIEW.md (honest working record: assessment OUTSTANDING;
+  verified deployment facts — shared infrastructure with logical
+  isolation, no residency claim; personal-data inventory; implemented
+  controls; gap list; re-verify cadence).
+- ADVOKATE_REQUIREMENTS.md §28 appended with per-clause status.
+- .tmp-splices/ scratch directory deleted.
+
+### HONEST LIMITS / BLOCKED (unchanged, recorded)
+
+- Live-model enhancement of briefs/analysis: gated on OPENAI_API_KEY
+  reaching the deployment (deterministic core already provides
+  extraction, staleness, review governance).
+- Google Docs sync: blocked (no credentials); export usable.
+- Two-way calendar sync + cause-list auto-matching: staged (authorized-API
+  basis required).
+- Browser verification of new §28 surfaces: pending (automation
+  unavailable, as usual).
+- DPDP/privacy assessment and qualified legal/rights review (including the
+  Convex licence review): OUTSTANDING — recorded in docs/DPDP_REVIEW.md and
+  the provenance register, no claims made.
