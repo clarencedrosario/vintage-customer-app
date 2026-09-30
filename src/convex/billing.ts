@@ -990,9 +990,23 @@ export const attachConsultationLinkInternal = internalMutation({
 // ---------------------------------------------------------------------
 
 /**
- * Idempotently apply a verified payment.captured / payment_link.paid
- * event. The event id is the dedupe key: replays are recorded but never
- * double-applied.
+ * Idempotently apply a verified payment.captured / payment_link.paid /
+ * order.paid event. Two dedupe layers:
+ *   1. Per provider EVENT id — a redelivered event never applies twice
+ *      (paymentEvents.by_event).
+ *   2. Per provider PAYMENT id — payment.captured, payment_link.paid and
+ *      order.paid can all name the same underlying payment; exactly one
+ *      payments row may ever exist for it (payments.by_provider_payment),
+ *      whichever event arrives first. Cross-event duplicates are logged
+ *      in the invoice audit, never re-applied.
+ *
+ * A valid signature alone never authorizes invoice association: the
+ * stored payment link / order ids must agree with the event, the event
+ * amount must agree with the already-recorded payment for that id, and
+ * the provider currency must match the organization's billing currency.
+ * Association is accepted only through server-side records (reference_id
+ * invoice number, or a stored paymentLinkId) — never from the event
+ * payload alone.
  */
 export const reconcileWebhookInternal = internalMutation({
   args: {
@@ -1004,6 +1018,9 @@ export const reconcileWebhookInternal = internalMutation({
     paymentLinkId: v.optional(v.string()),
     referenceId: v.optional(v.string()), // invoice number or consult ref
     amountMinor: v.number(),
+    currency: v.optional(v.string()),
+    method: v.optional(v.string()),
+    logOnly: v.optional(v.boolean()), // non-money event: audit only
   },
   handler: async (ctx, args) => {
     const existing = await ctx.db
@@ -1061,6 +1078,107 @@ export const reconcileWebhookInternal = internalMutation({
       return { applied: false, reason: "no-target" };
     }
 
+    // Non-money events (payment.failed, refunds, etc.): audit only, never
+    // touch invoices. They still land in the event log so the audit shows
+    // everything the provider sent.
+    if (args.logOnly) {
+      if (existing) {
+        await ctx.db.patch(existing._id, { handled: true, handledAt: Date.now() });
+      } else {
+        await ctx.db.insert("paymentEvents", {
+          orgId,
+          eventId: args.eventId,
+          eventType: args.eventType,
+          payload: args.payloadJson.slice(0, 8000),
+          handled: true,
+          handledAt: Date.now(),
+          note: "Received — no reconciliation.",
+          createdAt: Date.now(),
+        });
+      }
+      return { applied: false, reason: "log-only" };
+    }
+
+    // ---- Cross-event-type dedupe: one provider payment, one money record.
+    // payment.captured, payment_link.paid and order.paid often all name the
+    // same payment; whichever event arrives first applies it once.
+    const samePayment = args.providerPaymentId
+      ? await ctx.db
+          .query("payments")
+          .withIndex("by_provider_payment", (q) =>
+            q.eq("providerPaymentId", args.providerPaymentId),
+          )
+          .first()
+      : null;
+    if (samePayment) {
+      const inv = await ctx.db.get(samePayment.invoiceId);
+      const amountDiscrepancy = samePayment.amountMinor !== args.amountMinor;
+      let excessCovered = false;
+      if (amountDiscrepancy && inv) {
+        const credits = await ctx.db
+          .query("unappliedCredits")
+          .withIndex("by_invoice", (q) => q.eq("invoiceId", inv._id))
+          .collect();
+        excessCovered = credits.some(
+          (c) => c.providerPaymentId === args.providerPaymentId,
+        );
+      }
+      if (inv) {
+        await ctx.db.patch(inv._id, {
+          ...(await audit(
+            inv,
+            "Razorpay webhook",
+            undefined,
+            amountDiscrepancy
+              ? excessCovered
+                ? `Event ${args.eventType} (${args.eventId}) names payment ${args.providerPaymentId} — already recorded (applied ${fmtINR(samePayment.amountMinor)} + unapplied customer credit); no double application.`
+                : `RECONCILIATION EXCEPTION — event ${args.eventType} (${args.eventId}) reports ${fmtINR(args.amountMinor)} but payment ${args.providerPaymentId} was recorded as ${fmtINR(samePayment.amountMinor)}. No double application; review before acting.`
+              : `Event ${args.eventType} (${args.eventId}) names payment ${args.providerPaymentId} — already recorded; no double application.`,
+          )),
+        });
+      }
+      if (existing) {
+        await ctx.db.patch(existing._id, {
+          handled: true,
+          handledAt: Date.now(),
+          note: `Duplicate across event types for payment ${args.providerPaymentId}.`,
+        });
+      }
+      return { applied: false, reason: "payment-already-recorded" };
+    }
+
+    // Server-side association validation: a stored payment link or order
+    // id must agree with the event. A mismatched reference never moves
+    // money — it is logged as a reconciliation exception.
+    if (invoice) {
+      const storedLink = invoice.paymentLinkId;
+      const storedOrder = invoice.paymentOrderId;
+      const linkMismatch =
+        !!args.paymentLinkId && !!storedLink && args.paymentLinkId !== storedLink;
+      const orderMismatch =
+        !!args.providerOrderId &&
+        !!storedOrder &&
+        args.providerOrderId !== storedOrder;
+      if (linkMismatch || orderMismatch) {
+        await ctx.db.patch(invoice._id, {
+          ...(await audit(
+            invoice,
+            "Razorpay webhook",
+            undefined,
+            `RECONCILIATION EXCEPTION — event ${args.eventType} (${args.eventId}) for ${fmtINR(args.amountMinor)} names link/order ${args.paymentLinkId ?? "—"}/${args.providerOrderId ?? "—"} but invoice ${invoice.number} stores ${storedLink ?? "—"}/${storedOrder ?? "—"}. Money NOT applied; review before acting.`,
+          )),
+        });
+        if (existing) {
+          await ctx.db.patch(existing._id, {
+            handled: true,
+            handledAt: Date.now(),
+            note: "Association mismatch — not applied.",
+          });
+        }
+        return { applied: false, reason: "association-mismatch" };
+      }
+    }
+
     if (!existing) {
       await ctx.db.insert("paymentEvents", {
         orgId,
@@ -1076,15 +1194,64 @@ export const reconcileWebhookInternal = internalMutation({
     }
 
     if (invoice) {
+      // Currency must match the organization's billing currency.
+      if (args.currency) {
+        const org = await ctx.db.get(invoice.orgId);
+        if (org && args.currency !== org.currency) {
+          await ctx.db.patch(invoice._id, {
+            ...(await audit(
+              invoice,
+              "Razorpay webhook",
+              undefined,
+              `RECONCILIATION EXCEPTION — event ${args.eventType} (${args.eventId}) reports currency ${args.currency} but this organization bills in ${org.currency}. Money NOT applied.`,
+            )),
+          });
+          return { applied: false, reason: "currency-mismatch" };
+        }
+      }
+
       const balance = invoice.totalMinor - invoice.amountPaidMinor;
       const applied = Math.min(args.amountMinor, Math.max(balance, 0));
+      const excess = args.amountMinor - applied;
       if (applied <= 0) {
+        // Nothing outstanding: the full captured amount is recorded and
+        // held as an explicitly tracked unapplied customer credit — never
+        // discarded, refundable on request.
+        const registryId = await ctx.db.insert("payments", {
+          invoiceId: invoice._id,
+          orgId: invoice.orgId,
+          amountMinor: args.amountMinor,
+          mode: "upi",
+          source: "razorpay",
+          reference: args.providerPaymentId,
+          receivedOn: new Date().toISOString().slice(0, 10),
+          status: "captured",
+          providerPaymentId: args.providerPaymentId,
+          providerOrderId: args.providerOrderId,
+          currency: args.currency,
+        });
+        await ctx.db.insert("unappliedCredits", {
+          orgId: invoice.orgId,
+          invoiceId: invoice._id,
+          paymentId: registryId,
+          providerPaymentId: args.providerPaymentId,
+          clientId: invoice.clientId,
+          amountMinor: args.amountMinor,
+          status: "excess_received",
+          note: `Full over-payment — invoice ${invoice.number} was already settled.`,
+          createdAt: Date.now(),
+        });
+        await ctx.runMutation(internal.finance.postExcessJournalInternal, {
+          paymentId: registryId,
+          amountMinor: args.amountMinor,
+          kind: "unapplied_full",
+        });
         await ctx.db.patch(invoice._id, {
           ...(await audit(
             invoice,
             "Razorpay webhook",
             undefined,
-            `Webhook ${args.eventType} for ${fmtINR(args.amountMinor)} ignored — nothing outstanding.`,
+            `Webhook ${args.eventType} for ${fmtINR(args.amountMinor)} recorded as an unapplied customer credit — nothing was outstanding.`,
           )),
         });
         return { applied: false, reason: "nothing-outstanding" };
@@ -1101,7 +1268,7 @@ export const reconcileWebhookInternal = internalMutation({
           invoice,
           "Razorpay webhook",
           undefined,
-          `Online payment captured — ${fmtINR(applied)} (provider id ${args.providerPaymentId}).`,
+          `Online payment captured — ${fmtINR(applied)} (provider id ${args.providerPaymentId})${excess > 0 ? `; ${fmtINR(excess)} held as an unapplied customer credit` : ""}.`,
         )),
       });
       const webhookPaymentId = await ctx.db.insert("payments", {
@@ -1115,8 +1282,29 @@ export const reconcileWebhookInternal = internalMutation({
         status: "captured",
         providerPaymentId: args.providerPaymentId,
         providerOrderId: args.providerOrderId,
-        createdAt: Date.now(),
+        currency: args.currency,
       });
+      // Excess money is never discarded from the records: the invoice
+      // allocation is capped, and the remainder is an explicitly tracked
+      // customer credit (held funds pending application or refund).
+      if (excess > 0) {
+        await ctx.db.insert("unappliedCredits", {
+          orgId: invoice.orgId,
+          invoiceId: invoice._id,
+          paymentId: webhookPaymentId,
+          providerPaymentId: args.providerPaymentId,
+          clientId: invoice.clientId,
+          amountMinor: excess,
+          status: "excess_received",
+          note: `Excess beyond invoice ${invoice.number} balance — ${fmtINR(args.amountMinor)} captured, ${fmtINR(applied)} applied.`,
+          createdAt: Date.now(),
+        });
+        await ctx.runMutation(internal.finance.postExcessJournalInternal, {
+          paymentId: webhookPaymentId,
+          amountMinor: excess,
+          kind: "excess_held",
+        });
+      }
       // Ledger integration for provider payments (same as manual ones):
       // posts by the inserted row id, and the per-payment dedupe key
       // makes webhook redelivery a no-op.
@@ -1127,9 +1315,9 @@ export const reconcileWebhookInternal = internalMutation({
         ctx,
         invoice.matterId,
         "payment",
-        `Online payment — ${fmtINR(applied)} against ${invoice.number}.`,
+        `Online payment — ${fmtINR(applied)} against ${invoice.number}.${excess > 0 ? ` ${fmtINR(excess)} recorded as unapplied customer credit.` : ""}`,
       );
-      return { applied: true, appliedMinor: applied };
+      return { applied: true, appliedMinor: applied, excessMinor: excess };
     }
 
     if (promotion) {
@@ -1174,8 +1362,19 @@ export const reconcileWebhookInternal = internalMutation({
   },
 });
 
-/** Refund a provider payment through Razorpay (where supported). */
-export const refundProviderPayment = mutation({
+/**
+ * Request a refund of a provider payment (chamber-authorized, normal
+ * speed). Local state changes FIRST, inside this transaction:
+ *   - a refundRequests row is created with status "requested";
+ *   - the payments row shows "refund_pending" so nobody double-requests
+ *     while the provider call is in flight;
+ *   - invoice money, payment status and the refund journal move ONLY on
+ *     provider confirmation (markRefundProcessedInternal), so the books
+ *     move exactly when the refund actually happens.
+ * The provider call is scheduled after commit; failure is reported back
+ * by the Node action and recorded as "failed" with nothing moved.
+ */
+export const requestRefund = mutation({
   args: {
     paymentRowId: v.id("payments"),
     amountMinor: v.number(),
@@ -1194,22 +1393,70 @@ export const refundProviderPayment = mutation({
     if (!providerConfigured()) {
       throw new Error("Payment provider is not configured.");
     }
+    if (payment.status === "refund_pending") {
+      throw new Error("A refund is already in progress for this payment.");
+    }
     const already = payment.refundedMinor ?? 0;
     const refundable = payment.amountMinor - already;
     if (args.amountMinor <= 0 || args.amountMinor > refundable) {
       throw new Error(`Refund must be between 1 and ${fmtINR(refundable)}.`);
     }
 
-    // Validate + apply locally inside the transaction, then schedule the
-    // provider call; the refund id is attached by the follow-up mutation.
-    const refunded = already + args.amountMinor;
-    const invoice = await ctx.db.get(payment.invoiceId);
-    await ctx.db.patch(args.paymentRowId, {
+    const requestId = await ctx.db.insert("refundRequests", {
+      orgId: ac.org._id,
+      paymentId: args.paymentRowId,
+      invoiceId: payment.invoiceId,
+      providerPaymentId: payment.providerPaymentId,
+      amountMinor: args.amountMinor,
+      reason: args.reason?.trim() || undefined,
+      status: "requested",
+      requestedById: ac.user._id,
+      createdAt: Date.now(),
+    });
+    await ctx.db.patch(args.paymentRowId, { status: "refund_pending" });
+
+    // The provider call happens after this transaction commits; the
+    // refund id (or failure) is attached by the follow-up mutation.
+    await ctx.scheduler.runAfter(0, internal.paymentsProvider.refundPayment, {
+      paymentRowId: args.paymentRowId,
+      refundRequestId: requestId,
+      providerPaymentId: payment.providerPaymentId,
+      amountMinor: args.amountMinor,
+      reason: args.reason,
+    });
+    return { refundRequestId: requestId };
+  },
+});
+
+/** Internal: provider accepted the refund — apply money + books now. */
+export const markRefundProcessedInternal = internalMutation({
+  args: {
+    refundRequestId: v.id("refundRequests"),
+    refundId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const request = await ctx.db.get(args.refundRequestId);
+    if (!request || request.status !== "requested") {
+      return { applied: false, reason: "not-open" };
+    }
+    const t = Date.now();
+    await ctx.db.patch(args.refundRequestId, {
+      status: "processed",
+      providerRefundId: args.refundId,
+      processedAt: t,
+    });
+
+    const payment = await ctx.db.get(request.paymentId);
+    if (!payment) return { applied: false, reason: "no_payment" };
+    const refunded = (payment.refundedMinor ?? 0) + request.amountMinor;
+    await ctx.db.patch(payment._id, {
       refundedMinor: refunded,
       status: refunded >= payment.amountMinor ? "refunded" : "partially_refunded",
     });
+
+    const invoice = await ctx.db.get(payment.invoiceId);
     if (invoice) {
-      const newPaid = Math.max(invoice.amountPaidMinor - args.amountMinor, 0);
+      const newPaid = Math.max(invoice.amountPaidMinor - request.amountMinor, 0);
       await ctx.db.patch(invoice._id, {
         amountPaidMinor: newPaid,
         status:
@@ -1220,41 +1467,81 @@ export const refundProviderPayment = mutation({
               : INVOICE_STATUSES.SENT,
         ...(await audit(
           invoice,
-          ac.user.name ?? ac.user.email ?? "Member",
-          ac.user._id,
-          `Refund ${fmtINR(args.amountMinor)} via provider${args.reason ? ` — ${args.reason.trim()}` : ""}.`,
+          "Razorpay webhook",
+          undefined,
+          `Refund processed by provider — ${fmtINR(request.amountMinor)} (refund id ${args.refundId})${request.reason ? ` — ${request.reason}` : ""}.`,
         )),
       });
       await logEvent(
         ctx,
         invoice.matterId,
         "payment",
-        `Refund issued — ${fmtINR(args.amountMinor)} on ${invoice.number}.`,
+        `Refund processed — ${fmtINR(request.amountMinor)} on ${invoice.number}.`,
       );
-    }
-    // Ledger: unwind collected money exactly — AR is re-debited and
-    // bank credited for the refunded amount (the mirror of the original
-    // payment journal), dedupe-keyed per refund so a retry never
-    // double-posts. Skips when no chart is seeded (visible in the gap
-    // panel, reconcilable later).
-    if (invoice) {
+      // Ledger: unwind collected money exactly — AR is re-debited and
+      // bank credited for the refunded amount (the mirror of the original
+      // payment journal), dedupe-keyed per refund so a retry never
+      // double-posts.
       await ctx.runMutation(internal.finance.postRefundJournalInternal, {
-        paymentId: args.paymentRowId,
-        amountMinor: args.amountMinor,
-        reason: args.reason?.trim() || "Provider refund",
-        actorId: ac.user._id,
+        paymentId: payment._id,
+        amountMinor: request.amountMinor,
+        reason: request.reason?.trim() || "Provider refund",
+        actorId: request.requestedById ?? invoice.createdBy,
       });
     }
-    await ctx.scheduler.runAfter(0, internal.paymentsProvider.refundPayment, {
-      paymentRowId: args.paymentRowId,
-      providerPaymentId: payment.providerPaymentId,
-      amountMinor: args.amountMinor,
-      reason: args.reason,
-    });
+    return { applied: true };
   },
 });
 
-/** Internal: attach the provider refund id after the API call. */
+/** Internal: provider rejected the refund — record the failure, move nothing. */
+export const markRefundFailedInternal = internalMutation({
+  args: {
+    refundRequestId: v.id("refundRequests"),
+    reason: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const request = await ctx.db.get(args.refundRequestId);
+    if (!request || request.status !== "requested") {
+      return { applied: false, reason: "not-open" };
+    }
+    await ctx.db.patch(args.refundRequestId, {
+      status: "failed",
+      failedAt: Date.now(),
+      failureReason: args.reason.slice(0, 500),
+    });
+    // Release the in-flight lock so a corrected retry is possible.
+    const payment = await ctx.db.get(request.paymentId);
+    if (payment && payment.status === "refund_pending") {
+      const stillRequested = await ctx.db
+        .query("refundRequests")
+        .withIndex("by_payment", (q) => q.eq("paymentId", request.paymentId))
+        .collect();
+      if (!stillRequested.some((r) => r.status === "requested")) {
+        await ctx.db.patch(payment._id, {
+          status: (payment.refundedMinor ?? 0) >= payment.amountMinor
+            ? "refunded"
+            : (payment.refundedMinor ?? 0) > 0
+              ? "partially_refunded"
+              : "captured",
+        });
+      }
+    }
+    const invoice = request.invoiceId ? await ctx.db.get(request.invoiceId) : null;
+    if (invoice) {
+      await ctx.db.patch(invoice._id, {
+        ...(await audit(
+          invoice,
+          "Razorpay webhook",
+          undefined,
+          `Refund attempt FAILED at the provider (${fmtINR(request.amountMinor)}) — ${args.reason.slice(0, 200)}. Nothing was refunded; retry from the payment once corrected.`,
+        )),
+      });
+    }
+    return { applied: true };
+  },
+});
+
+/** Internal: attach the provider refund id after the API call (legacy path). */
 export const attachRefundInternal = internalMutation({
   args: {
     paymentRowId: v.id("payments"),

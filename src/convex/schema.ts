@@ -1215,13 +1215,24 @@ export default defineSchema({
     status: v.optional(
       v.union(
         v.literal("captured"),
+        // A refund has been authorized and is awaiting provider
+        // confirmation; see refundRequests.
+        v.literal("refund_pending"),
         v.literal("refunded"),
         v.literal("partially_refunded"),
       ),
     ),
+    // ISO currency the provider reported (e.g. "INR"); validated against
+    // the org's currency at reconciliation time.
+    currency: v.optional(v.string()),
     recordedById: v.optional(v.id("users")),
     createdAt: v.number(),
-  }).index("by_invoice", ["invoiceId"]),
+  })
+    .index("by_invoice", ["invoiceId"])
+    // Cross-event-type payment dedupe: payment.captured, payment_link.paid
+    // and order.paid all name the same provider payment — exactly one
+    // payments row may ever exist per provider payment id.
+    .index("by_provider_payment", ["providerPaymentId"]),
 
   // Verified Razorpay webhook events — one row per event id, so replays
   // are idempotent at the storage layer.
@@ -1237,6 +1248,62 @@ export default defineSchema({
   })
     .index("by_event", ["eventId"])
     .index("by_org", ["orgId"]),
+
+  // Money received beyond what an invoice could absorb. The invoice
+  // allocation is capped; the captured amount is never discarded — the
+  // remainder is tracked here as an explicit customer credit / unapplied
+  // receipt, visible to the chamber and refundable on request.
+  unappliedCredits: defineTable({
+    orgId: v.id("organizations"),
+    invoiceId: v.id("invoices"),
+    // The provider payment that carried the excess.
+    paymentId: v.optional(v.id("payments")),
+    providerPaymentId: v.optional(v.string()),
+    clientId: v.optional(v.id("clients")),
+    amountMinor: v.number(),
+    // "excess_received" until the chamber applies or refunds it.
+    status: v.union(
+      v.literal("excess_received"),
+      v.literal("refunded"),
+      v.literal("applied"),
+    ),
+    note: v.optional(v.string()),
+    refundedMinor: v.optional(v.number()),
+    resolvedById: v.optional(v.id("users")),
+    resolvedAt: v.optional(v.number()),
+    createdAt: v.number(),
+  })
+    .index("by_invoice", ["invoiceId"])
+    .index("by_org", ["orgId"]),
+
+  // Refund lifecycle for provider payments: requested -> processed |
+  // failed. State changes ONLY in Convex transactions; the provider call
+  // confirms or rejects afterwards, so the books move exactly when the
+  // refund actually happens and failed attempts never touch money.
+  refundRequests: defineTable({
+    orgId: v.id("organizations"),
+    paymentId: v.id("payments"),
+    invoiceId: v.optional(v.id("invoices")),
+    providerPaymentId: v.optional(v.string()),
+    amountMinor: v.number(),
+    reason: v.optional(v.string()),
+    // "requested": authorized locally, provider call in flight.
+    // "processed": provider confirmed; money + journal applied.
+    // "failed": provider rejected the attempt; nothing moved.
+    status: v.union(
+      v.literal("requested"),
+      v.literal("processed"),
+      v.literal("failed"),
+    ),
+    requestedById: v.optional(v.id("users")),
+    providerRefundId: v.optional(v.string()),
+    processedAt: v.optional(v.number()),
+    failedAt: v.optional(v.number()),
+    failureReason: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_payment", ["paymentId"])
+    .index("by_org_status", ["orgId", "status"]),
 
   // Consultation payment sessions (pay-before-booking, no invoice).
   consultations: defineTable({

@@ -14,7 +14,7 @@
 // ===============================================================
 
 import { v } from "convex/values";
-import { action, internalAction } from "./_generated/server";
+import { action, internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import crypto from "crypto";
@@ -94,6 +94,16 @@ export const verifyAndReconcileWebhook = internalAction({
     const payment = event.payload?.payment?.entity;
     const link = event.payload?.payment_link?.entity;
 
+    // The provider's own currency and method travel with the payment —
+    // the reconciler validates currency against the organization and
+    // records the actual method instead of assuming UPI.
+    const currency =
+      payment && typeof payment.currency === "string" ? payment.currency : undefined;
+    const method =
+      payment && typeof payment.method === "string" && payment.method
+        ? payment.method
+        : undefined;
+
     const providerPaymentId =
       payment && typeof payment.id === "string" ? payment.id : "";
     const providerOrderId =
@@ -126,7 +136,9 @@ export const verifyAndReconcileWebhook = internalAction({
           ? link.amount
           : 0;
 
-    // Only success-ish events reconcile money; everything else is logged.
+    // Only success-ish events reconcile money; everything else (including
+    // refund.* and payment.failed) is logged in the audit trail and never
+    // touches invoice state.
     const reconciles =
       eventType === "payment.captured" ||
       eventType === "payment_link.paid" ||
@@ -163,9 +175,12 @@ export const verifyAndReconcileWebhook = internalAction({
         paymentLinkId,
         referenceId,
         amountMinor,
+        currency,
+        method,
       });
     } else {
-      // Record the event so the audit shows we received it (idempotent).
+      // Record the event so the audit shows we received it (idempotent);
+      // non-money events never touch invoice state.
       await _ctx.runMutation(internal.billing.reconcileWebhookInternal, {
         eventId,
         eventType,
@@ -175,6 +190,7 @@ export const verifyAndReconcileWebhook = internalAction({
         paymentLinkId,
         referenceId,
         amountMinor: 0,
+        logOnly: true,
       });
     }
 
@@ -393,28 +409,57 @@ export const createPromotionPaymentLink = internalAction({
 // Refunds
 // -----------------------------------------------------------------
 
+/**
+ * Issue a refund through Razorpay and classify the outcome.
+ *
+ * The refund state machine lives in billing.ts: a refundRequests row is
+ * created as "requested" before this call and ONLY moves to "processed"
+ * when Razorpay accepts (books move then), or to "failed" when it
+ * rejects — nothing is ever applied on an unconfirmed attempt.
+ */
 export const refundPayment = internalAction({
   args: {
     paymentRowId: v.id("payments"),
+    refundRequestId: v.optional(v.id("refundRequests")),
     providerPaymentId: v.string(),
     amountMinor: v.number(),
     reason: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const body = await rz(
-      `/payments/${args.providerPaymentId}/refund`,
-      "POST",
-      {
-        amount: args.amountMinor,
-        speed: "normal",
-        notes: args.reason ? { reason: args.reason.slice(0, 200) } : undefined,
-      },
-    );
-    const refundId = String(body.id);
-    await ctx.runMutation(internal.billing.attachRefundInternal, {
-      paymentRowId: args.paymentRowId,
-      refundId,
-    });
-    return { refundId };
+    try {
+      const body = await rz(
+        `/payments/${args.providerPaymentId}/refund`,
+        "POST",
+        {
+          amount: args.amountMinor,
+          speed: "normal",
+          notes: args.reason ? { reason: args.reason.slice(0, 200) } : undefined,
+        },
+      );
+      const refundId = String(body.id);
+      const status = typeof body.status === "string" ? body.status : "processed";
+      if (args.refundRequestId) {
+        await ctx.runMutation(internal.billing.markRefundProcessedInternal, {
+          refundRequestId: args.refundRequestId,
+          refundId,
+        });
+      } else {
+        // Legacy path (no state-machine request): record the id only.
+        await ctx.runMutation(internal.billing.attachRefundInternal, {
+          paymentRowId: args.paymentRowId,
+          refundId,
+        });
+      }
+      return { refundId, providerStatus: status };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (args.refundRequestId) {
+        await ctx.runMutation(internal.billing.markRefundFailedInternal, {
+          refundRequestId: args.refundRequestId,
+          reason: message,
+        });
+      }
+      return { refundId: null, failed: true, error: message.slice(0, 300) };
+    }
   },
 });

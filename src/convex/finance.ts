@@ -68,6 +68,9 @@ const DEFAULT_COA: {
   { code: "2210", name: "SGST Payable", type: "liability", subtype: "tax" },
   { code: "2220", name: "IGST Payable", type: "liability", subtype: "tax" },
   { code: "2300", name: "TDS Payable", type: "liability", subtype: "tax" },
+  // Excess receipts held pending application to an invoice or refund to
+  // the customer — excess money is tracked, never discarded.
+  { code: "2400", name: "Unapplied Customer Credits", type: "liability", subtype: "credits" },
   { code: "3000", name: "Owner's Capital", type: "equity" },
   { code: "3100", name: "Retained Earnings", type: "equity" },
   { code: "4000", name: "Professional Fees", type: "income", subtype: "fees" },
@@ -675,6 +678,66 @@ export const postInvoiceCreditJournalInternal = internalMutation({
       }
     }
     return { posted: true as const, journalId: reversalId ?? original._id };
+  },
+});
+
+/**
+ * Excess-receipt journal: the portion of a captured payment beyond the
+ * invoice balance is parked as a LIABILITY (Unapplied Customer Credits,
+ * 2400) — it is still the customer's money until applied or refunded.
+ * Bank is debited for the excess; AR is not touched because nothing was
+ * owed. Dedupe-keyed per payment and kind so redelivery cannot
+ * double-post. Skips when no chart is seeded; the gap panel shows the
+ * reconciliation state instead of assuming one.
+ */
+export const postExcessJournalInternal = internalMutation({
+  args: {
+    paymentId: v.id("payments"),
+    amountMinor: v.number(),
+    kind: v.union(v.literal("excess_held"), v.literal("unapplied_full")),
+  },
+  handler: async (ctx, args) => {
+    const payment = await ctx.db.get(args.paymentId);
+    if (!payment) return { posted: false as const, reason: "no_payment" as const };
+    if (!Number.isInteger(args.amountMinor) || args.amountMinor <= 0)
+      return { posted: false as const, reason: "non_positive" as const };
+
+    const invoice = await ctx.db.get(payment.invoiceId);
+    if (!invoice) return { posted: false as const, reason: "no_invoice" as const };
+
+    const bank = await accountByCode(ctx, invoice.orgId, "1000");
+    const credits = await accountByCode(ctx, invoice.orgId, "2400");
+    if (!bank || !credits)
+      return { posted: false as const, reason: "chart_not_seeded" as const };
+
+    const dedupeKey = journalDedupeKey(
+      "billing",
+      payment._id,
+      args.kind === "unapplied_full" ? "excess_unapplied_full" : "excess_held",
+    );
+    const dupe = await ctx.db
+      .query("journalEntries")
+      .withIndex("by_dedupe", (q) => q.eq("dedupeKey", dedupeKey))
+      .first();
+    if (dupe) return { posted: true as const, journalId: dupe._id };
+
+    const id = await ctx.db.insert("journalEntries", {
+      orgId: invoice.orgId,
+      entryDate: payment.receivedOn,
+      memo:
+        args.kind === "unapplied_full"
+          ? `Unapplied customer credit — ${invoice.number} (nothing outstanding)`
+          : `Excess receipt held — ${invoice.number}`,
+      status: "posted",
+      source: "billing",
+      sourceId: payment._id,
+      debits: [{ accountId: bank._id, amountPaise: args.amountMinor }],
+      credits: [{ accountId: credits._id, amountPaise: args.amountMinor }],
+      dedupeKey,
+      createdById: payment.recordedById ?? invoice.createdBy,
+      createdAt: Date.now(),
+    });
+    return { posted: true as const, journalId: id };
   },
 });
 
