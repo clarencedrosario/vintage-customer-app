@@ -1,11 +1,32 @@
 # DPDP_REVIEW.md — Privacy / DPDP Act Assessment Record
 
 **Owner:** CJ GLOBAL (Advokate)
-**Last updated:** 30 Sep 2026 (turn 14)
+**Last updated:** 30 Sep 2026 (turn 15)
 **Status of this document: an honest WORKING RECORD. The assessment is
 OUTSTANDING — nothing here is a compliance claim.**
 
 ---
+
+## 0. Verified commencement facts (official sources, checked turn 15)
+
+- **DPDP Act, 2023** — passed August 2023; notified in the Official Gazette
+  **11 August 2023**. Some provisions (e.g. ss. 6–7 lawful bases, as recorded
+  in the implementation register) relate to the Act's framework from
+  notification; the Act's operative machinery was activated by the Rules.
+- **Digital Personal Data Protection Rules, 2025** — notified **13 November
+  2025**, Gazette **G.S.R. 846(E)**. Per the notification, provisions are
+  operational from that date, with further phases following at approximately
+  **12 months** and **18 months**, and full effect by **13 May 2027**.
+- **Therefore, as of September 2026 the regime is MID-PHASE.** It is WRONG to
+  assume every provision is already operational, and equally wrong to treat it
+  as future law. The in-product register (`dpdpCompliance.seedRegister`)
+  records `effectiveFrom` per requirement and keeps `legalReview: outstanding`
+  until a qualified reviewer confirms the operative date per requirement.
+- **Official-source check cadence:** the Gazette texts (dpdp rules PDF,
+  MeitY notifications) must be re-verified at review time — the register's
+  `officialSource` column cites what was relied on, and this section records
+  when it was checked (30 Sep 2026, via web search of Gazette-derived
+  sources; primary Gazette confirmation pending qualified review).
 
 ## 1. What this document is (and is not)
 
@@ -59,10 +80,12 @@ recorded, open item.
 
 ## 5. Gaps / outstanding items (honest list)
 
-1. **DPDP gap analysis against the final Rules** — not started. The Act's
-   phased obligations (notice content, consent managers, children's data,
-   significant-fiduciary duties, breach reporting timelines) must be mapped
-   against **current official sources** at assessment time, not from memory.
+1. **DPDP gap analysis against the Rules' phased obligations** — the
+   requirement-by-requirement register now exists in-product
+   (`dpdpRegister`, seeded turn 15 with official-source citations and
+   effective dates), but mapping each control to its EXACT operative phase
+   and closing the gaps remains outstanding. The register carries a
+   responsible-person field that must be assigned per row.
 2. **Notice + consent flows** for data principals — not implemented.
 3. **Retention, deletion and legal-hold policy** — a deletion path exists for
    some entities; a documented, tested retention schedule is missing.

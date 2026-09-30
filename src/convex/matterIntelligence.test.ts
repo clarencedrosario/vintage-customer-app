@@ -256,7 +256,7 @@ describe("Matter Intelligence — the complete §7 workflow", () => {
 
     // 6. DRAFT — template library: seed, approve, prefill, save, compare.
     const seededLib = await owner.mutation(api.templates.seedLibrary, {});
-    expect(seededLib.librarySize).toBe(6); // honest count of the actual seed
+    expect(seededLib.librarySize).toBe(10); // honest count of the actual seed
     let lib = await owner.query(api.templates.list, {
       includeUnapproved: true,
     });

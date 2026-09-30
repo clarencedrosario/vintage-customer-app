@@ -330,6 +330,161 @@ DEPONENT`,
     limitations:
       "Opinion and hearsay need objection-safe framing per the Evidence Act (or BSA for post-2023 proceedings) — verify which evidence code governs the matter's era. Advocate review mandatory.",
   },
+  {
+    key: "execution-application-order-in",
+    title: "Execution application (arising out of decree/order)",
+    docType: "application",
+    practiceArea: "civil",
+    jurisdictions: ["in"],
+    requiredFields: [
+      { key: "decree_holder_name", label: "Decree holder name", kind: "party", required: true, prefillFrom: "fact:partyName" },
+      { key: "judgment_debtor_name", label: "Judgment debtor name", kind: "party", required: true },
+      { key: "suit_number", label: "Suit/execution number", kind: "text", required: true },
+      { key: "court_name", label: "Court", kind: "court", required: true },
+      { key: "decree_date", label: "Date of decree", kind: "date", required: true },
+      { key: "ex_amount", label: "Amount/drelief sought", kind: "amount", required: false },
+    ],
+    bodyTemplate: `IN THE COURT OF {{court_name}}
+
+EXECUTION APPLICATION NO. ___ OF {{ex_year}}
+(ARISING OUT OF JUDGMENT AND DECREE DATED {{decree_date}})
+
+{{decree_holder_name}} … Decree Holder
+Versus
+{{judgment_debtor_name}} … Judgment Debtor
+
+APPLICATION FOR EXECUTION OF THE DECREE
+
+1. That the decree-holder obtained the judgment and decree dated {{decree_date}} against the judgment-debtor, particulars whereof are: {{decree_particulars}}.
+
+2. That the decree has not been satisfied; the balance payable is {{ex_amount}} ({{recovery_description}}).
+
+3. Mode of execution sought: {{execution_mode}}.
+
+PRAYER: The decree be executed against the judgment-debtor as per law, with costs.
+
+Decree Holder through
+{{advocate_name}}
+Date: {{ex_date}}`,
+    instructions:
+      "Attach the certified decree copy and the plaint, and verify limitation for execution (Order XXI; limitation runs from the date the decree becomes enforceable, per the Limitation Act schedule). State the exact balance due with a calculation sheet.",
+    limitations:
+      "Execution procedure and permissible modes vary with the decree's nature (money vs specific relief) and the state's civil rules of practice. Advocate review mandatory.",
+  },
+  {
+    key: "board-resolution-bank-account-in",
+    title: "Board resolution — opening/operation of bank account",
+    docType: "corporate",
+    practiceArea: "corporate",
+    jurisdictions: ["in"],
+    requiredFields: [
+      { key: "company_name", label: "Company name", kind: "party", required: true },
+      { key: "cin", label: "CIN", kind: "text", required: true },
+      { key: "board_meeting_date", label: "Board meeting date", kind: "date", required: true },
+      { key: "bank_name", label: "Bank name and branch", kind: "text", required: true },
+      { key: "signatory_details", label: "Authorised signatory(ies) and limits", kind: "text", required: true },
+    ],
+    bodyTemplate: `CERTIFIED TRUE COPY OF THE RESOLUTION PASSED AT THE MEETING OF THE BOARD OF DIRECTORS OF {{company_name}} (CIN: {{cin}}) HELD ON {{board_meeting_date}}
+
+"RESOLVED THAT pursuant to the Memorandum and Articles of Association of the Company, a current account be opened in the name of the Company with {{bank_name}}, and the Company hereby authorises:
+
+{{signatory_details}}
+
+RESOLVED FURTHER THAT the said bank be and is hereby authorised to honour all cheques, drafts and electronic instructions drawn/issued in accordance with the above arrangement, and to act on the instructions of the said signatories until written notice of revocation is received by the bank.
+
+RESOLVED FURTHER THAT the Company Secretary/Director be authorised to submit the requisite forms, KYC documents and this resolution to the bank."
+
+Certified true copy.
+
+{{certifying_signatory}}
+{{certifying_capacity}}`,
+    instructions:
+      "Confirm the quorum and notice requirements for the board meeting under the Company's Articles and the Companies Act, 2013 (SS-1 attestation practice). Banks often require their own format — check before certification.",
+    limitations:
+      "Authorisation limits (joint/individually, amounts) must match the Company's internal policy. Not a substitute for bank-specific documentation. Review by a company secretary/advocate before certification.",
+  },
+  {
+    key: "engagement-letter-in",
+    title: "Advocate engagement letter (terms of engagement)",
+    docType: "correspondence",
+    practiceArea: "practice_management",
+    jurisdictions: ["in"],
+    requiredFields: [
+      { key: "firm_name", label: "Firm/advocate name", kind: "party", required: true },
+      { key: "client_name", label: "Client name", kind: "party", required: true, prefillFrom: "fact:partyName" },
+      { key: "engagement_scope", label: "Scope of engagement", kind: "text", required: true },
+      { key: "fee_structure", label: "Fees and billing terms", kind: "text", required: true },
+      { key: "engagement_date", label: "Date", kind: "date", required: true },
+    ],
+    bodyTemplate: `{{engagement_date}}
+
+To,
+{{client_name}}
+
+Re: Terms of engagement — {{matter_reference}}
+
+Dear {{client_salutation}},
+
+1. Scope: {{firm_name}} is engaged for {{engagement_scope}}. Work outside this scope requires written confirmation.
+
+2. Fees: {{fee_structure}}. Statutory fees, court fees, travel and out-of-pocket expenses are billed separately.
+
+3. Client obligations: timely instructions, truthful disclosure of facts, and provision of documents. Our representations depend on the accuracy of your instructions.
+
+4. Conflict and confidentiality: we act subject to professional conduct rules; your information is protected except as required by law or with your consent.
+
+5. Termination: either party may end this engagement by written notice; fees accrued till termination remain payable. Original documents will be returned on request.
+
+6. No outcome assurance: views expressed are professional opinions on the law as it stands; no assurance of any particular outcome is given.
+
+Please confirm acceptance by countersigning below.
+
+{{firm_name}}
+{{advocate_name}}
+
+Accepted: {{client_name}} ______________`,
+    instructions:
+      "Adjust scope and fees to the actual engagement. Where the Advocates Act/BCI rules restrict fee arrangements (e.g. contingent fees), align the clause accordingly. Retain the countersigned copy on the matter file.",
+    limitations:
+      "This template is practice-management correspondence, not a retainer agreement for every situation; regulated fee structures and state bar rules vary. Review before issue.",
+  },
+  {
+    key: "application-u1563-in",
+    title: "Application u/s 156(3) Cr.P.C. (direction to register/investigate FIR)",
+    docType: "application",
+    practiceArea: "criminal",
+    jurisdictions: ["in"],
+    requiredFields: [
+      { key: "applicant_name", label: "Applicant name", kind: "party", required: true, prefillFrom: "fact:partyName" },
+      { key: "accused_name", label: "Accused name(s)", kind: "party", required: true },
+      { key: "police_station", label: "Police station", kind: "text", required: true },
+      { key: "offence_description", label: "Offence description", kind: "text", required: true },
+      { key: "court_name", label: "Magistrate court", kind: "court", required: true },
+    ],
+    bodyTemplate: `IN THE COURT OF {{court_name}}
+
+APPLICATION U/S 156(3) Cr.P.C. / S.175(3) BNSS (AS APPLICABLE)
+
+{{applicant_name}} … Applicant
+Versus
+State (through P.S. {{police_station}}) and {{accused_name}} … Respondents
+
+1. That the applicant has made out disclosure of a cognizable offence: {{offence_description}}.
+
+2. That the applicant approached P.S. {{police_station}} on {{complaint_date}}; the police have {{police_action}} (prior application enclosed).
+
+3. That the Magistrate's direction to register/investigate is warranted: {{grounds_u1563}}.
+
+PRAYER: Direct the concerned SHO to register the FIR and investigate as per law, and to submit a status report.
+
+Applicant through
+{{advocate_name}}
+Date: {{app_date}}`,
+    instructions:
+      "Annex the police-station complaint and its acknowledgment. Plead the specific parameters for S.156(3) applications (prior police approach, cognizable disclosure, basic evidentiary material) as settled by the Supreme Court. Verify the BNSS equivalent for post-2023 proceedings.",
+    limitations:
+      "The Magistrate's discretion depends on the applicant's supporting material; false or exaggerated averments carry prosecution risk (S.182/211 IPC / BNS equivalents). Advocate review mandatory.",
+  },
 ];
 
 /** Seed/refresh the library — idempotent by template key. */

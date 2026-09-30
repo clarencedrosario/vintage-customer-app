@@ -4,7 +4,7 @@ Durable progress file so development resumes without repeating completed work.
 Companion to `ADVOKATE_REQUIREMENTS.md` (the master checklist). Handoff log also
 maintained in `docs/DELIVERY.md`.
 
-Last checkpoint: **30 September 2026** — latest record: **Turn 14** (bottom section); turn 13 and earlier summaries below.
+Last checkpoint: **30 September 2026** — latest record: **Turn 15** (bottom section); turn 14 and earlier summaries below.
 
 ---
 
@@ -2053,3 +2053,101 @@ working module names; not represented as trademark-cleared.
 - DPDP/privacy assessment and qualified legal/rights review (including the
   Convex licence review): OUTSTANDING — recorded in docs/DPDP_REVIEW.md and
   the provenance register, no claims made.
+
+## Turn-15 — 30 Sep 2026: Indian Privacy, Court Updates, Drafting, and Source-Verified AI (§29)
+
+India-specific capabilities implemented on the existing modules — nothing
+rebuilt, no competitor content. Product name: Advokate Legal Intelligence.
+
+### RESEARCH (recorded, sourced)
+
+- DPDP commencement verified from official-source-derived records: Act
+  gazetted 11 Aug 2023; DPDP Rules 2025 notified 13 Nov 2025 (G.S.R. 846(E))
+  with phased commencement (~12/18-month tails; full effect by 13 May 2027)
+  — the regime is MID-PHASE as of Sep 2026. Recorded in docs/DPDP_REVIEW.md
+  §0 with a re-verification cadence; primary Gazette confirmation remains
+  part of the outstanding qualified review.
+
+### BUILT (schema pushed; all under src/convex/)
+
+- **dpdpCompliance.ts** — implementation register (10 requirements × activity
+  with official source, effectiveFrom, controls, evidence, legalReview
+  defaulting to outstanding, responsible-person/review-date fields);
+  data-principal requests (access/correction/erasure/grievance, due dates,
+  human resolution); consent records where consent IS the basis (withdrawal
+  opens an erasure REVIEW that must state its retention basis — never
+  silent erasure); incident register with containment + notification trail
+  (dates + human-stated basis; the module never self-decides that
+  notification was or wasn't required).
+- **dataResidency.ts** — data-location inventory (10 services incl. AI
+  processing explicitly "None active"; every region seeded `unverified`;
+  verifyRegion is the ONLY path to residencyVerified=true); per-org policy
+  (`record_only` default; `restrict_in` for actual legal/contractual
+  India-only commitments) with `assertProcessingAllowed` internal gate that
+  BLOCKS + LOGS processing in services not verified in-region (no silent
+  transfers) and allows verified-in services.
+- **courtSources.ts** — extensible court-source registry (SCI / High Courts
+  / District Courts seed) recording AUTHORIZED access methods and
+  limitations (no CAPTCHA/access-control bypass anywhere; no nationwide
+  live-sync claim); listing import preserving raw record + source +
+  retrieval timestamp; CNR (4 letters + 12 digits) / case-number+year
+  exact matching, number-without-year partial, party-name-only EVER merely
+  "suggested"; lawyer confirm/reject/conflict actions; duplicate collapse
+  and changed-publication supersession (stale rows preserved, never
+  applicable); duplicate-safe calendar application of confirmed published
+  hearing dates (never treated as lawyer-verified deadlines); order-based
+  task proposals through the existing taskSuggestions approval flow;
+  court-updates dashboard (new/reviewed/conflicting/stale/failed).
+- **draftReview.ts** — three separated layers over any template use:
+  formatting (placeholders, cross-reference checks, definition signals),
+  factual (draft dates/amounts vs the confirmed fact register; unpopulated
+  required fields), legal (advisory passage-anchored signals requiring
+  lawyer assessment; no conclusions). proposeFix delegates to the governed
+  draftingRevisions flow (diff + reason + undo); legal findings become
+  risk comments — nothing silently rewrites accepted documents.
+- **templates.ts** — 4 new in-house templates (execution application,
+  board resolution for bank account, advocate engagement letter,
+  application u/s 156(3) Cr.P.C./S.175(3) BNSS) covering corporate +
+  practice-management areas; library honestly 6 → 10 (stats still reports
+  the actual count against the 300+ long-term target).
+
+### TESTS
+
+- NEW indiaCapabilities.test.ts (10): registry seeding + authorized-method
+  assertions; matching ladder (CNR exact → pending review; number-without-
+  year partial; name-only suggestion that can NEVER self-apply; wrong-
+  matter guard via distinct identifiers); duplicate collapse + changed
+  republication supersession (original text preserved; stale unappliable);
+  confirmed-only calendar application (hearing created, re-apply reuse);
+  confirmed-order task proposal with due-basis honesty; dashboard states
+  (stale/conflicting/confirmed); DPDP register sourcing + phases +
+  request lifecycle + consent-withdrawal→erasure-review + incident
+  notification trail; residency (unverified seed → verifyRegion →
+  restrict_in gate refuses + logs an unverified service, allows the
+  verified one); three-layer draft review (amount conflict flagged via
+  confirmed ₹4,50,000 fact; governed fix + accept/undo; risk comment);
+  library 10 with new practice areas; cross-tenant denials across DPDP,
+  residency, court and review surfaces.
+- Suite: **36 files / 549 tests green** (baseline 35/539 + 10 new).
+  bunx convex dev --once push clean; bun tsc -b --noEmit clean.
+
+### DOCS
+
+- docs/DPDP_REVIEW.md §0 (commencement facts + cadence) and register-gap
+  update; docs/DATA_LOCATIONS.md (new: inventory, isolation accuracy,
+  policy modes, claim rules); ADVOKATE_REQUIREMENTS.md §29 appended.
+
+### HONEST LIMITS / BLOCKED (recorded)
+
+- Live court connectivity: registry + manual/reviewed paths only — no live
+  API integration exists; nothing bypasses portal controls. Coverage is
+  per registered source, never "nationwide live sync".
+- Google Docs integration: blocked (no credentials); labelled, not
+  simulated.
+- Residency: no service region verified yet; no India-only commitment is
+  advertised; migration/paid activation requires approval.
+- DPDP register: legalReview outstanding on every row until qualified
+  review; consent-manager interoperability and children's-data controls
+  recorded as blocked gaps.
+- Browser verification of the new surfaces: pending (automation
+  unavailable).

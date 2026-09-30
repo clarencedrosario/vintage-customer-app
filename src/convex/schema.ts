@@ -2854,6 +2854,244 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"]),
+  // ---------------------------------------------------------------------
+  // §29 — INDIAN PRIVACY (DPDP), DATA RESIDENCY, COURT CONNECTIONS
+  // (added turn 15). Honest-records design: registers and policies record
+  // verified facts and outstanding reviews; nothing here claims legal
+  // compliance by the existence of a setting.
+  // ---------------------------------------------------------------------
+
+  // DPDP compliance implementation register — one row per requirement ×
+  // processing activity, with its official source, phased effective date,
+  // controls, evidence and OUTSTANDING legal review state.
+  dpdpRegister: defineTable({
+    orgId: v.id("organizations"),
+    requirement: v.string(),
+    officialSource: v.string(),
+    // Date the requirement actually becomes operative (per the
+    // commencement notification) — null = not yet notified as operative.
+    effectiveFrom: v.optional(v.string()), // YYYY-MM-DD
+    applicability: v.string(), // which org activity/processing this covers
+    controls: v.string(), // technical + operational controls (actual)
+    evidence: v.optional(v.string()),
+    legalReview: v.union(
+      v.literal("outstanding"),
+      v.literal("in_progress"),
+      v.literal("completed"),
+    ),
+    responsiblePerson: v.string(),
+    reviewDueOn: v.optional(v.string()),
+    status: v.union(v.literal("open"), v.literal("implemented"), v.literal("blocked")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_status", ["orgId", "status"]),
+
+  // Data-principal requests: access / correction / erasure / grievance /
+  // consent withdrawal — human-handled workflow, tracked and auditable.
+  dpdpRequests: defineTable({
+    orgId: v.id("organizations"),
+    kind: v.union(
+      v.literal("access"),
+      v.literal("correction"),
+      v.literal("erasure"),
+      v.literal("grievance"),
+      v.literal("withdrawal"),
+    ),
+    subjectName: v.string(),
+    subjectContact: v.optional(v.string()),
+    matterId: v.optional(v.id("matters")),
+    details: v.string(),
+    status: v.union(
+      v.literal("received"),
+      v.literal("in_progress"),
+      v.literal("fulfilled"),
+      v.literal("rejected"),
+      v.literal("closed"),
+    ),
+    receivedAt: v.number(),
+    dueAt: v.optional(v.number()),
+    closedAt: v.optional(v.number()),
+    resolutionNote: v.optional(v.string()),
+    handledById: v.optional(v.id("users")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_status", ["orgId", "status"]),
+
+  // Consent records where consent IS the basis (with withdrawal); the
+  // register deliberately does not assume consent is the only basis.
+  dpdpConsents: defineTable({
+    orgId: v.id("organizations"),
+    subjectName: v.string(),
+    subjectContact: v.optional(v.string()),
+    purpose: v.string(),
+    noticeVersion: v.string(),
+    consentGivenAt: v.number(),
+    withdrawnAt: v.optional(v.number()),
+    status: v.union(v.literal("active"), v.literal("withdrawn")),
+    recordRef: v.optional(v.string()),
+    createdAt: v.number(),
+  }).index("by_org_status", ["orgId", "status"]),
+
+  // Privacy incident register with breach-notification trail (dates and
+  // basis recorded; the workflow reflects verified requirements only —
+  // timelines are filled from the register's sourced entries).
+  dpdpIncidents: defineTable({
+    orgId: v.id("organizations"),
+    detectedAt: v.number(),
+    description: v.string(),
+    affectedData: v.string(),
+    containment: v.optional(v.string()),
+    notifications: v.optional(
+      v.object({
+        regulatorNotifiedAt: v.optional(v.number()),
+        subjectsNotifiedAt: v.optional(v.number()),
+        basis: v.optional(v.string()),
+      }),
+    ),
+    status: v.union(v.literal("open"), v.literal("contained"), v.literal("closed")),
+    closedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_org", ["orgId"]),
+
+  // Data-location inventory: where each data category actually travels
+  // and resides. residencyVerified is set ONLY after the service is
+  // verified — never assumed from the main database's region.
+  dataLocations: defineTable({
+    orgId: v.id("organizations"),
+    service: v.string(),
+    dataCategory: v.string(),
+    provider: v.string(),
+    region: v.string(), // e.g. "in", "unverified", "global-cdn"
+    residencyVerified: v.boolean(),
+    notes: v.optional(v.string()),
+    recordedById: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_service", ["orgId", "service"]),
+
+  // Per-org residency policy. Default mode "record_only" — inventory and
+  // flagging WITHOUT claiming any residency guarantee. "restrict_in"
+  // (customer/law-driven India-only processing) BLOCKS processing in
+  // services not verified in-region instead of silently transferring.
+  residencyPolicies: defineTable({
+    orgId: v.id("organizations"),
+    mode: v.union(v.literal("record_only"), v.literal("restrict_in")),
+    basis: v.string(), // the law/contract/policy that drives restriction
+    blockedServices: v.optional(v.array(v.string())),
+    note: v.optional(v.string()),
+    createdById: v.id("users"),
+    updatedAt: v.number(),
+  }).index("by_org", ["orgId"]),
+
+  // Log of processing attempts refused by the residency gate.
+  residencyBlocks: defineTable({
+    orgId: v.id("organizations"),
+    service: v.string(),
+    dataCategory: v.string(),
+    reason: v.string(),
+    createdAt: v.number(),
+  }).index("by_org", ["orgId"]),
+
+  // Extensible court-source registry (per org): official sources and
+  // their AUTHORIZED access method. Nothing here claims live nationwide
+  // synchronization; accessMethod records how data actually arrives.
+  courtSources: defineTable({
+    orgId: v.id("organizations"),
+    key: v.string(),
+    courtName: v.string(),
+    bench: v.optional(v.string()),
+    establishment: v.optional(v.string()),
+    jurisdiction: v.string(),
+    sourceName: v.string(), // official portal/service name
+    sourceUrl: v.optional(v.string()),
+    accessMethod: v.union(
+      v.literal("official_api"),
+      v.literal("permitted_download"),
+      v.literal("manual_upload"),
+      v.literal("reviewed_entry"),
+    ),
+    supportedInfo: v.string(),
+    refreshSchedule: v.string(),
+    lastCheckedAt: v.optional(v.number()),
+    lastStatus: v.union(v.literal("ok"), v.literal("failed"), v.literal("never")),
+    lastError: v.optional(v.string()),
+    limitations: v.string(),
+    enabled: v.boolean(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org_key", ["orgId", "key"])
+    .index("by_org", ["orgId"]),
+
+  // Imported court records (cause-list entries, case status, orders).
+  // Match discipline: identifier matches only — name matches are EVER
+  // "suggested" and require lawyer review before any consequential use.
+  courtListings: defineTable({
+    orgId: v.id("organizations"),
+    sourceKey: v.string(),
+    identifier: v.object({
+      cnr: v.optional(v.string()),
+      caseNumber: v.optional(v.string()),
+      caseYear: v.optional(v.string()),
+      court: v.optional(v.string()),
+      bench: v.optional(v.string()),
+    }),
+    rawRecord: v.string(), // preserved original text/record
+    partyNames: v.optional(v.string()),
+    publishedHearingAt: v.optional(v.number()), // published listing date
+    listingPosition: v.optional(v.string()),
+    caseStatus: v.optional(v.string()),
+    orderTitle: v.optional(v.string()),
+    orderDate: v.optional(v.string()), // YYYY-MM-DD
+    sourceUrl: v.optional(v.string()),
+    retrievedAt: v.number(),
+    retrievedById: v.id("users"),
+    // unmatched → suggested (name-only) | matched_pending_review →
+    // confirmed (reviewed) | rejected
+    matchStatus: v.union(
+      v.literal("unmatched"),
+      v.literal("suggested"),
+      v.literal("matched_pending_review"),
+      v.literal("confirmed"),
+      v.literal("rejected"),
+    ),
+    matchedMatterId: v.optional(v.id("matters")),
+    matchReason: v.string(),
+    matchConfidence: v.union(
+      v.literal("identifier_exact"),
+      v.literal("identifier_partial"),
+      v.literal("name_only"),
+      v.literal("none"),
+    ),
+    // Dashboard states: new | reviewed | conflicting | stale | failed.
+    reviewState: v.union(
+      v.literal("new"),
+      v.literal("reviewed"),
+      v.literal("conflicting"),
+      v.literal("stale"),
+      v.literal("failed"),
+    ),
+    conflictNote: v.optional(v.string()),
+    // Re-publication chain: a revised/republished record supersedes the
+    // earlier row (preserved, never deleted).
+    supersedesId: v.optional(v.id("courtListings")),
+    changeNote: v.optional(v.string()),
+    appliedHearingId: v.optional(v.id("hearings")),
+    appliedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org_match", ["orgId", "matchStatus"])
+    .index("by_matter", ["matchedMatterId"])
+    .index("by_org_source", ["orgId", "sourceKey"]),
+
   // ---------------- GitHub integration ----------------
   // One row per organization. The token lives ONLY in the server-side
   // environment (Keys tab → GITHUB_TOKEN); the browser never sees it.
