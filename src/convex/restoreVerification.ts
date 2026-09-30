@@ -102,7 +102,7 @@ export const restoreSandboxInternal = internalMutation({
     };
 
     const now = Date.now();
-    const sandboxOrgId = ctx.db.insert("organizations", {
+    const sandboxOrgId = (await ctx.db.insert("organizations", {
       name: `Restore Sandbox — ${archive.organization?.name ?? "archive"}`,
       slug: `restore-sandbox-${now.toString(36)}`,
       kind: "chamber",
@@ -114,20 +114,9 @@ export const restoreSandboxInternal = internalMutation({
       invoicePrefix: "RS",
       createdBy: args.performedById,
       createdAt: now,
-    }) as unknown as Id<"organizations">;
+    })) as Id<"organizations">;
 
     const idMap = new Map<string, string>();
-
-    const map = (table: string, oldId: unknown): string => {
-      const key = `${table}:${String(oldId)}`;
-      let newId = idMap.get(key);
-      if (!newId) {
-        // Pointer to something the archive does not carry (e.g. users):
-        // leave undefined so the row restores without the dangling ref.
-        newId = "";
-      }
-      return newId;
-    };
 
     const remap = (table: string, value: unknown): unknown => {
       if (typeof value === "string" && value.length > 0) {
@@ -143,10 +132,15 @@ export const restoreSandboxInternal = internalMutation({
       const oldId = c._id as string;
       delete c._id;
       delete c._creationTime;
-      const newId = ctx.db.insert("clients", {
-        ...(c as unknown as AnyRow),
-        orgId: sandboxOrgId,
-      }) as unknown as Id<"clients">;
+      const row = c as AnyRow;
+      row.orgId = sandboxOrgId;
+      // Required field; the archive carries no users, so the sandbox
+      // row is attributed to the operator who ran the drill.
+      row.createdBy = args.performedById;
+      row.responsibleLawyerId = undefined;
+      row.userId = undefined;
+      row.archivedBy = undefined;
+      const newId = (await ctx.db.insert("clients", row as never)) as Id<"clients">;
       idMap.set(`clients:${oldId}`, newId);
     }
 
@@ -168,11 +162,14 @@ export const restoreSandboxInternal = internalMutation({
         "confirmedById",
         "archivedBy",
         "conflictCheckId",
+        // Enrichment fields added by exportMatters (denormalized display
+        // data, not table columns).
+        "clientName",
       ]) {
         delete row[k];
       }
       if (Array.isArray(row.teamIds)) row.teamIds = [];
-      const newId = ctx.db.insert("matters", row as never) as unknown as Id<"matters">;
+      const newId = (await ctx.db.insert("matters", row as never)) as Id<"matters">;
       idMap.set(`matters:${oldId}`, newId);
     }
 
@@ -194,7 +191,7 @@ export const restoreSandboxInternal = internalMutation({
           byId: undefined,
         }));
       }
-      const newId = ctx.db.insert("hearings", row as never) as unknown as Id<"hearings">;
+      const newId = (await ctx.db.insert("hearings", row as never)) as Id<"hearings">;
       idMap.set(`hearings:${oldId}`, newId);
     }
 
@@ -213,7 +210,7 @@ export const restoreSandboxInternal = internalMutation({
       // storageId points at binary content NOT in this archive — drop
       // it honestly (the drill verifies records, not object storage).
       delete row.storageId;
-      const newId = ctx.db.insert("orders", row as never) as unknown as Id<"orders">;
+      const newId = (await ctx.db.insert("orders", row as never)) as Id<"orders">;
       idMap.set(`orders:${oldId}`, newId);
     }
 
@@ -232,7 +229,7 @@ export const restoreSandboxInternal = internalMutation({
       row.automationRunId = undefined;
       if (Array.isArray(row.comments)) row.comments = [];
       if (Array.isArray(row.attachments)) row.attachments = [];
-      const newId = ctx.db.insert("tasks", row as never) as unknown as Id<"tasks">;
+      const newId = (await ctx.db.insert("tasks", row as never)) as Id<"tasks">;
       idMap.set(`tasks:${oldId}`, newId);
     }
 
@@ -253,7 +250,7 @@ export const restoreSandboxInternal = internalMutation({
       delete row.paymentLinkId;
       delete row.paymentLinkUrl;
       delete row.paymentOrderId;
-      const newId = ctx.db.insert("invoices", row as never) as unknown as Id<"invoices">;
+      const newId = (await ctx.db.insert("invoices", row as never)) as Id<"invoices">;
       idMap.set(`invoices:${oldId}`, newId);
     }
 
@@ -276,7 +273,7 @@ export const restoreSandboxInternal = internalMutation({
           byId: undefined,
         }));
       }
-      const newId = ctx.db.insert("matterDocuments", row as never) as unknown as Id<"matterDocuments">;
+      const newId = (await ctx.db.insert("matterDocuments", row as never)) as Id<"matterDocuments">;
       idMap.set(`matterDocuments:${oldId}`, newId);
     }
 
@@ -292,7 +289,7 @@ export const restoreSandboxInternal = internalMutation({
       row.matterId = matterId;
       row.authorId = undefined;
       row.supersedes = undefined;
-      const newId = ctx.db.insert("matterEvents", row as never) as unknown as Id<"matterEvents">;
+      const newId = (await ctx.db.insert("matterEvents", row as never)) as Id<"matterEvents">;
       idMap.set(`matterEvents:${oldId}`, newId);
     }
 
@@ -307,9 +304,6 @@ export const restoreSandboxInternal = internalMutation({
       documents: (archive.documents ?? []).length,
       events: (archive.events ?? []).length,
     };
-    void map;
-    void map;
-
     const expected = archive.counts ?? {};
     const mismatches: string[] = [];
     for (const k of Object.keys(verified)) {
@@ -415,12 +409,13 @@ export const latestArchiveInternal = internalQuery({
       .filter((r) => r.kind === "archive_export")
       .sort((a, b) => b.performedAt - a.performedAt);
     const latest = archives[0];
-    if (!latest) return null;
-    // The storage ref is embedded in the label by registerExport.
-    const m = latest.label.match(/archive ref ([a-z0-9]+)/i);
-    return m
-      ? { storageId: m[1]!, performedAt: latest.performedAt, label: latest.label }
-      : null;
+    if (!latest?.storageId) return null;
+    return {
+      storageId: latest.storageId,
+      performedAt: latest.performedAt,
+      label: latest.label,
+      counts: latest.counts ?? null,
+    };
   },
 });/**
  * List sandbox orgs created by drills (owner/admin only).

@@ -274,7 +274,7 @@ Last updated: 28 September 2026 (turn 7: **status precision + corpus integrity a
 ## 24. Delivery and acceptance criteria
 - Per-phase: preview, test steps, synthetic data labelling, DB/config changes, tests+results, build status, defects, dependencies, checklist update, handoff — **Implemented and verified** (`ADVOKATE_PROGRESS.md` + `docs/DELIVERY.md` maintained every milestone)
 - Honest status labels — **Enforced by convention in both tracking files**
-- Required test categories (isolation, revocation, sensitive records, reconciliation, retries, regressions, E2E, restore, performance) — **Partially implemented** (isolation/revocation/retry covered by automated tests; restore test & realistic performance runs outstanding)
+- Required test categories (isolation, revocation, sensitive records, reconciliation, retries, regressions, E2E, restore, performance) — **Partially implemented** (isolation/revocation/retry/restore covered: the restore test is an AUTOMATED one-click drill since 30 Sep 2026 — archive → sandbox restore with count verification → purge → honest register, see restoreVerification.ts; realistic performance runs outstanding)
 
 ## 25. CJ GLOBAL — platform operations (checklist added 27 Sep 2026)
 

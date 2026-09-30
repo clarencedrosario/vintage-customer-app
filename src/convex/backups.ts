@@ -339,6 +339,7 @@ export const registerExport = internalMutation({
       kind: "archive_export",
       label: `${args.label} (archive ref ${args.storageId})`,
       counts: args.counts,
+      storageId: args.storageId,
       performedById: args.performedById,
       performedAt: Date.now(),
     });
@@ -355,8 +356,46 @@ export const registerExport = internalMutation({
 });
 
 // ---------------------------------------------------------------------
-// Restore-test register (manual, by an owner/administrator)
+// Restore-test register (manual, by an owner/administrator; the
+// automated drill in restoreVerification.ts records through the
+// internal variant below)
 // ---------------------------------------------------------------------
+
+/** Internal recorder for automated restore drills (no caller identity). */
+export const recordRestoreTestInternal = internalMutation({
+  args: {
+    orgId: v.id("organizations"),
+    performedById: v.id("users"),
+    performedByName: v.string(),
+    label: v.string(),
+    result: v.union(
+      v.literal("passed"),
+      v.literal("failed"),
+      v.literal("partial"),
+    ),
+    procedureNote: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.insert("backupRecords", {
+      orgId: args.orgId,
+      kind: "restore_test",
+      label: args.label.slice(0, 120),
+      environment: "restore-sandbox (same deployment, isolated org)",
+      result: args.result,
+      procedureNote: args.procedureNote?.slice(0, 1000),
+      performedById: args.performedById,
+      performedAt: Date.now(),
+    });
+    await ctx.db.insert("auditLog", {
+      orgId: args.orgId,
+      actorId: args.performedById,
+      actorName: args.performedByName,
+      action: "Restore drill (automated)",
+      detail: `${args.label} — ${args.result}.`,
+      createdAt: Date.now(),
+    });
+  },
+});
 
 export const recordRestoreTest = mutation({
   args: {

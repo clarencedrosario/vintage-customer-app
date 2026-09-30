@@ -2315,6 +2315,9 @@ export default defineSchema({
     retentionNote: v.optional(v.string()),
     performedById: v.id("users"),
     performedAt: v.number(),
+    // archive_export rows: the stored archive blob (restore drills read
+    // this directly instead of parsing the label).
+    storageId: v.optional(v.id("_storage")),
   }).index("by_org", ["orgId"]),
 
   // ---------------- GitHub integration ----------------

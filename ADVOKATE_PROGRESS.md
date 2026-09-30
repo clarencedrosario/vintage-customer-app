@@ -1837,3 +1837,35 @@ pushed); tsc clean; 32 files / 525 tests pass (19 payments tests).
 New dependency: @noble/ciphers, @noble/hashes (audited crypto libs).
 Env var to add at operator leisure: SECRET_ENCRYPTION_KEY (optional —
 legacy fallback works).
+
+## Turn-12 continued: the §24 restore test is now REAL (unblocked product work)
+
+The requirements file listed "restore test & realistic performance runs
+outstanding" as the acceptance-criteria gap. The restore test is closed:
+
+- NEW src/convex/restoreVerification.ts: restores an org's LATEST
+  archive export into a throwaway SANDBOX organization inside the same
+  deployment — id remapping for every cross-row pointer, user pointers
+  dropped (archives carry no users), denormalized/enrichment and
+  object-storage refs stripped honestly — then VERIFIES restored counts
+  against archive counts (any mismatch aborts the whole transaction and
+  fails the drill) and purges the sandbox.
+- Purge guard: only orgs with slug restore-sandbox-* can be purged
+  (tested: purging a live org is refused).
+- runRestoreDrill (owner/admin action): latest archive → sandbox
+  restore → verify → purge → recordRestoreTestInternal (register row +
+  audit entry), or an honest "failed" record with the failure reason.
+- UI: Backups & restore card gains a "Run restore drill" button.
+- Tests (3, new file restoreVerification.test.ts): full drill passes
+  with exact counts (1 client/matter/hearing/order/task/invoice/event)
+  and purges; purge guard; tampered archive (counts inflated) →
+  RESTORE VERIFICATION FAILED, nothing persisted. Two real bugs were
+  caught and fixed during the drill's construction: un-awaited inserts
+  (Promises leaked into the result) and export-enrichment fields
+  (clientName) that are not table columns.
+- Honest limits: the drill verifies DATABASE records; document binaries
+  stay in object storage (covered by platform backups, stated in the
+  archive itself); realistic performance runs remain outstanding.
+
+State: bunx convex dev --once clean; tsc clean; 33 files / 528 tests
+pass (3 new restore tests).

@@ -418,6 +418,7 @@ export function BackupCard() {
   const records = useQuery(api.backups.listRecords);
   const runArchiveExport = useAction(api.backups.archiveExport);
   const recordRestore = useMutation(api.backups.recordRestoreTest);
+  const runDrill = useAction(api.restoreVerification.runRestoreDrill);
 
   const isOwnerAdmin =
     caps !== undefined &&
@@ -448,6 +449,40 @@ export function BackupCard() {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="max-w-xl">
+            <p className="text-sm font-medium">Restore drill (automated)</p>
+            <p className="text-xs text-muted-foreground">
+              One-click proof that your latest archive actually restores:
+              the drill restores it into a throwaway sandbox inside this
+              deployment, verifies every row count, purges the sandbox,
+              and records the result — your live data is never touched.
+            </p>
+          </div>
+          <Button
+            size="sm"
+            disabled={busy || caps === undefined || !isOwnerAdmin}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                const res = await runDrill({});
+                const c = res.verified;
+                toast.success(
+                  `Restore drill passed — ${c.matters} matters, ${c.clients} clients, ${c.documents} documents verified and sandbox purged.`,
+                );
+              } catch (e) {
+                toast.error(
+                  e instanceof Error ? e.message : "Restore drill failed.",
+                );
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            {busy ? "Running drill…" : "Run restore drill"}
+          </Button>
+        </div>
+
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="max-w-xl">
             <p className="text-sm font-medium">Archive export</p>
