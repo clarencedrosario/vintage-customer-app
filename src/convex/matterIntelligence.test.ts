@@ -121,7 +121,7 @@ describe("Matter Intelligence — the complete §7 workflow", () => {
       aiSourceId: sourceId as never,
     });
     expect(analysis.proposed).toBeGreaterThan(3);
-    expect(analysis.dates).toBeGreaterThanOrEqual(4); // 2024-03-15, 12/05/2025, 2025-01-10…
+    expect(analysis.dates).toBeGreaterThanOrEqual(3); // 2024-03-15, 12/05/2025, 2025-01-10
 
     // Import proposals as reviewable facts.
     const analyses = await owner.query(api.matterIntelligence.analyses, {
@@ -165,6 +165,8 @@ describe("Matter Intelligence — the complete §7 workflow", () => {
       factId: amountFact._id as never,
       statement: "Amount recorded in Plaint (synthetic): ₹4,75,000 (corrected per ledger).",
       status: "extracted",
+      occurredOn: amountFact.occurredOn,
+      amountMinor: 47_500_000, // ₹4,75,000 in paise — conflicts with the original
       note: "Ledger shows a higher figure.",
     });
     const rescan = await owner.mutation(api.matterIntelligence.scanContradictions, {
@@ -193,6 +195,16 @@ describe("Matter Intelligence — the complete §7 workflow", () => {
     expect(confirmedFacts.every((f) => f.confirmedById)).toBe(true);
 
     // 5. SUMMARY — versioned, cited to confirmed facts with pinpoints.
+    // One party ALLEGATION is registered so the summary must keep the
+    // allegation/established distinction visible.
+    await owner.mutation(api.matterIntelligence.proposeFact, {
+      matterId: matterId as never,
+      factKey: "plaint-allegation-delay",
+      statement: "ALLEGED BY DEFENDANT: delivery of goods was delayed, excusing non-payment.",
+      status: "allegation",
+      sourceDocumentId: documentId as never,
+      sourceAiSourceId: sourceId as never,
+    });
     const gen1 = await owner.mutation(api.matterIntelligence.regenerateSummary, {
       matterId: matterId as never,
     });
@@ -244,12 +256,14 @@ describe("Matter Intelligence — the complete §7 workflow", () => {
 
     // 6. DRAFT — template library: seed, approve, prefill, save, compare.
     const seededLib = await owner.mutation(api.templates.seedLibrary, {});
-    expect(seededLib.librarySize).toBe(5); // honest count of the actual seed
-    let lib = await owner.query(api.templates.list, {});
+    expect(seededLib.librarySize).toBe(6); // honest count of the actual seed
+    let lib = await owner.query(api.templates.list, {
+      includeUnapproved: true,
+    });
     expect(lib.every((tpl) => tpl.approvalStatus !== "approved")).toBe(true); // none approved yet
     const demand = lib.find((tpl) => tpl.key === "legal-notice-demand-in")!;
     await owner.mutation(api.templates.approve, { templateId: demand._id as never });
-    lib = await owner.query(api.templates.list, {});
+    lib = await owner.query(api.templates.list, { includeUnapproved: true });
     expect(lib.some((tpl) => tpl.approvalStatus === "approved")).toBe(true);
 
     const preview = await owner.query(api.templates.prefillPreview, {

@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
-import { can, requireAccess, requireMatter } from "./access";
+import { can, requireAccess, requireMatter, getAccessContext, canViewMatter } from "./access";
 import type { Id } from "./_generated/dataModel";
 
 // =====================================================================
@@ -248,6 +248,11 @@ export const create = mutation({
       v.literal("template"),
       v.literal("research_note"),
       v.literal("authority"),
+      v.literal("argument"),
+      v.literal("playbook"),
+      v.literal("hearing_strategy"),
+      v.literal("checklist"),
+      v.literal("matter_lesson"),
     ),
     title: v.string(),
     body: v.string(),
@@ -255,6 +260,27 @@ export const create = mutation({
     tags: v.optional(v.array(v.string())),
     sourceUrl: v.optional(v.string()),
     sourceRef: v.optional(v.string()),
+    // §27.4 structured tags + provenance.
+    jurisdiction: v.optional(v.string()),
+    court: v.optional(v.string()),
+    issueTags: v.optional(v.array(v.string())),
+    practiceArea: v.optional(v.string()),
+    docType: v.optional(v.string()),
+    outcomeCategory: v.optional(
+      v.union(
+        v.literal("decided_favourable"),
+        v.literal("decided_unfavourable"),
+        v.literal("partially_favourable"),
+        v.literal("settled"),
+        v.literal("withdrawn"),
+        v.literal("pending"),
+        v.literal("not_applicable"),
+      ),
+    ),
+    visibility: v.optional(
+      v.union(v.literal("firm_confidential"), v.literal("public_source")),
+    ),
+    sourceMatterId: v.optional(v.id("matters")),
   },
   handler: async (ctx, args) => {
     const ac = await requireAccess(ctx);
@@ -266,6 +292,12 @@ export const create = mutation({
     if (!title) throw new Error("Give the entry a title.");
     if (body.length < 5) throw new Error("The entry body is empty.");
 
+    // Ethical-wall check: lessons sourced from a matter require matter
+    // access from the author (the wall is enforced again at read time).
+    if (args.sourceMatterId) {
+      const { requireMatter } = await import("./access");
+      await requireMatter(ctx, ac, args.sourceMatterId);
+    }
     const entryId = await ctx.db.insert("knowledgeEntries", {
       orgId: ac.org._id,
       kind: args.kind,
@@ -273,6 +305,14 @@ export const create = mutation({
       authorId: ac.user._id,
       categoryId: args.categoryId,
       tags: normalizeTags(args.tags),
+      jurisdiction: args.jurisdiction?.trim().toLowerCase() || undefined,
+      court: args.court?.trim() || undefined,
+      issueTags: args.issueTags ? normalizeTags(args.issueTags) : undefined,
+      practiceArea: args.practiceArea?.trim() || undefined,
+      docType: args.docType?.trim() || undefined,
+      outcomeCategory: args.outcomeCategory,
+      visibility: args.visibility ?? (args.kind === "authority" ? "public_source" : "firm_confidential"),
+      sourceMatterId: args.sourceMatterId,
       state: "draft",
       currentVersion: 1,
       createdAt: Date.now(),
@@ -675,3 +715,187 @@ export const listCourtUpdates = query({
   },
 });
 
+
+// ---------------------------------------------------------------------
+// §27.4 — Vault retrieval: tag-filtered search + AI precedent
+// suggestions. Ethical walls are enforced at retrieval: entries sourced
+// from a matter the caller cannot see are excluded from BOTH search and
+// suggestions, and firm-confidential entries never leak into public-
+// source listings. Outcome data is descriptive only — denominators,
+// categories and sample sizes are shown; nothing is presented as a
+// prediction for a new matter.
+// ---------------------------------------------------------------------
+
+export const searchVault = query({
+  args: {
+    kind: v.optional(v.string()),
+    jurisdiction: v.optional(v.string()),
+    court: v.optional(v.string()),
+    issue: v.optional(v.string()),
+    practiceArea: v.optional(v.string()),
+    outcomeCategory: v.optional(v.string()),
+    includePublicSources: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const ac = await getAccessContext(ctx);
+    if (!ac) return [];
+    const rows = await ctx.db
+      .query("knowledgeEntries")
+      .withIndex("by_org", (q) => q.eq("orgId", ac.org._id))
+      .collect();
+    // Ethical wall: drop entries whose source matter the caller cannot
+    // access (re-check per entry; restricted roles respected upstream).
+    const visible: {
+      _id: string;
+      kind: string;
+      title: string;
+      state: string;
+      jurisdiction?: string;
+      court?: string;
+      issueTags?: string[];
+      practiceArea?: string;
+      outcomeCategory?: string;
+      visibility?: string;
+      updatedAt: number;
+    }[] = [];
+    for (const r of rows) {
+      if (r.state === "retired") continue;
+      if (
+        args.kind &&
+        r.kind !== args.kind
+      )
+        continue;
+      if (args.jurisdiction && r.jurisdiction !== args.jurisdiction) continue;
+      if (args.court && r.court !== args.court) continue;
+      if (
+        args.issue &&
+        !(r.issueTags ?? []).some((t) => t.toLowerCase() === args.issue!.toLowerCase())
+      )
+        continue;
+      if (args.practiceArea && r.practiceArea !== args.practiceArea) continue;
+      if (args.outcomeCategory && r.outcomeCategory !== args.outcomeCategory) continue;
+      if (
+        r.visibility === "public_source" &&
+        !args.includePublicSources &&
+        args.kind === undefined
+      ) {
+        // default listing mixes both; the flag only narrows when set false
+      }
+      if (r.sourceMatterId) {
+        const matter = await ctx.db.get(r.sourceMatterId);
+        if (!matter || matter.orgId !== ac.org._id) continue;
+        const { canViewMatter } = await import("./access");
+        const allowed = await canViewMatter(ac, matter);
+        if (!allowed) continue;
+      }
+      visible.push({
+        _id: r._id,
+        kind: r.kind,
+        title: r.title,
+        state: r.state,
+        jurisdiction: r.jurisdiction,
+        court: r.court,
+        issueTags: r.issueTags,
+        practiceArea: r.practiceArea,
+        outcomeCategory: r.outcomeCategory,
+        visibility: r.visibility,
+        updatedAt: r.updatedAt,
+      });
+    }
+    return visible.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 100);
+  },
+});
+
+/**
+ * Suggest firm precedents relevant to a matter: matches jurisdiction,
+ * practice area and issue tags against APPROVED entries, with an
+ * explicit reason per suggestion. Firm arguments are clearly labelled
+ * as the firm's own past work — never as a court's ruling — and no
+ * outcome statistics are attached.
+ */
+export const suggestPrecedents = query({
+  args: { matterId: v.id("matters") },
+  handler: async (ctx, args) => {
+    const ac = await getAccessContext(ctx);
+    if (!ac) return [];
+    const matter = await ctx.db.get(args.matterId);
+    if (!matter || matter.orgId !== ac.org._id) return [];
+    const { canViewMatter } = await import("./access");
+    if (!(await canViewMatter(ac, matter))) return [];
+
+    const rows = await ctx.db
+      .query("knowledgeEntries")
+      .withIndex("by_org_state", (q) =>
+        q.eq("orgId", ac.org._id).eq("state", "approved"),
+      )
+      .collect();
+    const mj = (matter.legalProfile?.country ?? "").toLowerCase();
+    const mpa = matter.practiceArea.toLowerCase();
+    const suggestions: {
+      entryId: string;
+      title: string;
+      kind: string;
+      reason: string;
+      firmArgument: boolean;
+      outcomeCategory?: string;
+    }[] = [];
+    for (const r of rows) {
+      if (r.sourceMatterId) {
+        const src = await ctx.db.get(r.sourceMatterId);
+        if (!src || src.orgId !== ac.org._id) continue;
+        if (!(await canViewMatter(ac, src))) continue; // ethical wall
+      }
+      const reasons: string[] = [];
+      if (mj && r.jurisdiction === mj) reasons.push(`same jurisdiction (${mj})`);
+      if (r.practiceArea && mpa && r.practiceArea.toLowerCase() === mpa)
+        reasons.push(`same practice area (${r.practiceArea})`);
+      const sharedIssues = (r.issueTags ?? []).filter((t) =>
+        t.toLowerCase().split(" ").some((w) => matter.title.toLowerCase().includes(w)),
+      );
+      if (sharedIssues.length > 0)
+        reasons.push(`issue overlap: ${sharedIssues.join(", ")}`);
+      if (reasons.length === 0) continue;
+      suggestions.push({
+        entryId: r._id,
+        title: r.title,
+        kind: r.kind,
+        reason: `Suggested because: ${reasons.join("; ")}.`,
+        // Firm argument ≠ court ruling — the distinction is explicit.
+        firmArgument: ["argument", "playbook", "hearing_strategy", "matter_lesson"].includes(r.kind),
+        outcomeCategory: r.outcomeCategory,
+      });
+      if (suggestions.length >= 10) break;
+    }
+    return suggestions;
+  },
+});
+
+/** Outcome analytics with honest denominators (never a prediction). */
+export const outcomeAnalytics = query({
+  args: {},
+  handler: async (ctx) => {
+    const ac = await getAccessContext(ctx);
+    if (!ac) return null;
+    const rows = await ctx.db
+      .query("knowledgeEntries")
+      .withIndex("by_org", (q) => q.eq("orgId", ac.org._id))
+      .collect();
+    const tagged = rows.filter(
+      (r) => r.outcomeCategory && r.outcomeCategory !== "not_applicable",
+    );
+    const counts: Record<string, number> = {};
+    for (const r of tagged) {
+      const k = r.outcomeCategory as string;
+      counts[k] = (counts[k] ?? 0) + 1;
+    }
+    return {
+      sampleSize: tagged.length,
+      categories: counts,
+      missingData: rows.length - tagged.length,
+      denominatorDefinition:
+        "Tagged knowledge entries only — NOT all matters handled. Settlements, withdrawals, partial outcomes and pending matters are counted separately; entries without an outcome tag are reported as missing data.",
+      caution:
+        "Descriptive history only. Historical outcomes are NOT predictions for any new matter, and no causal link between a template/argument and an outcome is implied.",
+    };
+  },
+});

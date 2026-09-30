@@ -2012,11 +2012,43 @@ export default defineSchema({
       v.literal("template"),
       v.literal("research_note"),
       v.literal("authority"),
+      // §27.4 knowledge-vault expansion — arguments, playbooks, hearing
+      // strategies/checklists, completed-matter lessons.
+      v.literal("argument"),
+      v.literal("playbook"),
+      v.literal("hearing_strategy"),
+      v.literal("checklist"),
+      v.literal("matter_lesson"),
     ),
     title: v.string(),
     authorId: v.id("users"),
     categoryId: v.optional(v.id("knowledgeCategories")),
     tags: v.optional(v.array(v.string())),
+    // §27.4 structured tagging (all optional; UI + retrieval filters).
+    jurisdiction: v.optional(v.string()), // "in", "in-mh", "eu-…"
+    court: v.optional(v.string()),
+    issueTags: v.optional(v.array(v.string())),
+    practiceArea: v.optional(v.string()),
+    docType: v.optional(v.string()),
+    outcomeCategory: v.optional(
+      v.union(
+        v.literal("decided_favourable"),
+        v.literal("decided_unfavourable"),
+        v.literal("partially_favourable"),
+        v.literal("settled"),
+        v.literal("withdrawn"),
+        v.literal("pending"),
+        v.literal("not_applicable"),
+      ),
+    ),
+    // Public legal source vs confidential firm knowledge: public rows
+    // may cite statutes/judgments only and never carry firm strategy.
+    visibility: v.optional(
+      v.union(v.literal("firm_confidential"), v.literal("public_source")),
+    ),
+    // For matter_lesson rows: the completed matter this lesson came
+    // from (provenance; access re-checked at read time).
+    sourceMatterId: v.optional(v.id("matters")),
     state: v.union(v.literal("draft"), v.literal("approved"), v.literal("retired")),
     // Who approved the current version (approved entries only).
     approvedById: v.optional(v.id("users")),

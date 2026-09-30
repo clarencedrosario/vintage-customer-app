@@ -1869,3 +1869,73 @@ outstanding" as the acceptance-criteria gap. The restore test is closed:
 
 State: bunx convex dev --once clean; tsc clean; 33 files / 528 tests
 pass (3 new restore tests).
+
+
+## Turn-13 — 30 Sep 2026: Advanced Matter Intelligence & AI Legal Associate (§27)
+
+New capability set per the user's brief; existing modules extended, none
+duplicated.
+
+BUILT
+- matterIntelligence.ts: deterministic document analysis (dates with
+  page/paragraph pinpoints, parties, obligations, amounts via TESTED
+  integer-paise math, issues, duplicate detection by shingle overlap,
+  missing-information flags) -> proposals only. Fact lifecycle with
+  explicit statuses (allegation/extracted/disputed/confirmed/rejected);
+  lawyer-only confirm/reject/correct; corrections of CONFIRMED facts
+  never overwrite — they enter as a competing row, get paired by the
+  contradiction scan, and a lawyer resolves (winner confirmed, loser
+  rejected, reason recorded). Versioned, stale-marked summaries from
+  confirmed facts only, allegations labelled. Health indicators are
+  explicit rules with visible inputs (overdue tasks, open
+  contradictions, unreviewed extraction, stale summaries) — no
+  win-probability, no unexplained risk score.
+- templates.ts: governed library (type/practice area/jurisdiction/
+  version/review date/author-source/usage rights/required fields/
+  approval/instructions/limitations). HONEST SEED: 6 distinct templates,
+  jurisdiction "in", five practice areas (demand notice, S.138
+  complaint, written statement, bail application, mutual NDA, affidavit
+  of evidence) — each with era/procedure warnings in limitations.
+  Prefill ONLY from confirmed facts/matter fields, provenance-tagged;
+  gaps stay visible placeholders; optional clauses; template-vs-draft
+  comparison; HTML export (print-to-PDF/Word-openable); partner approval
+  gate. stats reports the ACTUAL count vs the 300+ long-term target.
+  Google Docs sync: blocked (no credentials) and labelled as such.
+- taskSuggestions.ts: proposals from reviewed analyses (missing
+  material) and orders (un-done directions); duplicate-safe vs open
+  tasks; approval creates exactly one real task; dismissal records why.
+- knowledge.ts extended (section 27.4): new kinds (argument, playbook,
+  hearing_strategy, checklist, matter_lesson), structured tags
+  (jurisdiction/court/issues/practice area/doc type/outcome category),
+  public-source vs firm-confidential separation, ethical-wall checks in
+  BOTH search and precedent suggestions, match-reason explanations,
+  firm-argument-vs-court-ruling labelling, outcome analytics with
+  defined denominator, sample size, missing-data count and an explicit
+  not-a-prediction caution.
+
+SECURITY FINDINGS FIXED DURING BUILD (caught by the acceptance test)
+- regenerateSummary accepted a cross-tenant matterId (rival org could
+  write summaries into the owner's org) -> matter/org check added.
+- proposeFact lacked a matter-ownership check -> added.
+- analyseSource silently cast a non-document source id to a document id
+  -> now refuses honestly unless the source is linked to a filed
+  document.
+
+TESTS
+- NEW matterIntelligence.test.ts (3): the full section 27.7 acceptance
+  workflow (upload -> extract -> review -> contradiction+resolution ->
+  stale-marked v2 summary -> template prefill with visible placeholders
+  + comparison -> task suggestion approved into a real task,
+  duplicate-proof) + cross-tenant read/write denial + human-approval
+  boundaries (nothing self-confirms; signed-out confirm refused).
+- Suite: 34 files / 531 tests green at build time; push + tsc clean.
+
+HONEST LIMITS / BLOCKED
+- Live-model enhancement of summaries and clause-level analysis: gated
+  on OPENAI_API_KEY reaching the deployment (the deterministic core
+  already provides extraction, staleness, and review governance; the
+  model layer would enhance wording, not governance).
+- Google Docs sync: blocked (no credentials); export remains usable.
+- Two-way calendar sync + cause-list auto-matching: staged.
+- DPDP/privacy review and qualified legal review: OUTSTANDING, recorded.
+- Browser verification of the new workspace surfaces: pending as usual.

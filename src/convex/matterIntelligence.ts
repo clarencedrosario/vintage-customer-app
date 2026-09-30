@@ -581,6 +581,7 @@ export const correctFact = mutation({
       v.literal("allegation"),
     ),
     occurredOn: v.optional(v.string()),
+    amountMinor: v.optional(v.number()),
     note: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -604,14 +605,13 @@ export const correctFact = mutation({
       note: args.note,
       createdAt: Date.now(),
     });
-    await ctx.db.patch(fact._id, {
-      supersededById: undefined,
-      status: fact.status === "confirmed" ? "confirmed" : fact.status,
-      updatedAt: Date.now(),
-      rejectedReason: undefined,
-    });
-    // Mark old row superseded only when the correction is a NEW row.
-    const newId = await ctx.db.insert("matterFacts", {
+
+    // Governance: a CONFIRMED fact is never silently overwritten. Its
+    // correction enters as a competing "extracted" row; BOTH stay active
+    // and the contradiction scan pairs them — a lawyer resolves which
+    // version stands. Only unconfirmed facts (uncontroversial fixes) are
+    // directly superseded.
+    const newId = (await ctx.db.insert("matterFacts", {
       orgId: ac.org._id,
       matterId: fact.matterId,
       factKey: fact.factKey,
@@ -622,7 +622,7 @@ export const correctFact = mutation({
       sourceRefs: fact.sourceRefs,
       occurredOn: args.occurredOn ?? fact.occurredOn,
       partyName: fact.partyName,
-      amountMinor: fact.amountMinor,
+      amountMinor: args.amountMinor ?? fact.amountMinor,
       proposedBy: fact.proposedBy,
       proposedById: ac.user._id,
       confirmedById: args.status === "confirmed" ? ac.user._id : undefined,
@@ -631,11 +631,22 @@ export const correctFact = mutation({
       version: fact.version + 1,
       createdAt: Date.now(),
       updatedAt: Date.now(),
-    });
-    await ctx.db.patch(fact._id, {
-      supersededById: newId,
-      updatedAt: Date.now(),
-    });
+    })) as Id<"matterFacts">;
+
+    if (fact.status !== "confirmed") {
+      await ctx.db.patch(fact._id, {
+        supersededById: newId,
+        updatedAt: Date.now(),
+      });
+    } else {
+      // Surface the conflict explicitly in the matter chronology.
+      await ctx.db.insert("matterEvents", {
+        matterId: fact.matterId,
+        kind: "note",
+        detail: "Fact correction proposed against a CONFIRMED fact — contradiction review required.",
+        createdAt: Date.now(),
+      });
+    }
     return { newFactId: newId };
   },
 });
@@ -650,6 +661,10 @@ export const scanContradictions = mutation({
   handler: async (ctx, args) => {
     const ac = await requireAccess(ctx);
     requireCapability(ac, "note.write");
+    const matter = await ctx.db.get(args.matterId);
+    if (!matter || matter.orgId !== ac.org._id) {
+      throw new Error("Matter not found in this organization.");
+    }
     const facts = await ctx.db
       .query("matterFacts")
       .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))
@@ -783,12 +798,13 @@ export const health = query({
   handler: async (ctx, args) => {
     const ac = await getAccessContext(ctx);
     if (!ac) return null;
-    await ctx.db.get(args.matterId); // existence; auth via org filter below
+    const matter = await ctx.db.get(args.matterId);
+    if (!matter || matter.orgId !== ac.org._id) return null;
     const now = Date.now();
     const today = todayIST();
 
-    const [tasks, contradictions, analyses, ordersDocs, facts] = await Promise.all([
-      ctx.db.query("tasks").withIndex("by_org" as never).collect().catch(() => []),
+    const [tasks, contradictions, analyses, facts] = await Promise.all([
+      ctx.db.query("tasks").collect(),
       ctx.db
         .query("matterContradictions")
         .withIndex("by_matter_status", (q) =>
@@ -800,15 +816,10 @@ export const health = query({
         .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))
         .collect(),
       ctx.db
-        .query("orders")
-        .collect(),
-      ctx.db
         .query("matterFacts")
         .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))
         .collect(),
     ]);
-
-    void ordersDocs;
 
     // 1. Overdue tasks (explicit: status not done, dueAt in the past).
     const matterTasks = (tasks as Doc<"tasks">[]).filter(
@@ -1038,6 +1049,12 @@ export const regenerateSummary = mutation({
   handler: async (ctx, args): Promise<{ summaryVersion: number; summaryId: Id<"matterSummaries"> }> => {
     const ac = await requireAccess(ctx);
     requireCapability(ac, "ai.use");
+    // Tenant + matter authorization: summaries may only be generated for
+    // a matter of THIS organization.
+    const matter = await ctx.db.get(args.matterId);
+    if (!matter || matter.orgId !== ac.org._id) {
+      throw new Error("Matter not found in this organization.");
+    }
     const r = await ctx.runMutation(internal.matterIntelligence.generateSummary, {
       matterId: args.matterId,
       createdById: ac.user._id,
