@@ -4,7 +4,7 @@ Durable progress file so development resumes without repeating completed work.
 Companion to `ADVOKATE_REQUIREMENTS.md` (the master checklist). Handoff log also
 maintained in `docs/DELIVERY.md`.
 
-Last checkpoint: **30 September 2026** — latest record: **Turn 15** (bottom section); turn 14 and earlier summaries below.
+Last checkpoint: **30 September 2026** — latest record: **Turn 16** (bottom section); turn 15 and earlier summaries below.
 
 ---
 
@@ -2053,6 +2053,105 @@ working module names; not represented as trademark-cleared.
 - DPDP/privacy assessment and qualified legal/rights review (including the
   Convex licence review): OUTSTANDING — recorded in docs/DPDP_REVIEW.md and
   the provenance register, no claims made.
+
+## Turn-16 — 30 Sep 2026: Legal-intelligence & practice-management enhancement programme begins (§32, Phases 1 + 4)
+
+### CURRENT STATE ESTABLISHED (before edits)
+
+- Deployment re-verified, not assumed: `bunx convex dev --once` reports
+  moonlit-elk-307 (dashboard URL in the run log).
+- Baseline BEFORE edits: 36 files / 549 tests green; `tsc -b --noEmit` 0
+  errors. Re-confirmed after schema/module additions.
+- Checkpoint: git is Vly-managed in this environment (git commands are
+  blocked by policy) — recoverability rides on the platform's version
+  control; no data migration was performed (schema additions only, all new
+  tables — existing rows untouched), so no separate data-backup step was
+  required beyond the platform backups already documented.
+- Overlap/dependency map (requirements → existing modules): conflicting-
+  evidence review EXTENDS matterFacts/contradiction scan (new
+  reviewFindings table; side-by-side provenance via aiSources); evidence
+  bundles REUSE aiJobs (structured citations, legalSourceVersions) +
+  legalIntel validation semantics; adverse-authority recheck (Phase 2,
+  next) will REUSE legalSources treatment fields (already require
+  treatmentSourceKey) + legalSourceVersions drift; matter-impact alerts
+  (Phase 3) will REUSE the ingestion run state machine (legalIntel).
+  Phases 5-12 mapped in ADVOKATE_REQUIREMENTS.md §32 with statuses.
+
+### PHASE 1 — CONFLICTING-EVIDENCE REVIEW (implemented + tested)
+
+- NEW schema: reviewFindings (kind: date_conflict / amount_conflict /
+  party_identity / account_conflict; topicKey; sideAId/sideBId →
+  matterFacts, which carry document version + page/paragraph/quote
+  pinpoints + epistemic status; status open → confirmed_conflict |
+  dismissed_different_events | dismissed_other_reason | unresolved |
+  accepted_interpretation, plus reassessment_flagged with
+  sourceChangeFlag{aiSourceId, flagAt, note}); reviewFindingRevisions
+  (append-only action history).
+- NEW conflictReview.ts: deterministic pairing scan — route 1: same
+  factKey correction chains; route 2: cross-SOURCE same-kind facts whose
+  statements share an informative content token (boilerplate stopwords
+  AND each fact's own source-name tokens excluded, so document labels
+  never create phantom topics; noise cap 25). list returns BOTH sides
+  side by side with source name, version timestamp, pinpoints and fact
+  status (allegation/extracted/disputed/confirmed) — review suggestions,
+  never established falsehoods. Lawyer actions with mandatory reasons;
+  "these passages concern different events" is a first-class dismissal;
+  accepted_interpretation reconciles without declaring either side false.
+  History is append-only. flagForReassessment: a source text change
+  FLAGS affected findings — resolved ones keep their recorded outcome and
+  gain a visible flag; open ones stay open — a later document NEVER
+  auto-resolves anything. A re-scan never resurrects a reviewed pair
+  (any-state suppression).
+- Tests (reviewAndBundles.test.ts, Phase-1 block, 3): conflicting dates
+  AND amounts across two synthetic documents → ≥2 findings; side-by-side
+  provenance (distinct source names, extracted status, pinpoints);
+  different-events dismissal + accepted interpretation with history rows
+  (fromStatus/toStatus/changedById); re-scan resurrects nothing; source
+  text change → accepted finding becomes reassessment_flagged with the
+  lawyer's note intact → re-review (confirm) clears the flag and appends
+  history; cross-tenant read-empty + act/scan refused.
+
+### PHASE 4 — RESEARCH EVIDENCE BUNDLES (implemented + tested)
+
+- NEW schema: researchBundles (question, matter/jurisdiction/legalDates,
+  answer, unresolvedQuestions, citations[] each with stableKey/title/
+  anchor/quote/sourceVersion/sourceTitle/retrievedAt/integrityHash/
+  validation{sourceExists, quoteVerified, problem}, jobId, coverageNote,
+  status draft|finalized|superseded, supersededById).
+- NEW evidenceBundles.ts: createFromJob freezes the answer's citations to
+  the CURRENT legalSourceVersions (version + retrievalAt + integrity hash
+  computed over the bundled text — labelled as computed, not a provider
+  attestation) with a FRESH validation run; absent sources and
+  unverifiable quotes become flagged unresolvedIssues, never silently
+  dropped. Bundles are never re-pointed at newer versions: a re-export
+  creates a new bundle and marks the old superseded (chain preserved).
+  The manifest query produces a structured machine-readable export
+  manifest labelled RESEARCH RECORD (not a certified court record;
+  quotation validation ≠ support), reference-only export posture with a
+  per-item omission list, and matter permissions applied at export time.
+- Tests (Phase-4 block, 2): version-2 source + good quote →
+  quoteVerified true, sourceVersion 2, hash present; nonexistent citation
+  → sourceExists false + unresolvedIssues 1; manifest assertions (label,
+  reference-only, unresolved flagged, omissions listed); a newer version-3
+  ingestion leaves the old bundle superseded with its original quote
+  intact while the new bundle freezes v3; finalize records state;
+  cross-tenant get/manifest/listForMatter all empty.
+
+### VERIFIED THIS TURN
+
+- bunx tsc -b --noEmit: 0 errors. bunx convex dev --once: functions ready
+  (moonlit-elk-307). Full suite: 37 files / 554 tests green (baseline
+  36/549 + 5 new). Tests are jsdom/convex-test simulations — no
+  real-provider or browser claims. No production deployment, payment, or
+  destructive action taken.
+
+### REMAINING (§32 phases 2, 3, 5-12)
+
+- Phase 2 adverse authority (treatment fields exist; recheck workflow
+  next), Phase 3 matter-impact alerts (ingestion run state exists),
+  Phases 5-12 per the map in ADVOKATE_REQUIREMENTS.md §32. Externally
+  blocked items unchanged: OPENAI_API_KEY absent; browser verification
+  unavailable; qualified lawyer review outstanding.
 
 ## Turn-15 — 30 Sep 2026: Indian Privacy, Court Updates, Drafting, and Source-Verified AI (§29)
 

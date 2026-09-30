@@ -3092,6 +3092,114 @@ export default defineSchema({
     .index("by_matter", ["matchedMatterId"])
     .index("by_org_source", ["orgId", "sourceKey"]),
 
+  // ---------------------------------------------------------------------
+  // §32 — TURN 16: CONFLICTING-EVIDENCE REVIEW + RESEARCH EVIDENCE
+  // BUNDLES. Review suggestions never establish falsehoods; every
+  // finding keeps both original sources and its review history; a
+  // source change flags affected reviews for reassessment instead of
+  // silently replacing accepted findings. Bundles freeze source
+  // versions with retrieval dates and validation results.
+  // ---------------------------------------------------------------------
+
+  // One review finding = a PAIR of competing passages from the matter's
+  // fact register (which carries document/version pinpoints + status
+  // labels). Detection is deterministic; the LAWYER decides.
+  reviewFindings: defineTable({
+    orgId: v.id("organizations"),
+    matterId: v.id("matters"),
+    kind: v.union(
+      v.literal("date_conflict"),
+      v.literal("amount_conflict"),
+      v.literal("party_identity"),
+      v.literal("account_conflict"),
+    ),
+    // Topic key shared by both passages ("what they are about").
+    topicKey: v.string(),
+    sideAId: v.id("matterFacts"),
+    sideBId: v.id("matterFacts"),
+    // open | confirmed_conflict | dismissed_different_events |
+    // dismissed_other_reason | unresolved | accepted_interpretation |
+    // reassessment_flagged
+    status: v.union(
+      v.literal("open"),
+      v.literal("confirmed_conflict"),
+      v.literal("dismissed_different_events"),
+      v.literal("dismissed_other_reason"),
+      v.literal("unresolved"),
+      v.literal("accepted_interpretation"),
+      v.literal("reassessment_flagged"),
+    ),
+    note: v.optional(v.string()),
+    // Reassessment after source change.
+    sourceChangeFlag: v.optional(
+      v.object({
+        flagAt: v.number(),
+        aiSourceId: v.id("aiSources"),
+        note: v.optional(v.string()),
+      }),
+    ),
+    createdById: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_matter_status", ["matterId", "status"])
+    .index("by_org", ["orgId"]),
+
+  // Append-only review history per finding (lawyer actions preserved).
+  reviewFindingRevisions: defineTable({
+    orgId: v.id("organizations"),
+    matterId: v.id("matters"),
+    findingId: v.id("reviewFindings"),
+    fromStatus: v.string(),
+    toStatus: v.string(),
+    note: v.optional(v.string()),
+    changedById: v.id("users"),
+    createdAt: v.number(),
+  }).index("by_finding", ["findingId"]),
+
+  // Research evidence bundle: a FROZEN research record — cited passages
+  // pinned to their source versions (never silently updated), with
+  // validation results, coverage limits and a manifest.
+  researchBundles: defineTable({
+    orgId: v.id("organizations"),
+    matterId: v.optional(v.id("matters")),
+    title: v.string(),
+    question: v.string(),
+    jurisdiction: v.string(),
+    legalDates: v.optional(v.array(v.object({ label: v.string(), date: v.string() }))),
+    answer: v.string(),
+    unresolvedQuestions: v.array(v.string()),
+    citations: v.array(
+      v.object({
+        stableKey: v.string(),
+        title: v.optional(v.string()),
+        anchor: v.optional(v.string()),
+        quote: v.optional(v.string()),
+        sourceVersion: v.optional(v.number()),
+        sourceTitle: v.optional(v.string()),
+        retrievedAt: v.optional(v.number()),
+        // integrityHash preserved for exit/audit (not fabricated).
+        integrityHash: v.optional(v.string()),
+        validation: v.optional(
+          v.object({
+            sourceExists: v.boolean(),
+            quoteVerified: v.boolean(),
+            problem: v.optional(v.string()),
+          }),
+        ),
+      }),
+    ),
+    jobId: v.optional(v.id("aiJobs")),
+    coverageNote: v.string(),
+    // draft | finalized | superseded (a re-export freezes a new record).
+    status: v.union(v.literal("draft"), v.literal("finalized"), v.literal("superseded")),
+    generatedById: v.id("users"),
+    supersededById: v.optional(v.id("researchBundles")),
+    createdAt: v.number(),
+  })
+    .index("by_matter", ["matterId"])
+    .index("by_org", ["orgId"]),
+
   // ---------------- GitHub integration ----------------
   // One row per organization. The token lives ONLY in the server-side
   // environment (Keys tab → GITHUB_TOKEN); the browser never sees it.
