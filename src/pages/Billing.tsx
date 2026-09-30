@@ -99,6 +99,7 @@ export default function Billing() {
 
   const [newOpen, setNewOpen] = useState(false);
   const [consultOpen, setConsultOpen] = useState(false);
+  const [merchantOpen, setMerchantOpen] = useState(false);
   const [detailId, setDetailId] = useState<string | null>(null);
 
   const overdueCount = (invoices ?? []).filter((i) => i.overdue).length;
@@ -131,11 +132,19 @@ export default function Billing() {
             : "Nothing overdue"}
           {provider && !provider.configured && (
             <span className="ml-2 text-[#8a6d3b]">
-              · Online payments not configured — manual recording available
+              · Online payments not set up — connect your firm's own Razorpay account (client money is never collected through the platform account) or record payments manually
+            </span>
+          )}
+          {provider?.configured && (
+            <span className="ml-2 text-[#5a6b4f]">
+              · Collecting on your firm's Razorpay account (••••{provider.keyIdLast4}, {provider.mode})
             </span>
           )}
         </p>
         <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => setMerchantOpen(true)}>
+            <BadgeCheck className="mr-1.5 size-4" /> Payment account
+          </Button>
           <Button variant="outline" size="sm" onClick={() => setConsultOpen(true)}>
             <CreditCard className="mr-1.5 size-4" /> Consultation link
           </Button>
@@ -228,6 +237,7 @@ export default function Billing() {
         matters={(matters ?? []).filter((m) => m.reference)}
       />
       <ConsultationDialog open={consultOpen} onOpenChange={setConsultOpen} />
+      <MerchantDialog open={merchantOpen} onOpenChange={setMerchantOpen} />
       <ConsultRequestsCard />
       <InvoiceDetailDialog
         invoiceId={detailId}
@@ -1822,6 +1832,160 @@ function ConvertDialog({
               Convert
             </Button>
           </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * Connect / rotate / disable the firm's OWN Razorpay merchant account.
+ * Client money collects here — never through the platform account
+ * (owner decision, 30 Sep 2026). Secrets are sent once and stored
+ * encrypted; they are never displayed again.
+ */
+function MerchantDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+}) {
+  const status = useQuery(api.orgMerchants.status, open ? {} : "skip") as
+    | {
+        connected: boolean;
+        mode: string | null;
+        keyIdLast4: string | null;
+        connectedAt: number | null;
+      }
+    | undefined;
+  const connect = useMutation(api.orgMerchants.connect);
+  const disable = useMutation(api.orgMerchants.disable);
+
+  const [keyId, setKeyId] = useState("");
+  const [keySecret, setKeySecret] = useState("");
+  const [webhookSecret, setWebhookSecret] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    if (!keyId.trim() || !keySecret.trim()) {
+      toast.error("Both the key id and the key secret are required.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await connect({
+        keyId,
+        keySecret,
+        webhookSecret: webhookSecret || undefined,
+      });
+      toast.success(
+        "Merchant account connected. Client payments now collect through your firm's own Razorpay account.",
+      );
+      setKeyId("");
+      setKeySecret("");
+      setWebhookSecret("");
+      onOpenChange(false);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const turnOff = async () => {
+    setBusy(true);
+    try {
+      await disable({});
+      toast.success("Merchant connection disabled — online collection stopped.");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="font-serif">Firm payment account</DialogTitle>
+          <DialogDescription>
+            Client money must collect through your firm's own Razorpay
+            account — never through the platform's. Test-mode keys only;
+            live connections are a separate, explicit step.
+          </DialogDescription>
+        </DialogHeader>
+
+        {status?.connected && (
+          <div className="rounded-lg border bg-muted/30 p-3 text-sm">
+            <p className="font-medium">
+              Connected — key ••••{status.keyIdLast4} ({status.mode} mode)
+            </p>
+            <p className="ink-faded mt-1 text-xs">
+              The secret is stored encrypted and is never shown again.
+              Connect again with new keys to rotate.
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              className="mt-2"
+              disabled={busy}
+              onClick={turnOff}
+            >
+              Disable collection
+            </Button>
+          </div>
+        )}
+
+        <div className="space-y-3">
+          <div>
+            <Label htmlFor="m-key-id">Razorpay test key id</Label>
+            <Input
+              id="m-key-id"
+              value={keyId}
+              onChange={(e) => setKeyId(e.target.value)}
+              placeholder="rzp_test_…"
+              autoComplete="off"
+            />
+          </div>
+          <div>
+            <Label htmlFor="m-key-secret">Key secret</Label>
+            <Input
+              id="m-key-secret"
+              type="password"
+              value={keySecret}
+              onChange={(e) => setKeySecret(e.target.value)}
+              autoComplete="new-password"
+            />
+          </div>
+          <div>
+            <Label htmlFor="m-wh-secret">
+              Webhook secret (optional, recommended)
+            </Label>
+            <Input
+              id="m-wh-secret"
+              type="password"
+              value={webhookSecret}
+              onChange={(e) => setWebhookSecret(e.target.value)}
+              autoComplete="new-password"
+            />
+            <p className="ink-faded mt-1 text-xs">
+              Point your firm's Razorpay dashboard webhook at
+              {`${window.location.origin}/webhooks/razorpay/firm/<your-firm-id>`}
+              . Events are verified against YOUR secret, and only your
+              firm's own invoices can ever be reconciled by them.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button onClick={submit} disabled={busy}>
+            {busy ? "Connecting…" : "Connect account"}
+          </Button>
         </div>
       </DialogContent>
     </Dialog>

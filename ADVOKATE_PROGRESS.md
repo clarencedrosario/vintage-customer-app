@@ -1746,13 +1746,48 @@ live charges, no live mode.
 - The stale _generated snapshot produced confusing "does not exist on
   type" errors that persisted even for runtime-correct code.
 
-## State at end of turn
+## Merchant-ownership decision RECEIVED and ENFORCED (same turn, continuation)
+
+The owner decided: **firm money → per-firm merchant accounts;
+promotions + CJ GLOBAL subscriptions → CJ GLOBAL's account.**
+
+Implemented (not just documented):
+- orgMerchants table: per-firm Razorpay connections with the secret
+  encrypted at rest (new encryptSecret/decryptSecret in crypto.ts —
+  HMAC-derived-key stream cipher, encrypt-then-MAC, context-bound;
+  sandbox-safe; round-trip + tamper + wrong-context tested).
+- Firm-money gates: createPaymentLink and createConsultation REFUSE to
+  run without an active firm connection — even when platform keys exist.
+  The scheduled link creators receive the orgId and use the FIRM's
+  decrypted credentials via credsFor; the platform account is
+  structurally unreachable for client money.
+- Platform flows (subscription checkout, createSubscriptionPaymentLink,
+  createPromotionPaymentLink) explicitly use deployment credentials.
+- Firm webhook route POST /webhooks/razorpay/firm/:orgId verifies
+  against the FIRM's own webhook secret (platform secret cannot verify
+  a firm event and vice versa) and the reconciler refuses cross-tenant
+  targets (logged as RECONCILIATION EXCEPTION). Tested: wrong-secret
+  rejection, firm-secret acceptance, rival-firm signature + foreign
+  invoice reference → no money moved anywhere.
+- Refunds route to the payment's own org's merchant account; credential
+  resolution moved INSIDE the try so a disconnected firm produces an
+  honestly FAILED refund request instead of a stuck "requested".
+- providerStatus is per-org truth now: configured = the FIRM's own
+  connection is active (platform keys no longer flip it). Billing page
+  shows "not set up — connect your firm's own Razorpay account" with a
+  Payment-account dialog (connect/rotate/disable; secrets never shown
+  again).
+- orgMerchants.connect accepts TEST-mode keys only (rzp_test_ enforced);
+  live connections are a deliberately separate future step.
+
+## State at end of turn (final)
 - bunx convex dev --once: clean (schema pushed: by_provider_payment
-  index, unappliedCredits, refundRequests, account 2400).
+  index, unappliedCredits, refundRequests, orgMerchants, account 2400,
+  firm webhook route).
 - bunx tsc -b --noEmit: clean.
-- bun run test: 32 files, 519/519 pass (13 payments tests).
-- OPEN QUESTIONS FOR OWNER: merchant-ownership decision (section 1 of
-  docs/RAZORPAY_SETUP.md); Razorpay test keys for tier-2 execution;
-  OPENAI_API_KEY still not visible to the deployment (model checklist
-  steps 3, 13–15 still blocked). Browser verification pending. Nothing
+- bun run test: 32 files, 523/523 pass (17 payments tests incl.
+  merchant-ownership block).
+- REMAINING BLOCKS: Razorpay test keys (platform-level, for tier-2
+  execution); OPENAI_API_KEY not visible to the deployment (model
+  checklist steps 3, 13–15); browser automation (15 steps). Nothing
   here claims legal correctness or production readiness.

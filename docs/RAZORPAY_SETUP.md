@@ -31,7 +31,39 @@ built and verified.
 
 ---
 
-## 1. Merchant ownership — DECISION REQUIRED BEFORE ENABLING COLLECTION
+## 1. Merchant ownership — DECIDED (30 Sep 2026), enforcement in code
+
+**Owner decision:** firm money collects through **per-firm merchant
+accounts**; CJ GLOBAL's platform account collects only CJ GLOBAL's own
+revenue. Enforced in code, not just documented:
+
+| Money flow | Pays to | How enforced |
+| --- | --- | --- |
+| CJ GLOBAL software subscriptions (section 24) | CJ GLOBAL (deployment keys) | subscription checkout actions use deployment credentials only |
+| Promotion purchases (section 23) | CJ GLOBAL (deployment keys) | `createPromotionPaymentLink` uses deployment credentials; the buyer org is identified in notes, never used as merchant |
+| Law-firm invoice payments | **The firm's own account** | `createPaymentLink` refuses to run unless the firm has an active `orgMerchants` connection; the link is created with the firm's decrypted credentials |
+| Consultation fees | **The firm's own account** | same gate in `createConsultation` |
+
+Mechanics: `orgMerchants` table stores the firm's key id + secret
+(encrypted at rest — `encryptSecret` under the platform's
+`RAZORPAY_KEY_SECRET` as master key; secrets are never returned to any
+client after being set, only ever decrypted server-side inside the Node
+action that talks to Razorpay). Connect/rotate/disable lives in Billing →
+Payment account (test-mode keys only; live connections are a separate
+explicit step). Firm webhooks are verified against the FIRM's own
+webhook secret at `POST /webhooks/razorpay/firm/<orgId>` and the
+reconciler additionally refuses any event whose target belongs to a
+different org (logged as a reconciliation exception). The platform
+webhook secret can never verify a firm event and vice versa. Refunds
+run on whichever merchant account captured the money; a refund whose
+firm account has since been disconnected fails honestly (`failed`,
+nothing moved) instead of hanging in `requested`.
+
+---
+
+## 1b. Historical framing (superseded by the decision above)
+
+The original open question, kept for the record:
 
 With the current single-set-of-keys design, **one Razorpay account (CJ
 GLOBAL's) receives every rupee**, because `RAZORPAY_KEY_ID`/`SECRET` are
@@ -63,11 +95,12 @@ invoices/consultations until decided):
    payment links stay off; firms record manual payments only; only
    CJ GLOBAL's own subscriptions and promotions collect online.
 
-What is safe today: tiers 1–3 verification with **test-mode** keys uses
-fake money, so verification may proceed before the decision. What is not
-safe: enabling live collection of invoice/consultation payments under
-option 3's current code path (single CJ GLOBAL account) — that would
-silently route client money through CJ GLOBAL.
+What changed after the decision: option 1 (per-firm merchant
+connections) is implemented and enforced; option 2 (Razorpay Route/
+Marketplace) was NOT chosen and is not implemented; the old single-
+account collection path for firm money no longer exists in code.
+
+---
 
 ---
 
@@ -172,5 +205,8 @@ for a compliant recurring setup.
 
 ## 7. Test coverage (tier 1)
 
-`src/convex/payments.test.ts` — 13 tests, all green (see tier table in
-section 0). Full suite at time of writing: 32 files / 519 tests.
+`src/convex/payments.test.ts` — 17 tests, all green (see tier table in
+section 0; the merchant-ownership block covers encrypted storage,
+connection-gated link creation, firm-webhook verification + cross-tenant
+refusal, and the secret-crypto round-trip/tamper cases). Full suite at
+time of writing: 32 files / 523 tests.

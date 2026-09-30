@@ -2,6 +2,7 @@ import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
 import { auth } from "./auth";
 import { internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import { verifySecureFileToken } from "./documents";
 
 const http = httpRouter();
@@ -29,6 +30,36 @@ http.route({
       { rawBody, signature },
     );
 
+    return new Response(result.body, {
+      status: result.status,
+      headers: { "Content-Type": "text/plain" },
+    });
+  }),
+});
+
+// Per-firm Razorpay webhook: each firm points ITS OWN Razorpay
+// dashboard at /webhooks/razorpay/firm/<orgId>. The path org id is
+// only a routing hint used to SELECT the firm's webhook secret — the
+// HMAC signature against that secret is what proves authenticity, and
+// reconciliation additionally refuses any event whose target belongs
+// to a different org.
+http.route({
+  path: "/webhooks/razorpay/firm/:orgId",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const rawBody = await request.text();
+    const signature =
+      request.headers.get("x-razorpay-signature") ?? "";
+    const url = new URL(request.url);
+    const parts = url.pathname.split("/").filter(Boolean);
+    const orgId = parts[parts.length - 1] ?? "";
+    if (!orgId) {
+      return new Response("Missing firm id.", { status: 400 });
+    }
+    const result = await ctx.runAction(
+      internal.paymentsProvider.verifyAndReconcileFirmWebhook,
+      { rawBody, signature, orgId: orgId as Id<"organizations"> },
+    );
     return new Response(result.body, {
       status: result.status,
       headers: { "Content-Type": "text/plain" },

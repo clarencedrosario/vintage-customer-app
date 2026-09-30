@@ -839,10 +839,36 @@ function providerConfigured() {
   return !!process.env.RAZORPAY_KEY_ID && !!process.env.RAZORPAY_KEY_SECRET;
 }
 
+/**
+ * Online-collection status for THIS org. `configured` means the firm's
+ * OWN merchant connection is active — the platform account never
+ * collects client money, so platform keys alone do not flip this.
+ */
 export const providerStatus = query({
   args: {},
-  handler: async () => {
-    return { configured: providerConfigured() };
+  handler: async (ctx) => {
+    const ac = await getAccessContext(ctx);
+    if (!ac) {
+      return {
+        configured: false,
+        platformConfigured: providerConfigured(),
+        merchantConnected: false,
+        mode: null as string | null,
+        keyIdLast4: null as string | null,
+      };
+    }
+    const rows = await ctx.db
+      .query("orgMerchants")
+      .withIndex("by_org", (q) => q.eq("orgId", ac.org._id))
+      .collect();
+    const active = rows.find((r) => r.active);
+    return {
+      configured: !!active,
+      platformConfigured: providerConfigured(),
+      merchantConnected: !!active,
+      mode: (active?.mode as string | undefined) ?? null,
+      keyIdLast4: active?.keyIdLast4 ?? null,
+    };
   },
 });
 
