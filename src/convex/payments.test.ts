@@ -865,7 +865,7 @@ describe("Merchant ownership (firm money collects through the firm's own account
       keySecret: "firm_secret_value_1",
       webhookSecret: "firm_whsec_1",
     });
-    expect(res.mode).toBe("test");
+    expect(res.rotated).toBe(false); // first connection = a new account
     expect(res.keyIdLast4).toBe("ef12");
 
     // The stored row holds ciphertext only.
@@ -992,25 +992,28 @@ describe("Merchant ownership (firm money collects through the firm's own account
         createdAt: Date.now(),
       });
       const { encryptSecret } = await import("./crypto");
-      await ctx.db.insert("orgMerchants", {
+      const merchantId = await ctx.db.insert("orgMerchants", {
         orgId: oid,
         provider: "razorpay",
+        merchantRef: "rivalref000000",
         keyId: "rzp_test_rival111",
-        encryptedSecret: encryptSecret(
-          process.env.RAZORPAY_KEY_SECRET!,
-          `orgMerchant:${oid}:secret`,
-          "rival_secret",
-        ),
-        encryptedWebhookSecret: encryptSecret(
-          process.env.RAZORPAY_KEY_SECRET!,
-          `orgMerchant:${oid}:webhook`,
-          "rival_whsec_1",
-        ),
+        encryptedSecret: "",
         keyIdLast4: "r111",
         mode: "test",
         active: true,
         createdBy: uid,
         createdAt: Date.now(),
+      });
+      // Seal against THIS row's identity (crypto context = row-bound).
+      await ctx.db.patch(merchantId, {
+        encryptedSecret: encryptSecret(
+          `orgMerchant:${oid}:${merchantId}:secret`,
+          "rival_secret",
+        ),
+        encryptedWebhookSecret: encryptSecret(
+          `orgMerchant:${oid}:${merchantId}:webhook`,
+          "rival_whsec_1",
+        ),
       });
       return oid;
     });
@@ -1049,27 +1052,184 @@ describe("Merchant ownership (firm money collects through the firm's own account
     expect(exceptions[0]!.note).toContain("does not belong");
   });
 
+  it("collects for a connected firm with NO platform Razorpay keys present", async () => {
+    const { userId, orgId, invoiceId } = await seedBillingOrg(t);
+    await asUser(t, "system").run(async (ctx) => {
+      await ctx.db.patch(userId as never, { activeOrgId: orgId });
+    });
+    // Firm-money collection must not depend on the platform account:
+    // remove platform keys entirely, keep only the encryption master.
+    delete process.env.RAZORPAY_KEY_ID;
+    delete process.env.RAZORPAY_KEY_SECRET;
+    process.env.SECRET_ENCRYPTION_KEY = "0123456789abcdef0123456789abcdef";
+    try {
+      await asUser(t, userId).mutation(api.orgMerchants.connect, {
+        keyId: "rzp_test_abcdef12",
+        keySecret: "firm_secret_value_1",
+      });
+      const ok = await asUser(t, userId).mutation(api.billing.createPaymentLink, {
+        invoiceId: invoiceId as never,
+      });
+      expect(ok.requested).toBe(true); // firm gate satisfied, platform keys irrelevant
+    } finally {
+      delete process.env.SECRET_ENCRYPTION_KEY;
+    }
+  });
+
+  it("distinguishes rotation from a different account and refunds through the ORIGINAL merchant", async () => {
+    const { userId, orgId, invoiceId } = await seedBillingOrg(t);
+    await asUser(t, "system").run(async (ctx) => {
+      await ctx.db.patch(userId as never, { activeOrgId: orgId });
+    });
+
+    // Account A connects (with its own webhook secret).
+    const first = await asUser(t, userId).mutation(api.orgMerchants.connect, {
+      keyId: "rzp_test_aaaa1111",
+      keySecret: "firm_secret_value_1",
+      webhookSecret: "firm_whsec_1",
+    });
+    const merchantRef = first.merchantRef;
+
+    // Money is captured on account A (firm webhook, verified).
+    const ev = successEvent({
+      eventId: "evt_rot1",
+      eventType: "payment_link.paid",
+      paymentId: "pay_rot1",
+      amountMinor: 50_000,
+      invoiceNumber: "WH/2026/0001",
+      linkId: "link_rot1",
+    });
+    const raw = JSON.stringify(ev);
+    const sig = crypto.createHmac("sha256", "firm_whsec_1").update(raw).digest("hex");
+    const delivered = await t.action(
+      internal.paymentsProvider.verifyAndReconcileFirmWebhook,
+      { rawBody: raw, signature: sig, orgId: orgId as never },
+    );
+    expect(delivered.ok).toBe(true);
+    const paymentRow = (
+      await asUser(t, "system").run((ctx) => ctx.db.query("payments").collect())
+    )[0]!;
+    expect(paymentRow.capturedMerchantRef).toBe(merchantRef);
+    expect(paymentRow.merchantId).toBeDefined();
+
+    // ROTATION of the SAME account: credentials replaced in place.
+    const rot = await asUser(t, userId).mutation(api.orgMerchants.connect, {
+      keyId: "rzp_test_aaaa2222",
+      keySecret: "firm_secret_value_2",
+      webhookSecret: "firm_whsec_2",
+      merchantRef,
+    });
+    expect(rot.rotated).toBe(true);
+    expect(rot.merchantRef).toBe(merchantRef); // identity preserved
+
+    // A DIFFERENT account connects: a NEW identity; the old row is
+    // superseded but retained.
+    const second = await asUser(t, userId).mutation(api.orgMerchants.connect, {
+      keyId: "rzp_test_bbbb3333",
+      keySecret: "firm_secret_value_3",
+    });
+    expect(second.rotated).toBe(false);
+    expect(second.merchantRef).not.toBe(merchantRef);
+    const rows = await asUser(t, "system").run((ctx) =>
+      ctx.db.query("orgMerchants").collect(),
+    );
+    expect(rows.filter((r) => r.active)).toHaveLength(1);
+    expect(rows).toHaveLength(2);
+    expect(rows.find((r) => !r.active)!.keyId).toBe("rzp_test_aaaa2222");
+
+    // PENDING-WEBHOOK SEMANTICS: after connecting a different account,
+    // Razorpay may briefly still deliver events signed with the PREVIOUS
+    // row's webhook secret. Those verify (the row is retained), while
+    // collection itself runs only on the ACTIVE account's credentials.
+    // An event signed with a secret replaced by an in-place rotation
+    // fails closed — it exists nowhere anymore.
+    const lateEv = successEvent({
+      eventId: "evt_rot_late",
+      eventType: "payment.captured",
+      paymentId: "pay_rot_late",
+      amountMinor: 5_000,
+      invoiceNumber: "WH/2026/0001",
+    });
+    const lateRaw = JSON.stringify(lateEv);
+    const staleSig = crypto
+      .createHmac("sha256", "firm_whsec_1") // replaced in-place: gone
+      .update(lateRaw)
+      .digest("hex");
+    const stale = await t.action(
+      internal.paymentsProvider.verifyAndReconcileFirmWebhook,
+      { rawBody: lateRaw, signature: staleSig, orgId: orgId as never },
+    );
+    expect(stale.ok).toBe(false); // fails closed
+    const lateSig = crypto
+      .createHmac("sha256", "firm_whsec_2") // superseded row: grace-verified
+      .update(lateRaw)
+      .digest("hex");
+    const late = await t.action(
+      internal.paymentsProvider.verifyAndReconcileFirmWebhook,
+      { rawBody: lateRaw, signature: lateSig, orgId: orgId as never },
+    );
+    expect(late.ok).toBe(true);
+
+    // The refund for money captured on account A goes back through
+    // ACCOUNT A — never through the newly connected account B.
+    const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) =>
+      new Response(JSON.stringify({ id: "rfnd_rot_1", status: "processed" }), {
+        status: 200,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    vi.useFakeTimers();
+    try {
+      await asUser(t, userId).mutation(requestRefundRef, {
+        paymentRowId: paymentRow._id,
+        amountMinor: 10_000,
+        reason: "original-account refund",
+      });
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+      const req = (
+        await asUser(t, "system").run((ctx) => ctx.db.query("refundRequests").collect())
+      )[0]!;
+      expect(req.status).toBe("processed");
+      expect(req.merchantId).toBeDefined();
+
+      // The HTTP call authenticated against ACCOUNT A (the ORIGINAL
+      // capture account — same merchant row), using that account's
+      // CURRENT (rotated) credentials, and NEVER against account B.
+      const call = fetchMock.mock.calls[0]!;
+      const headers = (call[1]!.headers ?? {}) as Record<string, string>;
+      const accountA = Buffer.from(
+        "rzp_test_aaaa2222:firm_secret_value_2",
+      ).toString("base64");
+      const accountB = Buffer.from(
+        "rzp_test_bbbb3333:firm_secret_value_3",
+      ).toString("base64");
+      expect(headers.Authorization).toBe(`Basic ${accountA}`);
+      expect(headers.Authorization).not.toBe(`Basic ${accountB}`);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
   it("encryptSecret round-trips and rejects tampering or wrong context", () => {
-    const master = "platform_master_key_for_encryption";
-    const blob = encryptSecret(master, "orgMerchant:x:secret", "s3cret-value");
-    expect(decryptSecret(master, "orgMerchant:x:secret", blob)).toBe("s3cret-value");
+    const ctxA = "orgMerchant:org1:merchant1:secret";
+    const blob = encryptSecret(ctxA, "s3cret-value");
+    expect(decryptSecret(ctxA, blob)).toBe("s3cret-value");
 
     // Wrong context → auth failure (ciphertext is bound to its purpose).
     expect(() =>
-      decryptSecret(master, "orgMerchant:y:secret", blob),
-    ).toThrow(/authentication failed/);
+      decryptSecret("orgMerchant:org1:merchant2:secret", blob),
+    ).toThrow();
 
     // Tampered ciphertext → auth failure.
-    const bytes = Buffer.from(blob, "base64");
+    const bytes = Buffer.from(blob.replace(/-/g, "+").replace(/_/g, "/"), "base64");
     bytes[20] ^= 0x01;
-    const tampered = bytes.toString("base64");
-    expect(() =>
-      decryptSecret(master, "orgMerchant:x:secret", tampered),
-    ).toThrow(/authentication failed/);
-
-    // Wrong master key → auth failure.
-    expect(() =>
-      decryptSecret("other_master", "orgMerchant:x:secret", blob),
-    ).toThrow(/authentication failed/);
+    const tampered = bytes
+      .toString("base64")
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "");
+    expect(() => decryptSecret(ctxA, tampered)).toThrow();
   });
 });

@@ -1791,3 +1791,49 @@ Implemented (not just documented):
   execution); OPENAI_API_KEY not visible to the deployment (model
   checklist steps 3, 13–15); browser automation (15 steps). Nothing
   here claims legal correctness or production readiness.
+
+## Turn-12 bounded checks (30 Sep 2026, continuation): crypto review,
+rotation semantics, platform-key independence
+
+1. CONFIG SEPARATION: docs/RAZORPAY_SETUP.md §2 now states exactly what
+   firm invoice/consultation collection needs (firm connection +
+   SECRET_ENCRYPTION_KEY + firm webhook route) vs what CJ GLOBAL
+   subscription/promotion collection needs (platform keys + platform
+   webhook) — and a fixture test proves a connected firm collects with
+   NO platform Razorpay keys present at all.
+2. CRYPTO REVIEWED: the hand-rolled encrypt-then-MAC construction was
+   REPLACED with @noble/ciphers AES-256-GCM + @noble/hashes (HKDF-SHA256,
+   CSPRNG nonces, context as associated data) — maintained, reviewed
+   libraries; no custom primitives remain. Master key moved to a
+   dedicated SECRET_ENCRYPTION_KEY (legacy RAZORPAY_KEY_SECRET fallback
+   keeps existing rows decrypting). Full review notes in §2b.
+   Round-trip/tamper/wrong-context tested.
+3. ROTATION vs DIFFERENT ACCOUNT: connect({merchantRef}) rotates the
+   SAME merchant in place (identity preserved); connect without it
+   creates a NEW identity, superseding (but keeping) the old row.
+   payments rows now record the capturing merchant (merchantId +
+   capturedMerchantRef); refundRequests freeze the merchant at request
+   time; the refund action authenticates against the ORIGINAL account
+   (current credentials if rotated, the retained row if superseded) and
+   explicitly refuses to resolve a lost merchant rather than rerouting.
+   Fixture test asserts the outbound refund call's Basic auth is the
+   original account and NOT the new one. Pending-webhook semantics:
+   active row first, then recently superseded rows (legitimate provider
+   deliveries during a switch); secrets replaced by in-place rotation
+   fail closed. Disconnection stops collection but keeps captured money
+   refundable through the bound row. requestRefund for firm money no
+   longer requires platform keys (real coupling bug found by the test).
+4. EARLIER CHECKS RETAINED: cross-event dedupe, captured-amount
+   preservation + unappliedCredits accounting, association/currency
+   validation, and the refund lifecycle are all still covered (same
+   file, all passing).
+5. REAL TEST-MODE EXECUTION: still BLOCKED on credentials; docs/RAZORPAY_SETUP.md
+   §4 now lists configuration steps, provider-execution checks and
+   browser checks as separately labelled subsections in plain language.
+
+State: bunx convex dev --once clean (orgMerchants.merchantRef,
+payments.merchantId/capturedMerchantRef, refundRequests.merchantId
+pushed); tsc clean; 32 files / 525 tests pass (19 payments tests).
+New dependency: @noble/ciphers, @noble/hashes (audited crypto libs).
+Env var to add at operator leisure: SECRET_ENCRYPTION_KEY (optional —
+legacy fallback works).

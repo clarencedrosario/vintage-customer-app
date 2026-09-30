@@ -1062,6 +1062,9 @@ export const reconcileWebhookInternal = internalMutation({
     // Set ONLY by the firm-webhook verifier after signature verification
     // against that firm's own secret: the event must belong to this org.
     orgId: v.optional(v.id("organizations")),
+    // The verified merchant row the event arrived for (firm webhooks).
+    merchantId: v.optional(v.id("orgMerchants")),
+    merchantRef: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const existing = await ctx.db
@@ -1310,6 +1313,8 @@ export const reconcileWebhookInternal = internalMutation({
           providerPaymentId: args.providerPaymentId,
           providerOrderId: args.providerOrderId,
           currency: args.currency,
+          merchantId: args.merchantId,
+          capturedMerchantRef: args.merchantRef,
           createdAt: Date.now(),
         });
         await ctx.db.insert("unappliedCredits", {
@@ -1352,8 +1357,7 @@ export const reconcileWebhookInternal = internalMutation({
           undefined,
           `Online payment captured — ${fmtINR(applied)} (provider id ${args.providerPaymentId})${excess > 0 ? `; ${fmtINR(excess)} held as an unapplied customer credit` : ""}.`,
         )),
-      });
-      const webhookPaymentId = await ctx.db.insert("payments", {
+      });      const webhookPaymentId = await ctx.db.insert("payments", {
         invoiceId: invoice._id,
         orgId: invoice.orgId,
         amountMinor: applied,
@@ -1365,6 +1369,8 @@ export const reconcileWebhookInternal = internalMutation({
         providerPaymentId: args.providerPaymentId,
         providerOrderId: args.providerOrderId,
         currency: args.currency,
+        merchantId: args.merchantId,
+        capturedMerchantRef: args.merchantRef,
         createdAt: Date.now(),
       });
       // Excess money is never discarded from the records: the invoice
@@ -1473,7 +1479,20 @@ export const requestRefund = mutation({
     if (payment.source !== "razorpay" || !payment.providerPaymentId) {
       throw new Error("Only provider payments can be refunded here — adjust manual payments with a credit note.");
     }
-    if (!providerConfigured()) {
+    if (payment.merchantId) {
+      // Firm money: the refund depends on the CAPTURING merchant account
+      // being resolvable — platform keys are irrelevant here.
+      const m = await ctx.runQuery(
+        internal.orgMerchants.getCredentialByMerchantInternal,
+        { merchantId: payment.merchantId },
+      );
+      if (!m) {
+        throw new Error(
+          "The merchant account that captured this payment is no longer available — the refund is refused rather than sent through any other account. Record the adjustment manually and reconcile with the firm.",
+        );
+    }
+    } else if (!providerConfigured()) {
+      // Platform money (subscriptions/promotions): deployment keys.
       throw new Error("Payment provider is not configured.");
     }
     if (payment.status === "refund_pending") {
@@ -1490,6 +1509,11 @@ export const requestRefund = mutation({
       paymentId: args.paymentRowId,
       invoiceId: payment.invoiceId,
       providerPaymentId: payment.providerPaymentId,
+      // Frozen at request time: the refund must go back through the
+      // account that CAPTURED the money — never "whatever is connected
+      // now" (owner requirement: an old refund must never be sent to a
+      // newly connected, different account).
+      merchantId: payment.merchantId,
       amountMinor: args.amountMinor,
       reason: args.reason?.trim() || undefined,
       status: "requested",
@@ -1645,6 +1669,14 @@ export const getPaymentRowInternal = internalQuery({
   args: { paymentRowId: v.id("payments") },
   handler: async (ctx, args) => {
     return (await ctx.db.get(args.paymentRowId)) ?? null;
+  },
+});
+
+/** Internal: one refund request by id (refund merchant routing). */
+export const getRefundRequestInternal = internalQuery({
+  args: { refundRequestId: v.id("refundRequests") },
+  handler: async (ctx, args) => {
+    return (await ctx.db.get(args.refundRequestId)) ?? null;
   },
 });
 

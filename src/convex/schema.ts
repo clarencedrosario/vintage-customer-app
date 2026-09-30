@@ -1210,6 +1210,11 @@ export default defineSchema({
     // Provider reconciliation fields.
     providerPaymentId: v.optional(v.string()),
     providerOrderId: v.optional(v.string()),
+    // The merchant account that CAPTURED this money (firm flows):
+    // refunds always go back through THIS account, even after the firm
+    // rotates credentials or connects a different account.
+    merchantId: v.optional(v.id("orgMerchants")),
+    capturedMerchantRef: v.optional(v.string()),
     refundedMinor: v.optional(v.number()),
     refundIds: v.optional(v.array(v.string())),
     status: v.optional(
@@ -1285,6 +1290,10 @@ export default defineSchema({
     paymentId: v.id("payments"),
     invoiceId: v.optional(v.id("invoices")),
     providerPaymentId: v.optional(v.string()),
+    // The merchant account that must issue this refund — frozen at
+    // request time from the payment row; never "whatever is connected
+    // now".
+    merchantId: v.optional(v.id("orgMerchants")),
     amountMinor: v.number(),
     reason: v.optional(v.string()),
     // "requested": authorized locally, provider call in flight.
@@ -1316,6 +1325,9 @@ export default defineSchema({
   orgMerchants: defineTable({
     orgId: v.id("organizations"),
     provider: v.literal("razorpay"),
+    // Stable public handle for THIS merchant account (rotation keeps
+    // it; a different account gets a new one).
+    merchantRef: v.string(),
     keyId: v.string(), // rzp_test_... / rzp_live_...
     encryptedSecret: v.string(), // base64(iv || ciphertext || tag)
     // The webhook secret for the FIRM's own Razorpay dashboard webhook.

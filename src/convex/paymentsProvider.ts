@@ -251,25 +251,41 @@ export const verifyAndReconcileFirmWebhook = internalAction({
     orgId: v.id("organizations"),
   },
   handler: async (ctx, args) => {
-    const cred = await ctx.runQuery(internal.orgMerchants.getCredentialInternal, {
-      orgId: args.orgId,
-    });
-    if (!cred?.webhookSecret) {
+    // Webhook candidates: the ACTIVE merchant row first, then recently
+    // superseded rows (most recent first). Rotation can leave the
+    // firm's dashboard briefly holding the previous secret; those
+    // Razorpay-signed events still verify — and then pass the full
+    // tenant/association validation like any other.
+    const candidates = await ctx.runQuery(
+      internal.orgMerchants.listWebhookCandidatesInternal,
+      { orgId: args.orgId },
+    );
+    if (candidates.length === 0) {
       return {
         ok: false,
         status: 503,
         body: "Firm webhook secret not configured.",
       };
     }
-    const expected = crypto
-      .createHmac("sha256", cred.webhookSecret)
-      .update(args.rawBody)
-      .digest("hex");
-    const a = Buffer.from(expected);
-    const b = Buffer.from(args.signature);
-    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    let verified: { merchantId: any; merchantRef: string } | null = null;
+    let expected = "";
+    for (const c of candidates) {
+      const exp = crypto
+        .createHmac("sha256", c.webhookSecret)
+        .update(args.rawBody)
+        .digest("hex");
+      const a = Buffer.from(exp);
+      const b = Buffer.from(args.signature);
+      if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
+        verified = { merchantId: c.merchantId, merchantRef: c.merchantRef };
+        expected = exp;
+        break;
+      }
+    }
+    if (!verified) {
       return { ok: false, status: 400, body: "Invalid signature." };
     }
+    const cred = verified;
 
     let event: {
       event?: string;
@@ -331,6 +347,8 @@ export const verifyAndReconcileFirmWebhook = internalAction({
         currency,
         method,
         orgId: args.orgId,
+        merchantId: cred.merchantId,
+        merchantRef: cred.merchantRef,
       });
     } else {
       await ctx.runMutation(internal.billing.reconcileWebhookInternal, {
@@ -343,6 +361,8 @@ export const verifyAndReconcileFirmWebhook = internalAction({
         referenceId,
         amountMinor: 0,
         orgId: args.orgId,
+        merchantId: cred.merchantId,
+        merchantRef: cred.merchantRef,
         logOnly: true,
       });
     }
@@ -599,14 +619,44 @@ export const refundPayment = internalAction({
     reason: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    // Credential resolution sits INSIDE the try: a firm that has
-    // disconnected (or was never connected) must produce an honestly
-    // FAILED refund request — never a request stuck as "requested".
+    // Credential resolution sits INSIDE the try: any failure — including
+    // "the capturing merchant account can no longer be resolved" — must
+    // produce an honestly FAILED refund request, never a request stuck
+    // as "requested", and never a refund silently re-routed to a
+    // different (newly connected) account.
     try {
-      const payment = await ctx.runQuery(internal.billing.getPaymentRowInternal, {
-        paymentRowId: args.paymentRowId,
-      });
-      const auth = await credsFor(ctx, payment?.orgId);
+      // The refund's target merchant was FROZEN onto the request at
+      // creation (from the payment row). Resolve THAT account — even if
+      // it has since been superseded or disabled.
+      const auth = args.refundRequestId
+        ? await (async () => {
+            const req = await ctx.runQuery(internal.billing.getRefundRequestInternal, {
+              refundRequestId: args.refundRequestId!,
+            });
+            if (req?.merchantId) {
+              const m = await ctx.runQuery(
+                internal.orgMerchants.getCredentialByMerchantInternal,
+                { merchantId: req.merchantId },
+              );
+              if (m) return { keyId: m.keyId, keySecret: m.keySecret };
+              throw new Error(
+                "The merchant account that captured this payment could not be resolved for the refund — refusing to send the money to any other account.",
+              );
+            }
+            // No bound merchant (platform money or a firm payment
+            // captured before merchant binding existed): fall back to
+            // the org's currently active account, else deployment keys.
+            const payment = await ctx.runQuery(internal.billing.getPaymentRowInternal, {
+              paymentRowId: args.paymentRowId,
+            });
+            return credsFor(ctx, payment?.orgId);
+          })()
+        : await (async () => {
+            const payment = await ctx.runQuery(internal.billing.getPaymentRowInternal, {
+              paymentRowId: args.paymentRowId,
+            });
+            return credsFor(ctx, payment?.orgId);
+          })();
       const body = await rz(
         auth,
         `/payments/${args.providerPaymentId}/refund`,
