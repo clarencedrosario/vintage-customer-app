@@ -2177,22 +2177,92 @@ working module names; not represented as trademark-cleared.
   before the handler); recordDecision writes the trail, refuses thin
   notes, rival org is refused on recheck + decision.
 
+### PHASE 3 — LEGAL CHANGES AFFECTING ACTIVE MATTERS (implemented + tested)
+
+- NEW schema: matterImpactAlerts (dedupeKey `matter:stableKey:version`,
+  from/toVersion, sourced treatment fields, withheldTreatmentNote,
+  status open → acknowledged | dismissed | converted_to_task |
+  superseded, supersedesId, assignment/acknowledgment/dismissal
+  provenance, taskSuggestionId/createdTaskId, runId) + TWO legalProfile
+  fields on matters: `impactAlerts` (opt-in switch) and
+  `anchoredSourceKeys` (lawyer-maintained anchors). Additions only —
+  existing rows untouched.
+- NEW matterImpact.ts: STRICTLY OPT-IN — setOptIn/setAnchor
+  (matter.edit; refused without a confirmed legal profile, with
+  guidance). Internal evaluateSourceUpdate reuses the ingestion-run
+  state machine and is WIRED into all three version-writing paths in
+  legalIntel.ts (recordIngestionResult, ingestSourceText,
+  ingestSourceTextCli); recordResultCli carries no newVersionId so it
+  structurally cannot alert (correct). Dedupe makes evaluator re-runs
+  idempotent; a newer version re-alerts under a bumped key and
+  supersedes the earlier open alert (actions preserved — corrections
+  are never silent). Treatment is reported ONLY with its
+  treatmentSourceKey; an unsupported label generates NO alert and is
+  recorded as a withheld note stating why. acknowledge/dismiss (both
+  ≥10-char mandatory text), assign (active-member check), and
+  convertToTaskProposal through the EXISTING taskSuggestions flow —
+  the coverage disclosure ("ingested corpus only; no alerts does NOT
+  mean the law has not moved") rides on every list row and inside the
+  suggestion rationale. Cross-tenant reads empty; actions refused.
+- Tests (reviewAndBundles.test.ts, Phase-3 block, 3): opt-in gating
+  (no profile → refused with guidance; rival matter alerts only
+  itself), dedupe (same version never re-alerts), supersession (v2
+  re-alerts BOTH opted-in matters and marks the earlier alert
+  superseded, visible via includeHandled), cross-tenant read-empty +
+  acknowledge refused; treatment withheld without source (and the
+  withheld note visible) vs shown WITH source on the next version;
+  acknowledge/assign/dismiss provenance incl. thin-text refusals;
+  task conversion → existing approve flow creates the real task;
+  ingestSourceText end-to-end via a seeded platform operator (subject
+  = seeded user id, per the test identity convention).
+
+### PHASE 5 — FILING-READINESS WORKSPACE (implemented + tested)
+
+- NEW schema: filingChecklists (versioned per matter; status draft →
+  approved_ready → invalidated; items[] with key/requirement/
+  itemStatus satisfied|not_satisfied|not_applicable + document/fact
+  evidence pointers + updater; approvedSnapshotHash + invalidation{
+  at, because, detail}; court/caseNumber/caseYear) and
+  filingSuggestions (SEPARATE table; proposed → applied|dismissed;
+  basis labelled "Derived from…").
+- NEW filingReadiness.ts: createDraft (one open draft; next version),
+  setItem (draft-only; evidence document must belong to the matter),
+  deterministicChecks (empty-or-unsatisfied items, missing court
+  metadata, future-dated filing dates = likely data-entry error),
+  proposeSuggestions (deterministic derivations — live-model
+  enhancement remains gated; never auto-merged), applySuggestion /
+  dismissSuggestion (lawyer acts), approveReady (refused while items
+  are unsatisfied; FREEZES the version; records sha256 snapshot hash
+  of documents + legal profile; disclaimer "NOT an acceptance
+  guarantee" on every read), invalidateChanged (internal; wired into
+  matters.attachDocument AND documentRequests.accept — a later
+  document or profile change invalidates the approval automatically,
+  records preserved, never reopened), get (live staleness:
+  current/stale), listVersions.
+- attachDocument now RETURNS its documentId (was silent) — needed for
+  evidence pointers; no other behaviour change.
+- Tests (reviewAndBundles.test.ts, Phase-5 block, 2): full v1
+  lifecycle (checks attention on empty items + court metadata;
+  suggestions derived + applied; approve refused while unsatisfied;
+  freeze refuses edits; NEW document auto-invalidates with reason
+  document_added; v2 starts; history shows frozen v1 preserved) and
+  dismissal-with-reason + cross-tenant null/empty/refused.
+
 ### VERIFIED THIS TURN
 
 - bunx tsc -b --noEmit: 0 errors. bunx convex dev --once: functions
-  ready (moonlit-elk-307; re-run after Phase 2). Full suite: 37 files /
-  557 tests green (baseline 36/549 + 5 Phases 1/4 + 3 Phase 2). Tests
-  are jsdom/convex-test simulations — no real-provider or browser
-  claims. No production deployment, payment, or destructive action
-  taken.
+  ready (moonlit-elk-307; re-run after Phases 2, 3 and 5). Full suite:
+  37 files / 562 tests green (baseline 36/549 + 5 Phases 1/4 + 3
+  Phase 2 + 3 Phase 3 + 2 Phase 5). Tests are jsdom/convex-test
+  simulations — no real-provider or browser claims. No production
+  deployment, payment, or destructive action taken.
 
-### REMAINING (§32 phases 3, 5-12)
+### REMAINING (§32 phases 6-12)
 
-- Phase 3 matter-impact alerts next (ingestion run state exists in
-  legalIntel to build on), then Phases 5-12 per the map in
-  ADVOKATE_REQUIREMENTS.md §32. Externally blocked items unchanged:
-  OPENAI_API_KEY absent; browser verification unavailable; qualified
-  lawyer review outstanding.
+- Phases 6-12 per the map in ADVOKATE_REQUIREMENTS.md §32 (Phases 1,
+  2, 3, 4 and 5 are implemented and verified). Externally blocked
+  items unchanged: OPENAI_API_KEY absent; browser verification
+  unavailable; qualified lawyer review outstanding.
 
 ## Turn-15 — 30 Sep 2026: Indian Privacy, Court Updates, Drafting, and Source-Verified AI (§29)
 

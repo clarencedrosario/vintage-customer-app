@@ -1566,6 +1566,12 @@ export const attachDocument = mutation({
       ],
       createdAt: Date.now(),
     });
+    // §32 Phase 5: a new document invalidates any approved-ready filing
+    // checklist on this matter (readiness is a dated statement).
+    await ctx.runMutation(internal.filingReadiness.invalidateChanged, {
+      matterId: args.matterId,
+      because: "document_added",
+    });
     await logEvent(
       ctx,
       args.matterId,
@@ -1581,6 +1587,7 @@ export const attachDocument = mutation({
             : "internal",
       },
     );
+    return { documentId: String(docId) };
   },
 });
 

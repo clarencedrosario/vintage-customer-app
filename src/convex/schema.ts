@@ -3267,6 +3267,98 @@ export default defineSchema({
     .index("by_dedupe", ["matterId", "dedupeKey"])
     .index("by_org", ["orgId"]),
 
+  // =====================================================================
+  // §32 Phase 5 — Filing-readiness workspace. Versioned checklists per
+  // matter (v1, v2, … — every revision is a NEW version; completed
+  // versions are frozen), with deterministic checks (dates in the past,
+  // missing court case metadata) and AI SUGGESTIONS that stay separate
+  // and require lawyer approval to act on. A checklist APPROVED as ready
+  // FREEZES: any later document/profile change INVALIDATES it — readiness
+  // is a dated statement, never a standing guarantee, and no acceptance
+  // is promised (the registry may still reject a filing for its own
+  // reasons).
+  // =====================================================================
+  filingChecklists: defineTable({
+    orgId: v.id("organizations"),
+    matterId: v.id("matters"),
+    version: v.number(),
+    // draft → approved_ready → invalidated (never reopened; next state
+    // is a NEW version).
+    status: v.union(
+      v.literal("draft"),
+      v.literal("approved_ready"),
+      v.literal("invalidated"),
+    ),
+    // Frozen when approved: readiness is AS OF this snapshot hash.
+    approvedById: v.optional(v.id("users")),
+    approvedAt: v.optional(v.number()),
+    approvedSnapshotHash: v.optional(v.string()),
+    invalidation: v.optional(
+      v.object({
+        at: v.number(),
+        because: v.union(
+          v.literal("document_added"),
+          v.literal("document_changed"),
+          v.literal("profile_changed"),
+          v.literal("manual"),
+        ),
+        detail: v.string(),
+        detectedById: v.optional(v.id("users")),
+      }),
+    ),
+    items: v.array(
+      v.object({
+        key: v.string(),
+        requirement: v.string(),
+        // draft → satisfied | not_applicable (lawyer-set)
+        itemStatus: v.union(
+          v.literal("satisfied"),
+          v.literal("not_satisfied"),
+          v.literal("not_applicable"),
+        ),
+        // Evidence pointer: document, raw fact, or free-text basis.
+        documentId: v.optional(v.id("matterDocuments")),
+        factId: v.optional(v.id("matterFacts")),
+        note: v.optional(v.string()),
+        updatedById: v.optional(v.id("users")),
+        updatedAt: v.optional(v.number()),
+      }),
+    ),
+    court: v.optional(v.string()),
+    caseNumber: v.optional(v.string()),
+    caseYear: v.optional(v.string()),
+    createdById: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_matter", ["matterId"])
+    .index("by_org", ["orgId"]),
+
+  // AI suggestions for a checklist draft — SEPARATE table, never merged
+  // into items automatically: approval (or dismissal) is the lawyer's
+  // explicit act.
+  filingSuggestions: defineTable({
+    orgId: v.id("organizations"),
+    checklistId: v.id("filingChecklists"),
+    matterId: v.id("matters"),
+    key: v.string(),
+    requirement: v.string(),
+    basis: v.string(), // why this is suggested (deterministic derivation, labelled)
+    // proposed → applied (lawyer clicked apply) | dismissed (with reason)
+    status: v.union(
+      v.literal("proposed"),
+      v.literal("applied"),
+      v.literal("dismissed"),
+    ),
+    dismissedReason: v.optional(v.string()),
+    appliedAt: v.optional(v.number()),
+    appliedById: v.optional(v.id("users")),
+    createdAt: v.number(),
+  })
+    .index("by_checklist", ["checklistId"])
+    .index("by_matter", ["matterId"])
+    .index("by_org", ["orgId"]),
+
   // ---------------- GitHub integration ----------------
   // One row per organization. The token lives ONLY in the server-side
   // environment (Keys tab → GITHUB_TOKEN); the browser never sees it.

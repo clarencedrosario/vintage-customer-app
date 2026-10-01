@@ -256,6 +256,11 @@ export const accept = mutation({
       ],
       createdAt: Date.now(),
     });
+    // §32 Phase 5: filing-checklist invalidation on new matter documents.
+    await ctx.runMutation(internal.filingReadiness.invalidateChanged, {
+      matterId: r.matterId,
+      because: "document_added",
+    });
 
     await ctx.db.patch(args.requestId, {
       status: "accepted",

@@ -955,7 +955,8 @@ describe("Turn 16 — Phase 3 matter-impact alerts (opt-in)", () => {
       return uid;
     });
 
-    // Before the profile carries the anchor + opt-in, nothing is alerted.
+    // Nothing alerted for OUR matter yet — only the rival's opted-in,
+    // anchored matter is alerted (its own org's alert, never ours).
     const v1 = await asUser(t, "system").run(async (ctx) => {
       const s = (await ctx.db.query("legalSources").collect()).find(
         (x) => x.stableKey === STABLE_KEY,
@@ -963,9 +964,16 @@ describe("Turn 16 — Phase 3 matter-impact alerts (opt-in)", () => {
       return String(s!.latestVersion!);
     });
     const none = await evaluate(v1);
-    expect(none.alerted).toBe(0);
+    expect(none.alerted).toBe(1); // rival matter only
 
-    // Opt in AND anchor the source (matter.edit path).
+    // Give OUR matter a legal profile, then opt in AND anchor the source
+    // (matter.edit path); the rival is already deduped at v1, so this
+    // alert is OURS.
+    await asUser(t, "system").run(async (ctx) =>
+      ctx.db.patch(matterId as never, {
+        legalProfile: { country: "in", proceduralStage: "trial" },
+      }),
+    );
     await owner.mutation(api.matterImpact.setOptIn, {
       matterId: matterId as never,
       enabled: true,
@@ -975,7 +983,7 @@ describe("Turn 16 — Phase 3 matter-impact alerts (opt-in)", () => {
       stableKey: STABLE_KEY,
     });
     const first = await evaluate(v1);
-    expect(first.alerted).toBe(1);
+    expect(first.alerted).toBe(1); // now OUR matter (rival deduped)
 
     // Idempotent: the SAME version never re-alerts.
     const again = await evaluate(v1);
@@ -1012,7 +1020,7 @@ describe("Turn 16 — Phase 3 matter-impact alerts (opt-in)", () => {
       ctx.db.patch(srcId2 as never, { latestVersion: v2 as never }),
     );
     const second = await evaluate(String(v2));
-    expect(second.alerted).toBe(1);
+    expect(second.alerted).toBe(2); // ours AND the rival's matter re-alert
 
     const after = await owner.query(api.matterImpact.list, {
       matterId: matterId as never,
@@ -1024,26 +1032,29 @@ describe("Turn 16 — Phase 3 matter-impact alerts (opt-in)", () => {
     expect(newest!.fromVersion).toBe(1);
     expect(oldest!.status).toBe("superseded"); // actions preserved, flagged
 
-    // The rival's matter got its own alert; cross-tenant reads stay empty.
+    // Cross-tenant: the rival cannot read OUR matter's alerts (empty) nor
+    // act on them (acknowledge refused). Our owner still sees both rows.
     const rivalRows = await asUser(t, rivalId).query(api.matterImpact.list, {
-      matterId: (await asUser(t, rivalId).query(
-        api.matterImpact.list,
-        { matterId: matterId as never },
-      )) as never,
+      matterId: matterId as never,
     });
-    expect(rivalRows).toEqual([]); // cannot see OUR matter's alerts
+    expect(rivalRows).toEqual([]);
     await expect(
-      owner.mutation(api.matterImpact.acknowledge, {
+      asUser(t, rivalId).mutation(api.matterImpact.acknowledge, {
         alertId: newest!._id as never,
-        note: "x",
+        note: "hostile org trying to acknowledge another chamber's alert",
       }),
-    ).rejects.toThrow(); // validated separately below; guard here is thin-note
+    ).rejects.toThrow();
   });
 
   it("acknowledge/dismiss/assign record everything; task conversion reuses the propose→approve flow; unsupported treatment is withheld", async () => {
     const { ownerId, matterId } = await seedFirm(t);
     const owner = asUser(t, ownerId);
     const { srcId } = await seedAlertSource(3);
+    await asUser(t, "system").run(async (ctx) =>
+      ctx.db.patch(matterId as never, {
+        legalProfile: { country: "in", proceduralStage: "trial" },
+      }),
+    );
     await owner.mutation(api.matterImpact.setOptIn, {
       matterId: matterId as never,
       enabled: true,
@@ -1228,7 +1239,8 @@ describe("Turn 16 — Phase 3 matter-impact alerts (opt-in)", () => {
     });
 
     // The BROWSER ingest path (operator-gated) drives the evaluator.
-    await asUser(t, "system").run(async (ctx) =>
+    // Identity convention: the subject IS the seeded user-row id.
+    const operatorId = await asUser(t, "system").run(async (ctx) =>
       ctx.db.insert("users", {
         email: "operator@t16.test",
         emailVerified: true,
@@ -1236,7 +1248,7 @@ describe("Turn 16 — Phase 3 matter-impact alerts (opt-in)", () => {
         isPlatformAdmin: true,
       }),
     );
-    const ing = await asUser(t, "operator@t16.test").mutation(
+    const ing = await asUser(t, operatorId).mutation(
       api.legalIntel.ingestSourceText,
       {
         stableKey: STABLE_KEY,
@@ -1250,6 +1262,225 @@ describe("Turn 16 — Phase 3 matter-impact alerts (opt-in)", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]!.toVersion).toBe(2);
     expect(rows[0]!.runId).toBeUndefined(); // browser path has no run row
+    void ownerId;
+  });
+});
+
+describe("Turn 16 — Phase 5 filing-readiness workspace", () => {
+  let t: ReturnType<typeof convexTest>;
+
+  beforeEach(() => {
+    t = convexTest(schema, modules);
+  });
+
+  it("versioned drafts, deterministic checks, separate suggestions with lawyer approval, freeze + invalidation", async () => {
+    const { ownerId, matterId, orgId } = await seedFirm(t);
+    void orgId;
+    const owner = asUser(t, ownerId);
+
+    // Seed one matter document via the REAL attach path (also proves the
+    // invalidation hook doesn't crash on a fresh matter).
+    const docId = (
+      await owner.mutation(api.matters.attachDocument, {
+        matterId: matterId as never,
+        name: "Plaint copy",
+        kind: "document" as const,
+        visibility: "internal" as const,
+      })
+    ).documentId;
+
+    const draft1 = await owner.mutation(api.filingReadiness.createDraft, {
+      matterId: matterId as never,
+    });
+    expect(draft1.version).toBe(1);
+
+    // A second draft is refused while one is open.
+    await expect(
+      owner.mutation(api.filingReadiness.createDraft, { matterId: matterId as never }),
+    ).rejects.toThrow(/already exists/);
+
+    // Deterministic checks BEFORE any work: items incomplete, court
+    // metadata missing.
+    const checks1 = await owner.query(api.filingReadiness.deterministicChecks, {
+      checklistId: draft1.checklistId as never,
+    });
+    const byKey = (k: string) => checks1!.checks.find((c) => c.key === k)!;
+    expect(byKey("items_complete").status).toBe("attention");
+    expect(byKey("court_metadata").status).toBe("attention");
+    expect(checks1!.disclaimer).toMatch(/NOT an acceptance guarantee/);
+
+    // Deterministic suggestions (labelled as derived) → apply one.
+    const proposed = await owner.mutation(api.filingReadiness.proposeSuggestions, {
+      checklistId: draft1.checklistId as never,
+    });
+    expect(proposed.created).toBeGreaterThanOrEqual(2); // court_metadata + profile_dates
+    const suggestions = await owner.query(api.filingReadiness.listSuggestions, {
+      checklistId: draft1.checklistId as never,
+    });
+    const courtSug = suggestions.find((s) => s.key === "court_metadata")!;
+    expect(courtSug!.basis).toMatch(/Derived from/);
+    await owner.mutation(api.filingReadiness.applySuggestion, {
+      suggestionId: courtSug!._id as never,
+    });
+
+    // The applied suggestion became a REAL not-satisfied item.
+    const draft1After = await owner.query(api.filingReadiness.get, {
+      checklistId: draft1.checklistId as never,
+    });
+    expect(draft1After!.items.some((i) => i.key === "court_metadata")).toBe(true);
+
+    // Record the plaint item as satisfied; the applied suggestion's item
+    // stays not_satisfied for now.
+    await owner.mutation(api.filingReadiness.setItem, {
+      checklistId: draft1.checklistId as never,
+      key: "plaint_copy",
+      requirement: "Certified copy of the plaint on record.",
+      itemStatus: "satisfied",
+      documentId: docId as never,
+      note: "Original filed at intake.",
+    });
+
+    // Approval is refused while anything is still not satisfied.
+    await expect(
+      owner.mutation(api.filingReadiness.approveReady, {
+        checklistId: draft1.checklistId as never,
+      }),
+    ).rejects.toThrow(/remain not satisfied/);
+
+    // Then record court metadata as satisfied.
+    await owner.mutation(api.filingReadiness.setItem, {
+      checklistId: draft1.checklistId as never,
+      key: "court_metadata",
+      requirement: "Court, case number and year recorded.",
+      itemStatus: "satisfied",
+      note: "City Civil Court, Suit 1234/2026 — re-verified.",
+    });
+
+    const approval = await owner.mutation(api.filingReadiness.approveReady, {
+      checklistId: draft1.checklistId as never,
+    });
+    expect(approval.approved).toBe(true);
+    expect(approval.disclaimer).toMatch(/NOT an acceptance guarantee/);
+    const approvedRow = await owner.query(api.filingReadiness.get, {
+      checklistId: draft1.checklistId as never,
+    });
+    expect(approvedRow!.status).toBe("approved_ready");
+    expect(approvedRow!.staleness).toBe("current");
+
+    // Approval FREEZES: item edits are refused.
+    await expect(
+      owner.mutation(api.filingReadiness.setItem, {
+        checklistId: draft1.checklistId as never,
+        key: "plaint_copy",
+        requirement: "x",
+        itemStatus: "not_applicable",
+      }),
+    ).rejects.toThrow(/frozen/);
+
+    // A NEW DOCUMENT arrives → approval is INVALIDATED automatically.
+    await owner.mutation(api.matters.attachDocument, {
+      matterId: matterId as never,
+      name: "Additional affidavit",
+      kind: "document" as const,
+      visibility: "internal" as const,
+    });
+    const invalidated = await owner.query(api.filingReadiness.get, {
+      checklistId: draft1.checklistId as never,
+    });
+    expect(invalidated!.status).toBe("invalidated");
+    expect(invalidated!.invalidation!.because).toBe("document_added");
+
+    // Version 2 starts fresh; history shows the frozen v1.
+    const draft2 = await owner.mutation(api.filingReadiness.createDraft, {
+      matterId: matterId as never,
+    });
+    expect(draft2.version).toBe(2);
+    const versions = await owner.query(api.filingReadiness.listVersions, {
+      matterId: matterId as never,
+    });
+    expect(versions.map((v) => v.version)).toEqual([2, 1]);
+    const v1row = versions.find((v) => v.version === 1)!;
+    expect(v1row.status).toBe("invalidated"); // preserved, never reopened
+    expect(v1row.items.length).toBe(2); // the record survives
+  });
+
+  it("suggestion dismissal records reason; cross-tenant access refused", async () => {
+    const { ownerId, matterId } = await seedFirm(t);
+    const owner = asUser(t, ownerId);
+    const draft = await owner.mutation(api.filingReadiness.createDraft, {
+      matterId: matterId as never,
+    });
+    await owner.mutation(api.filingReadiness.proposeSuggestions, {
+      checklistId: draft.checklistId as never,
+    });
+    const suggestions = await owner.query(api.filingReadiness.listSuggestions, {
+      checklistId: draft.checklistId as never,
+    });
+    const profileSug = suggestions.find((s) => s.key === "profile_dates")!;
+    await owner.mutation(api.filingReadiness.dismissSuggestion, {
+      suggestionId: profileSug!._id as never,
+      reason: "Dates are tracked outside Advokate for this matter.",
+    });
+    const after = await owner.query(api.filingReadiness.listSuggestions, {
+      checklistId: draft.checklistId as never,
+    });
+    const dismissedRow = after.find((s) => s.key === "profile_dates")!;
+    expect(dismissedRow.status).toBe("dismissed");
+    expect(dismissedRow.dismissedReason).toContain("outside Advokate");
+
+    // Rival org: reads return null/empty and mutations are refused.
+    const rivalId = await asUser(t, "system").run(async (ctx) => {
+      const uid = await ctx.db.insert("users", {
+        email: "rival5@t16.test",
+        emailVerified: true,
+        isAnonymous: false,
+        isPlatformAdmin: false,
+      });
+      const rOrg = await ctx.db.insert("organizations", {
+        name: "Rival5 T16",
+        slug: "rival5-t16",
+        kind: "chamber" as const,
+        currency: "INR",
+        timezone: "Asia/Kolkata",
+        financialYearStart: "04-01",
+        taxLabel: "GST",
+        taxPercent: 18,
+        invoicePrefix: "INV",
+        createdBy: uid as never,
+        createdAt: Date.now(),
+      });
+      await ctx.db.insert("memberships", {
+        orgId: rOrg,
+        userId: uid as never,
+        orgRole: "owner" as const,
+        status: "active" as const,
+        createdAt: Date.now(),
+      });
+      await ctx.db.patch(uid as never, { activeOrgId: rOrg });
+      return uid;
+    });
+    const rival = asUser(t, rivalId);
+    expect(
+      await rival.query(api.filingReadiness.get, {
+        checklistId: draft.checklistId as never,
+      }),
+    ).toBeNull();
+    expect(
+      await rival.query(api.filingReadiness.listVersions, {
+        matterId: matterId as never,
+      }),
+    ).toEqual([]);
+    await expect(
+      rival.mutation(api.filingReadiness.createDraft, { matterId: matterId as never }),
+    ).rejects.toThrow();
+    await expect(
+      rival.mutation(api.filingReadiness.setItem, {
+        checklistId: draft.checklistId as never,
+        key: "x",
+        requirement: "y",
+        itemStatus: "satisfied",
+      }),
+    ).rejects.toThrow();
     void ownerId;
   });
 });
