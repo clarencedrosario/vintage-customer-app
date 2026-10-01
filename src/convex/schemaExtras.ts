@@ -1069,6 +1069,15 @@ export const legalIntelTables = {
     publisher: v.string(),
     sourceUrl: v.string(),
     collectionDate: v.string(), // YYYY-MM-DD when the version text was collected
+    // Connector check-attempt metadata (turn 17). lastCheckedAt records
+    // the last ATTEMPT (success OR failure); freshness/staleness derive
+    // ONLY from successful runs, so a failed check can never advance the
+    // freshness timestamp.
+    lastCheckedAt: v.optional(v.number()),
+    lastCheckOutcome: v.optional(
+      v.union(v.literal("updated"), v.literal("unchanged"), v.literal("failed")),
+    ),
+    lastCheckError: v.optional(v.string()),
     latestVersion: v.optional(v.id("legalSourceVersions")),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -1089,6 +1098,10 @@ export const legalIntelTables = {
     ),
     collectedAt: v.string(), // YYYY-MM-DD
     ingestedById: v.optional(v.id("users")),
+    // SHA-256 of the retrieved BYTES (connector provenance). Enables
+    // repeat-import deduplication: identical bytes never create a new
+    // version. Absent for pre-connector (manually ingested) versions.
+    bytesHash: v.optional(v.string()),
     createdAt: v.number(),
   }).index("by_source", ["sourceId"]),
 

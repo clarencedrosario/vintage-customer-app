@@ -64,4 +64,17 @@ crons.daily(
   {},
 );
 
+// Daily official-source connector check (turn 17): fetches every
+// registered connector notice (currently the MHA/Gazette channel),
+// sequentially and politely. Dedupe means unchanged documents create
+// nothing; genuine updates create new versions AND fire opt-in
+// matter-impact alerts. Failures are RECORDED, never silently retried,
+// and never advance a freshness timestamp.
+crons.daily(
+  "official-source-connector-sweep",
+  { hourUTC: 17, minuteUTC: 45 }, // 23:15 Asia/Kolkata
+  internal.sourceConnector.scheduledConnectorSweep,
+  {},
+);
+
 export default crons;

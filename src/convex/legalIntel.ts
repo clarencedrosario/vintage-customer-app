@@ -19,6 +19,7 @@ import {
   type MutationCtx,
 } from "./_generated/server";
 import { internal, api } from "./_generated/api";
+import { sha256Hex } from "./crypto";
 import { can, requireAccess, requireMatter } from "./access";
 import { getCurrentUser } from "./users";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -392,6 +393,13 @@ export const freshness = query({
           title: s.title,
           collectionDate: s.collectionDate,
           lastSuccessfulAt: last?.at ?? null,
+          // The last ATTEMPT of any kind (success or failure) — shown so
+          // customers can see the connector checked and FAILED. Staleness
+          // above still keys on SUCCESS only: a failed check never
+          // advances the freshness timestamp.
+          lastCheckedAt: s.lastCheckedAt ?? last?.at ?? null,
+          lastCheckOutcome: s.lastCheckOutcome ?? last?.outcome ?? null,
+          lastCheckError: s.lastCheckError ?? null,
           stale: !last || Date.now() - last.at > STALE_MS,
           outcome: last?.outcome ?? null,
           // Real usable text present? (registered-but-uningested sources
@@ -1408,6 +1416,288 @@ export const recordResultCli = internalMutation({
           createdAt: now,
         });
       }
+    }
+    return { ok: true };
+  },
+});
+
+// ---------------------------------------------------------------------
+// Official-source connector internals (turn 17). The connector action
+// (sourceConnector.ts) retrieves permitted official documents, extracts
+// and validates the text, and commits through these functions so the
+// result carries the SAME dedupe, provenance, version, indexing and
+// matter-impact-alert semantics as every other ingestion path.
+// ---------------------------------------------------------------------
+
+/**
+ * Connector dedupe fingerprints of the CURRENT version: the recorded
+ * bytes hash (connector ingesta) and the text hash (works for
+ * pre-connector versions too — identical text is still "unchanged").
+ */
+export const currentVersionFingerprint = internalQuery({
+  args: { stableKey: v.string() },
+  handler: async (ctx, args): Promise<{ bytesHash: string | null; textHash: string | null }> => {
+    const s = await ctx.db
+      .query("legalSources")
+      .withIndex("by_stable_key", (q) => q.eq("stableKey", args.stableKey))
+      .unique();
+    if (!s?.latestVersion) return { bytesHash: null, textHash: null };
+    const ver = await ctx.db.get(s.latestVersion);
+    if (!ver) return { bytesHash: null, textHash: null };
+    return {
+      bytesHash: ver.bytesHash ?? null,
+      textHash: sha256Hex(ver.body),
+    };
+  },
+});
+
+/** Reuse the source's open run or open a fresh one (connector paths). */
+async function connectorRun(
+  ctx: MutationCtx,
+  sourceId: Id<"legalSources">,
+): Promise<Id<"ingestionRuns">> {
+  const open = (await ctx.db
+    .query("ingestionRuns")
+    .withIndex("by_source", (q) => q.eq("sourceId", sourceId))
+    .collect())
+    .filter((r) => r.finishedAt === undefined)
+    .sort((a, b) => b.startedAt - a.startedAt)[0];
+  if (open) return open._id;
+  return ctx.db.insert("ingestionRuns", {
+    sourceId,
+    startedAt: Date.now(),
+    attempts: 1,
+    triggeredBy: "manual",
+  });
+}
+
+/**
+ * Record a FAILED connector check: the run closes as failed, the check
+ * metadata records the attempt — and NOTHING freshness-related advances
+ * (lastSuccessfulAt, collectionDate and the version pointer are
+ * untouched). The failure is visible in `freshness`, never hidden.
+ */
+export const recordConnectorFailure = internalMutation({
+  args: { stableKey: v.string(), error: v.string() },
+  handler: async (ctx, args): Promise<{ runId: string }> => {
+    const s = await ctx.db
+      .query("legalSources")
+      .withIndex("by_stable_key", (q) => q.eq("stableKey", args.stableKey))
+      .unique();
+    if (!s) throw new Error(`Unknown source stable key: ${args.stableKey}`);
+    const now = Date.now();
+    const runId = await connectorRun(ctx, s._id);
+    await ctx.db.patch(runId, {
+      finishedAt: now,
+      outcome: "failed",
+      error: args.error.slice(0, 500),
+    });
+    await ctx.db.patch(s._id, {
+      lastCheckedAt: now,
+      lastCheckOutcome: "failed",
+      lastCheckError: args.error.slice(0, 300),
+      updatedAt: now,
+    });
+    return { runId: String(runId) };
+  },
+});
+
+/** The commit result — explicitly typed (shared with the connector). */
+type OfficialCommitResult = {
+  status: "updated" | "unchanged";
+  version: number | null;
+  versionId: string | null;
+  bytesHash: string;
+  alerted: number;
+  runId: string;
+  sourceTitle: string;
+};
+
+/**
+ * Commit a validated official retrieval.
+ *
+ * unchanged=true → NO new version (repeat-import deduplication): the run
+ * closes as "unchanged", the check metadata advances, the text,
+ * collectionDate and version pointer stay exactly as they were.
+ *
+ * unchanged=false → a NEW immutable version (bytes hash + section
+ * anchors + provenance), the source's freshness fields advance, and the
+ * EXISTING matter-impact evaluator notifies opted-in anchored matters
+ * (jurisdiction, permission and coverage checks preserved — the
+ * evaluator re-derives them from the matter profiles).
+ */
+export const commitOfficialRetrieval = internalMutation({
+  args: {
+    stableKey: v.string(),
+    bytesHash: v.string(),
+    body: v.union(v.string(), v.null()),
+    sections: v.union(
+      v.null(),
+      v.array(v.object({ anchor: v.string(), heading: v.string(), start: v.number() })),
+    ),
+    collectionDate: v.string(),
+    publisher: v.string(),
+    url: v.string(),
+    unchanged: v.boolean(),
+  },
+  handler: async (ctx, args): Promise<OfficialCommitResult> => {
+    const s = await ctx.db
+      .query("legalSources")
+      .withIndex("by_stable_key", (q) => q.eq("stableKey", args.stableKey))
+      .unique();
+    if (!s) throw new Error(`Unknown source stable key: ${args.stableKey}`);
+    const now = Date.now();
+    const runId = await connectorRun(ctx, s._id);
+
+    if (args.unchanged || args.body === null) {
+      await ctx.db.patch(runId, {
+        finishedAt: now,
+        outcome: "unchanged",
+        lastSuccessfulAt: now,
+      });
+      await ctx.db.patch(s._id, {
+        lastCheckedAt: now,
+        lastCheckOutcome: "unchanged",
+        lastCheckError: undefined,
+        updatedAt: now,
+      });
+      const current = s.latestVersion ? await ctx.db.get(s.latestVersion) : null;
+      return {
+        status: "unchanged",
+        version: current?.version ?? null,
+        versionId: s.latestVersion ? String(s.latestVersion) : null,
+        bytesHash: args.bytesHash,
+        alerted: 0,
+        runId: String(runId),
+        sourceTitle: s.title,
+      };
+    }
+
+    const prev = s.latestVersion ? await ctx.db.get(s.latestVersion) : null;
+    const nextVersion = (prev?.version ?? 0) + 1;
+    const versionId = await ctx.db.insert("legalSourceVersions", {
+      sourceId: s._id,
+      version: nextVersion,
+      body: args.body,
+      sections: args.sections ?? undefined,
+      collectedAt: args.collectionDate,
+      bytesHash: args.bytesHash,
+      createdAt: now,
+    });
+    await ctx.db.patch(runId, {
+      finishedAt: now,
+      outcome: "updated",
+      newVersionId: versionId,
+      lastSuccessfulAt: now,
+    });
+    await ctx.db.patch(s._id, {
+      latestVersion: versionId,
+      collectionDate: args.collectionDate,
+      publisher: args.publisher,
+      sourceUrl: args.url,
+      statusNote: `Retrieved and verified via the official-source connector (turn 17) from ${args.url} on ${args.collectionDate}; bytes sha256 ${args.bytesHash.slice(0, 16)}…. Re-verify cadence: weekly scheduled check.`,
+      lastCheckedAt: now,
+      lastCheckOutcome: "updated",
+      lastCheckError: undefined,
+      updatedAt: now,
+    });
+    // Opt-in matter-impact alerts for the new version (Phase 3 wiring).
+    const impact = (await ctx.runMutation(internal.matterImpact.evaluateSourceUpdate, {
+      stableKey: args.stableKey,
+      newVersionId: versionId,
+      runId,
+    })) as unknown as { alerted: number };
+    return {
+      status: "updated",
+      version: nextVersion,
+      versionId: String(versionId),
+      bytesHash: args.bytesHash,
+      alerted: impact.alerted,
+      runId: String(runId),
+      sourceTitle: s.title,
+    };
+  },
+});
+
+/**
+ * Public sourceConnector gate: the caller must be a platform operator
+ * (same rule as ingestSourceText). Returns the userId for the action's
+ * re-check (identity does not carry through ctx.runMutation).
+ */
+export const connectorOperatorCheck = internalQuery({
+  args: {},
+  handler: async (ctx): Promise<{ operatorUserId: string | null }> => {
+    const user = await getCurrentUser(ctx);
+    return { operatorUserId: isPlatformOperator(user) ? String(user!._id) : null };
+  },
+});
+
+/**
+ * Connector source snapshot for the action (stableKey → id, title,
+ * current version metadata) — keeps the action read-free.
+ */
+export const connectorSourceSnapshot = internalQuery({
+  args: { stableKey: v.string() },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{
+    sourceId: string;
+    title: string;
+    version: number | null;
+    versionId: string | null;
+  } | null> => {
+    const s = await ctx.db
+      .query("legalSources")
+      .withIndex("by_stable_key", (q) => q.eq("stableKey", args.stableKey))
+      .unique();
+    if (!s) return null;
+    const ver = s.latestVersion ? await ctx.db.get(s.latestVersion) : null;
+    return {
+      sourceId: String(s._id),
+      title: s.title,
+      version: ver?.version ?? null,
+      versionId: s.latestVersion ? String(s.latestVersion) : null,
+    };
+  },
+});
+
+/** Execution record for the connector sweep (legalSweepLogs). */
+export const recordConnectorSweepLog = internalMutation({
+  args: {
+    attempted: v.number(),
+    updated: v.number(),
+    unchanged: v.number(),
+    failed: v.number(),
+  },
+  handler: async (ctx, args): Promise<{ ok: boolean }> => {
+    await ctx.db.insert("legalSweepLogs", {
+      triggeredAt: Date.now(),
+      trigger: "schedule",
+      opened: args.updated,
+      skipped: args.unchanged,
+      sourceCount: args.attempted,
+      note: `Official-source connector sweep: ${args.updated} updated, ${args.unchanged} unchanged, ${args.failed} failed (polite sequential fetch; failures never advance freshness).`,
+    });
+    return { ok: true };
+  },
+});
+
+/** Sweep-level failure record (source row may be missing entirely). */
+export const recordSweepFailure = internalMutation({
+  args: { stableKey: v.string(), error: v.string() },
+  handler: async (ctx, args): Promise<{ ok: boolean }> => {
+    const s = await ctx.db
+      .query("legalSources")
+      .withIndex("by_stable_key", (q) => q.eq("stableKey", args.stableKey))
+      .unique();
+    if (s) {
+      await ctx.db.patch(s._id, {
+        lastCheckedAt: Date.now(),
+        lastCheckOutcome: "failed",
+        lastCheckError: args.error.slice(0, 300),
+        updatedAt: Date.now(),
+      });
     }
     return { ok: true };
   },
