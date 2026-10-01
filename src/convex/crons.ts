@@ -65,7 +65,9 @@ crons.daily(
 );
 
 // Daily official-source connector check (turn 17): fetches every
-// registered connector notice (currently the MHA/Gazette channel),
+// registered connector notice (currently the Delhi Police official
+// reproduction of the POCSO 2012 English text; see
+// docs/OFFICIAL_SOURCES.md for the per-channel decision record),
 // sequentially and politely. Dedupe means unchanged documents create
 // nothing; genuine updates create new versions AND fire opt-in
 // matter-impact alerts. Failures are RECORDED, never silently retried,

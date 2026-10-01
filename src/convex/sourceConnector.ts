@@ -6,18 +6,15 @@
 // provenance/version → index → source search.
 //
 // CHANNEL, and exactly why it is permitted:
-//   The Ministry of Home Affairs (mha.gov.in) official document
-//   repository hosts bare-act and Gazette of India (Extraordinary) PDFs.
-//   This is the SAME channel already used for the six ingested core
-//   sources (provenance in scripts/ingest-legal-text.mjs and
-//   docs/LEGAL_CORPUS_MIGRATION.md): plain HTTPS GET of published
-//   government documents, no login, no CAPTCHA, no access-control
-//   bypass, honouring robots.txt. Open government publication; every
-//   version records publisher + retrieval URL + collection date + bytes
-//   hash.
+//   Plain HTTPS GET of PUBLISHED official government documents — no
+//   login, no CAPTCHA, no access-control bypass, robots.txt honoured.
+//   This is the SAME access pattern already used for the six ingested
+//   core sources (provenance in scripts/ingest-legal-text.mjs and
+//   docs/LEGAL_CORPUS_MIGRATION.md). Every version records publisher +
+//   retrieval URL + collection date + bytes hash.
 //
 // TURN-17 LIVE PROBES (2026-10-01, verbatim in docs/OFFICIAL_SOURCES.md
-// — the audit trail for why THIS channel):
+// — the audit trail for why the CHOSEN channel):
 //   www.indiacode.nic.in   HTTP 200 at root; deep URLs (bitstream/handle)
 //                          TIMEOUT — matches the 504/timeout history on
 //                          the POCSO row. Not usable programmatically.
@@ -30,7 +27,18 @@
 //                          court-source registry stays honest (manual/
 //                          reviewed paths only).
 //   www.mha.gov.in         HTTP 200, application/pdf — permitted plain
-//                          download. CHOSEN as the first channel.
+//                          download, but the POCSO candidate PDF
+//                          (CS-070613) proved to be a 4-page EXPLAINER
+//                          BROCHURE: the connector's sanity gates
+//                          REFUSED it (correct — a brochure is not the
+//                          enacted text). The NCPCR full PDF is the
+//                          official HINDI edition; the NCPCR 5.4 MB PDF
+//                          is an 8-page scan with no text layer.
+//   delhipolice.gov.in     HTTP 200 — official bare act
+//                          (sexual_offences_act.pdf): 12 pages, 514
+//                          lines, 44/46 sections detected. CHOSEN as
+//                          the first connector channel (India Code
+//                          remains the canonical citation anchor).
 //
 // SANITY GATES before anything is stored: PDF magic bytes, size
 // ceiling, extracted section count, minimum body length, section 1

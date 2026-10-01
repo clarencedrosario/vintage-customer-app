@@ -62,6 +62,20 @@ export const evaluateSourceUpdate = internalMutation({
     const version = await ctx.db.get(args.newVersionId);
     if (!version) return { alerted: 0, reason: "version-missing" as const };
 
+    // The truthful "previous version" is the newest OTHER version row of
+    // the SAME source (by version number) — NOT the matter's alert
+    // history: a matter that joins (opts in) between two source versions
+    // has no prior alert, yet the source still moved (e.g. v1→v2) and the
+    // alert should say so. Undefined = previous version unknown (honest).
+    const priorVersionRow = (
+      await ctx.db
+        .query("legalSourceVersions")
+        .withIndex("by_source", (q) => q.eq("sourceId", source._id))
+        .collect()
+    )
+      .filter((row) => row._id !== version._id && row.version < version.version)
+      .sort((a, b) => b.version - a.version)[0];
+
     // Treatment is reported ONLY when a supporting source exists.
     const treatmentSupported = !!(source.treatment && source.treatmentSourceKey);
     const withheldNote =
@@ -105,7 +119,7 @@ export const evaluateSourceUpdate = internalMutation({
         dedupeKey,
         stableKey: args.stableKey,
         sourceTitle: source.title,
-        fromVersion: prior?.toVersion,
+        fromVersion: priorVersionRow?.version,
         toVersion: version.version,
         treatment: treatmentSupported ? source.treatment! : undefined,
         treatmentSourceKey: treatmentSupported

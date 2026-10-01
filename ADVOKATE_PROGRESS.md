@@ -4,7 +4,7 @@ Durable progress file so development resumes without repeating completed work.
 Companion to `ADVOKATE_REQUIREMENTS.md` (the master checklist). Handoff log also
 maintained in `docs/DELIVERY.md`.
 
-Last checkpoint: **30 September 2026** — latest record: **Turn 16** (bottom section); turn 15 and earlier summaries below.
+Last checkpoint: **1 October 2026** — latest record: **Turn 17** (bottom section); turns 16 and earlier below.
 
 ---
 
@@ -2361,3 +2361,118 @@ rebuilt, no competitor content. Product name: Advokate Legal Intelligence.
   recorded as blocked gaps.
 - Browser verification of the new surfaces: pending (automation
   unavailable).
+
+## Turn-17 — 1 Oct 2026: Official-source connector — first permitted end-to-end retrieval (user-reprioritized ahead of Phase 6)
+
+User redirected this turn's priority from §32 Phase 6 to OFFICIAL-SOURCE
+INTEGRATION (India Code / Gazette of India / Supreme Court), with explicit
+rules: per-source inspection reports; registry vs manual-import vs working
+connector vs scheduler-in-code vs scheduler-observed kept distinct;
+first permitted connector demonstrated end-to-end; real retrieval +
+repeat-import dedupe shown; scheduled execution verified separately;
+fixtures labelled; alerts wired; access controls never bypassed; failed
+checks never advance freshness; OPENAI_API_KEY absence must block nothing;
+evidence categories separated. Full record: **docs/OFFICIAL_SOURCES.md**.
+Phases 6–12 remain pending (recorded in ADVOKATE_REQUIREMENTS.md §32).
+
+### PROBES (live, 2026-10-01 — audit trail for the channel decision)
+
+- India Code root HTTP 200; deep URLs (bitstream/handle) TIMEOUT —
+  matches the 504 history on the POCSO row. Not usable programmatically.
+- egazette.gov.in TLS chain FAILS verification — refused (no
+  verification-disabling, ever).
+- sci.gov.in HTTP 200, robots permissive; case/orders APIs
+  REGISTRATION-GATED, no credentials → not authorized; court-source
+  registry stays honest (manual/reviewed only).
+- mha.gov.in HTTP 200 application/pdf — but the POCSO candidate PDF
+  (CS-070613) is a 4-page EXPLAINER BROCHURE (gates REFUSED it —
+  correct); NCPCR full PDF is the official HINDI edition; the NCPCR
+  5.4 MB PDF is an 8-page scan with no text layer.
+- delhipolice.gov.in/doc/acts/sexual_offences_act.pdf — official bare
+  act, 12 pages, 514 lines, 44/46 sections. CHOSEN as the first
+  connector channel; India Code remains the canonical citation anchor.
+
+### BUILT (pushed to moonlit-elk-307; tsc 0)
+
+- `sourceConnector.ts` — `fetchOfficialSource` action (operator gate
+  via `connectorOperatorCheck`), `runScheduledFetch`, and
+  `scheduledConnectorSweep` (sequential, per-source failure isolation,
+  sweep-log row per execution). Validation gates BEFORE storage: PDF
+  magic bytes, size ceiling, minimum body length, minimum section count,
+  section 1 present, bounds respected — a failed gate raises a FAILED
+  run and stores nothing.
+- `sourceNotices.ts` — pure notice registry (URL, publisher, bounds,
+  access basis); `src/lib/pdfExtract.ts` pure extraction shared by
+  connector, diagnostics and fixture tests; `src/lib/pdfWorkerLoader.js`
+  worker registration for pdfjs in actions.
+- `legalIntel.ts` additions — `currentVersionFingerprint` (bytes+text
+  hash), `connectorRun`, `recordConnectorFailure`,
+  `commitOfficialRetrieval` (unchanged → no new version; updated → new
+  immutable version + `evaluateSourceUpdate` alert wiring + provenance
+  statusNote), `connectorSourceSnapshot`, `recordSweepFailure`,
+  `recordConnectorSweepLog`, `connectorStatusCli`; `freshness` now
+  returns `lastCheckedAt/lastCheckOutcome/lastCheckError` while STALE
+  remains keyed on success only.
+- `matterImpact.ts` — alert `fromVersion` now the truthful previous
+  SOURCE version (not the matter's alert history), so a matter that
+  opts in between versions still sees v1→v2.
+- `schemaExtras.ts` — `legalSources.lastCheckedAt/lastCheckOutcome/
+  lastCheckError`; `legalSourceVersions.bytesHash`. `crons.ts` —
+  `official-source-connector-sweep` daily 17:45 UTC.
+
+### REAL RETRIEVAL + DEDUPE (2026-10-01, live)
+
+- First fetch: `status:"updated"`, version 2, versionId
+  `hh7qqxfse9p72dbw2w8gwqp6jd8fey54`, bytesHash
+  `31220b27b1a5e1ad0ef6e48dc013ad97d3f29344d5b0b39f69ad19a032dcd366`,
+  46,197 body chars, 44/46 sections, collectionDate 2026-10-01, Delhi
+  Police publisher attribution; citation-validator BLOCK lifted.
+- Repeat fetch: `status:"unchanged"` — same version id, 0 new versions,
+  0 alerts (repeat-import dedupe demonstrated on real bytes).
+
+### SCHEDULED EXECUTION (verified separately, honestly)
+
+- OLD sweep (`legal-source-ingestion-sweep`, 18:30 UTC): cron-fired
+  `legalSweepLogs` rows exist (28–30 Sep 2026).
+- CONNECTOR sweep: cron declared (17:45 UTC daily); manual invocation
+  2026-10-01 produced a trigger=schedule sweep-log row (attempted 1 /
+  unchanged 1 / failed 0). Cron-fired connector-sweep evidence: PENDING
+  the next 17:45 UTC tick — scheduler-in-code and scheduler-observed
+  are kept distinct until then.
+
+### TESTS
+
+- `reviewAndBundles.test.ts` Turn-17 block (3): identical-bytes dedupe
+  + failed-commit-never-advances-freshness; changed-content → new
+  version + opt-in alert (v1→v2 + coverage note) + `searchSources` hit
+  + freshness hasText/not-stale; FIXTURE section-detection (bare-act
+  lines → s 1/s 2/s 2A; brochure lines → 0 anchors — the gate that
+  refused the MHA brochure). Fixtures labelled FIXTURE.
+- Suite: **37 files / 566 tests green** (turn-16 baseline 37/562;
+  +1 Phase-5 disclaimer test, +3 connector tests, −1 test restructured
+  into the new block). tsc 0; convex push clean.
+
+### EVIDENCE SEPARATION (as required)
+
+- Implementation: code above, pushed (moonlit-elk-307). Simulated
+  tests: the 4 automated tests above (jsdom/convex-test — no live
+  fetch inside tests). Real retrieval: the 2026-10-01 fetch + dedupe
+  (§ REAL RETRIEVAL, hashes recorded). Scheduled execution: manual
+  sweep invocation observed; cron-fired connector record pending next
+  tick. Browser verification: NONE (automation unavailable). Legal
+  review: OUTSTANDING (44/46 sections; completeness/currency not
+  certified).
+
+### HONEST LIMITS / BLOCKED (recorded)
+
+- One working connector exists (POCSO via Delhi Police). India Code,
+  eGazette, SCI remain registry entries / manual-import histories with
+  blockers recorded — NOT connectors; nothing bypasses their controls.
+- OPENAI_API_KEY absent — irrelevant here: the connector is fully
+  deterministic and key-free by design.
+- Turn-16 §32.2/32.3/32.5 features are implemented with
+  automated-test evidence only — no browser pass, no qualified legal
+  review yet.
+- Filing-readiness reads carry the NOT_AN_ACCEPTANCE_GUARANTEE
+  disclaimer (Phase 5, turn 16; test-verified); browser confirmation
+  still pending.

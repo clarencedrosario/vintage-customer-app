@@ -49,8 +49,10 @@ export function normalizeText(s: string): string {
 /**
  * Plain-mode section detection (port of the verified extract-legal-pdfs
  * logic): "12. Punishment for …—(1) …" yields an anchor + heading; range
- * lines ("12 to 16.") update the sequence but add no anchor. The FULL
- * body is always kept — sections are only the anchor index.
+ * lines ("12 to 16.") update the sequence but add no anchor. Lettered
+ * variants ("2A.", "12B.") register their own anchor ("s 2A") when they
+ * directly follow the base number. The FULL body is always kept —
+ * sections are only the anchor index.
  */
 export function detectSections(
   lines: string[],
@@ -79,7 +81,7 @@ export function detectSections(
       const num = `${n}${letter}`;
       if (
         n >= opts.startAt &&
-        n > last &&
+        (n > last || (letter !== "" && n === last)) &&
         n <= opts.maxNo &&
         !registered.has(num) &&
         n - last <= 3
