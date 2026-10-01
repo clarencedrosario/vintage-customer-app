@@ -1703,6 +1703,48 @@ export const recordSweepFailure = internalMutation({
   },
 });
 
+/** Connector status readback: check metadata + recent runs per source. */
+export const connectorStatusCli = internalQuery({
+  args: { stableKey: v.string() },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{
+    title: string;
+    lastCheckedAt: number | null;
+    lastCheckOutcome: string | null;
+    lastCheckError: string | null;
+    latestVersion: number | null;
+    recentRuns: { startedAt: number; outcome: string | null; triggeredBy: string }[];
+  } | null> => {
+    const s = await ctx.db
+      .query("legalSources")
+      .withIndex("by_stable_key", (q) => q.eq("stableKey", args.stableKey))
+      .unique();
+    if (!s) return null;
+    const ver = s.latestVersion ? await ctx.db.get(s.latestVersion) : null;
+    const runs = (await ctx.db
+      .query("ingestionRuns")
+      .withIndex("by_source", (q) => q.eq("sourceId", s._id))
+      .collect())
+      .sort((a, b) => b.startedAt - a.startedAt)
+      .slice(0, 5)
+      .map((r) => ({
+        startedAt: r.startedAt,
+        outcome: r.outcome ?? null,
+        triggeredBy: r.triggeredBy,
+      }));
+    return {
+      title: s.title,
+      lastCheckedAt: s.lastCheckedAt ?? null,
+      lastCheckOutcome: s.lastCheckOutcome ?? null,
+      lastCheckError: s.lastCheckError ?? null,
+      latestVersion: ver?.version ?? null,
+      recentRuns: runs,
+    };
+  },
+});
+
 /** Post-ingest readback for the CLI verification step. */
 export const getSourceCli = internalQuery({
   args: { stableKey: v.string() },

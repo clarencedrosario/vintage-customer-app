@@ -17,14 +17,22 @@ export const OFFICIAL_SOURCE_NOTICES: Record<
   }
 > = {
   // POCSO 2012 — first connector target: the registry row exists (turn 7)
-  // with text NOT OBTAINED and the citation validator BLOCKED; this
-  // channel is the same MHA/Gazette one already used for the six ingested
-  // core sources.
+  // with text NOT OBTAINED and the citation validator BLOCKED. Channel
+  // history (2026-10-01 probes, recorded in docs/OFFICIAL_SOURCES.md):
+  // India Code deep URLs time out (504 history on the row); the MHA
+  // "CS-070613" PDF proved to be a 4-page EXPLAINER BROCHURE (refused by
+  // the connector's sanity gates — correct behaviour); the NCPCR full PDF
+  // is the official HINDI edition. The first permitted ENGLISH official
+  // reproduction found is Delhi Police's published bare act — an official
+  // government source distributing the enacted text openly. India Code
+  // remains the canonical citation anchor for this stableKey.
   "in:statute:pocso-2012": {
-    url: "https://www.mha.gov.in/sites/default/files/2023-03/CS-070613_0%5B1%5D_0%5B1%5D.pdf",
-    publisher: "Ministry of Home Affairs, Government of India (official reprint)",
-    maxNo: 46, // POCSO has 46 sections + schedule
-    minSections: 10,
-    accessBasis: "Open government publication — permitted plain download from mha.gov.in (official MHA document repository).",
+    url: "https://delhipolice.gov.in/doc/acts/sexual_offences_act.pdf",
+    publisher:
+      "Delhi Police, Government of NCT of Delhi (official reproduction of the enacted English text; canonical anchor remains India Code)",
+    maxNo: 46,
+    minSections: 20, // observed 44/46 in the official reproduction
+    accessBasis:
+      "Open government publication — permitted plain download from delhipolice.gov.in (official government document, no login/CAPTCHA; robots honoured).",
   },
 };

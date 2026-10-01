@@ -61,11 +61,16 @@ export const getDraft = query({
       .query("filingChecklists")
       .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))
       .collect();
-    return rows.find((r) => r.status === "draft") ?? null;
+    const draft = rows.find((r) => r.status === "draft") ?? null;
+    return draft ? { ...draft, disclaimer: NOT_AN_ACCEPTANCE_GUARANTEE } : null;
   },
 });
 
-/** Full checklist history for a matter (newest first). */
+/**
+ * Full checklist history for a matter (newest first). The disclaimer
+ * rides EVERY read: checklist completion does NOT guarantee that the
+ * court will accept a filing.
+ */
 export const listVersions = query({
   args: { matterId: v.id("matters") },
   handler: async (ctx, args) => {
@@ -77,7 +82,9 @@ export const listVersions = query({
       .query("filingChecklists")
       .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))
       .collect();
-    return rows.sort((a, b) => b.version - a.version);
+    return rows
+      .sort((a, b) => b.version - a.version)
+      .map((r) => ({ ...r, disclaimer: NOT_AN_ACCEPTANCE_GUARANTEE }));
   },
 });
 

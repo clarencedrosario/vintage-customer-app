@@ -2,6 +2,8 @@ import { describe, expect, it, beforeEach } from "vitest";
 import { convexTest } from "convex-test";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
+import { detectSections } from "../lib/pdfExtract";
+import { sha256Hex } from "./crypto";
 
 const modules: Record<string, () => Promise<unknown>> = (import.meta as unknown as {
   glob: (p: string) => Record<string, () => Promise<unknown>>;
@@ -1482,5 +1484,221 @@ describe("Turn 16 — Phase 5 filing-readiness workspace", () => {
       }),
     ).rejects.toThrow();
     void ownerId;
+  });
+
+  it("carries the acceptance disclaimer on every read surface", async () => {
+    const { ownerId, matterId } = await seedFirm(t);
+    const owner = asUser(t, ownerId);
+    const draft = await owner.mutation(api.filingReadiness.createDraft, {
+      matterId: matterId as never,
+    });
+    // getDraft + listVersions + get + approveReady all state that
+    // completion does NOT guarantee court acceptance.
+    const d = await owner.query(api.filingReadiness.getDraft, {
+      matterId: matterId as never,
+    });
+    expect(d!.disclaimer).toMatch(/NOT an acceptance guarantee/);
+    const versions = await owner.query(api.filingReadiness.listVersions, {
+      matterId: matterId as never,
+    });
+    expect(versions).toHaveLength(1);
+    expect(versions[0]!.disclaimer).toMatch(/NOT an acceptance guarantee/);
+    const got = await owner.query(api.filingReadiness.get, {
+      checklistId: draft.checklistId as never,
+    });
+    expect(got!.disclaimer).toMatch(/registry may still reject/);
+  });
+});
+
+// =====================================================================
+// Turn 17 — official-source connector (FIXTURE-based tests).
+//
+// The REAL retrieval (delhipolice.gov.in POCSO bare act → version 2 →
+// repeat-import dedupe → sweep log) was demonstrated LIVE against the
+// deployment via `convex run` and is recorded in docs/OFFICIAL_SOURCES.md
+// with timestamps and hashes. Convex test runs actions in-process with
+// no network, so the tests below use FIXTURES (synthetic fingerprints,
+// synthetic extracted text) to verify the COMMIT-side contracts: dedupe,
+// refusal records, freshness invariants, alert integration and search
+// indexing. Fixtures are labelled as such everywhere.
+// =====================================================================
+describe("Turn 17 — official-source connector (fixtures; live retrieval recorded separately)", () => {
+  let t: ReturnType<typeof convexTest>;
+
+  beforeEach(() => {
+    t = convexTest(schema, modules);
+  });
+
+  const KEY = "in:statute:pocso-2012";
+  const BYTES_V1 = "a".repeat(64); // FIXTURE fingerprint (not a real digest)
+  const BYTES_V2 = "b".repeat(64);
+  const BODY_V1 =
+    "1. Short title.—This Act may be called the Test Act.\n2. Definition.—Child means a person below eighteen years.";
+
+  /** Seed a registered source at the given version. */
+  async function seedSource(version: number, body: string, bytesHash?: string) {
+    return asUser(t, "system").run(async (ctx) => {
+      const srcId = await ctx.db.insert("legalSources", {
+        stableKey: KEY,
+        title: "Protection of Children from Sexual Offences Act, 2012",
+        kind: "statute" as const,
+        country: "in",
+        jurisdictionLevel: "national" as never,
+        rights: "Open government publication",
+        publisher: "India Code (Legislative Department)",
+        sourceUrl: "https://www.indiacode.nic.in",
+        collectionDate: "2026-09-30",
+        statusNote: "Text NOT OBTAINED FROM SOURCES ATTEMPTED (fixture baseline).",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+      const versionId = await ctx.db.insert("legalSourceVersions", {
+        sourceId: srcId as never,
+        version,
+        body,
+        collectedAt: "2026-09-30",
+        ...(bytesHash ? { bytesHash } : {}),
+        createdAt: Date.now(),
+      });
+      await ctx.db.patch(srcId as never, { latestVersion: versionId as never });
+      return { srcId: String(srcId), versionId: String(versionId) };
+    });
+  }
+
+  it("identical bytes commit as unchanged (no new version); failures never advance freshness", async () => {
+    await seedFirm(t);
+    const { versionId } = await seedSource(1, BODY_V1, BYTES_V1);
+
+    // Identical bytes → "unchanged": same version, no alerts, no rewrite.
+    const r = (await t.run((ctx) =>
+      ctx.runMutation(internal.legalIntel.commitOfficialRetrieval, {
+        stableKey: KEY,
+        bytesHash: BYTES_V1,
+        body: null,
+        sections: null,
+        collectionDate: "2026-10-01",
+        publisher: "fixture publisher",
+        url: "https://fixture.test/pocso.pdf",
+        unchanged: true,
+      }),
+    )) as unknown as { status: string; version: number; alerted: number; versionId: string | null };
+    expect(r.status).toBe("unchanged");
+    expect(r.version).toBe(1);
+    expect(r.alerted).toBe(0);
+    expect(r.versionId).toBe(versionId); // the SAME version row
+
+    // A FAILED check records the attempt but touches nothing freshness-
+    // related (no lastSuccessfulAt advance, no version bump).
+    await t.run((ctx) =>
+      ctx.runMutation(internal.legalIntel.recordConnectorFailure, {
+        stableKey: KEY,
+        error: "HTTP 504 from fixture endpoint",
+      }),
+    );
+    const status = (await t.run((ctx) =>
+      ctx.runQuery(internal.legalIntel.connectorStatusCli, { stableKey: KEY }),
+    )) as unknown as {
+      lastCheckOutcome: string;
+      lastCheckError: string;
+      latestVersion: number;
+      recentRuns: { outcome: string | null }[];
+    };
+    expect(status.lastCheckOutcome).toBe("failed");
+    expect(status.lastCheckError).toContain("504");
+    expect(status.latestVersion).toBe(1);
+    expect(status.recentRuns[0]!.outcome).toBe("failed");
+    expect(status.recentRuns[1]!.outcome).toBe("unchanged");
+  });
+
+  it("changed content creates a new version, fires the opt-in alert, and appears in source search", async () => {
+    const { ownerId, matterId } = await seedFirm(t);
+    const owner = asUser(t, ownerId);
+    await seedSource(1, BODY_V1);
+
+    // Opt in + anchor (the Phase-3 path).
+    await asUser(t, "system").run(async (ctx) =>
+      ctx.db.patch(matterId as never, {
+        legalProfile: { country: "in", proceduralStage: "trial" },
+      }),
+    );
+    await owner.mutation(api.matterImpact.setOptIn, {
+      matterId: matterId as never,
+      enabled: true,
+    });
+    await owner.mutation(api.matterImpact.setAnchor, {
+      matterId: matterId as never,
+      stableKey: KEY,
+    });
+
+    // FIXTURE: synthetic "newly retrieved" text (stands in for a real
+    // amendment's extracted body).
+    const BODY_V2 =
+      "1. Short title.—This Act may be called the Test Act.\n2. Definition.—Child means a person below twenty-one years.";
+    const r = (await t.run((ctx) =>
+      ctx.runMutation(internal.legalIntel.commitOfficialRetrieval, {
+        stableKey: KEY,
+        bytesHash: BYTES_V2,
+        body: BODY_V2,
+        sections: [
+          { anchor: "s 1", heading: "Short title", start: 0 },
+          { anchor: "s 2", heading: "Definition", start: 60 },
+        ],
+        collectionDate: "2026-10-01",
+        publisher: "fixture publisher",
+        url: "https://fixture.test/pocso.pdf",
+        unchanged: false,
+      }),
+    )) as unknown as { status: string; version: number; alerted: number };
+    expect(r.status).toBe("updated");
+    expect(r.version).toBe(2);
+    expect(r.alerted).toBe(1); // opted-in anchored matter alerted
+
+    // The alert carries the change and the coverage disclosure.
+    const alerts = await owner.query(api.matterImpact.list, {
+      matterId: matterId as never,
+    });
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]!.toVersion).toBe(2);
+    expect(alerts[0]!.fromVersion).toBe(1);
+    expect(alerts[0]!.coverageNote).toMatch(/does NOT mean the law has not moved/);
+
+    // INDEXED: the updated source surfaces in source search.
+    const found = await owner.query(api.legalIntel.searchSources, {
+      q: "Sexual Offences",
+      country: "in",
+    });
+    const hit = found.find((s) => s.stableKey === KEY);
+    expect(hit).toBeDefined();
+
+    // Freshness reflects the SUCCESS (failed runs never appear here).
+    const fresh = await owner.query(api.legalIntel.freshness, {});
+    const row = fresh.find((f) => f.stableKey === KEY)!;
+    expect(row.hasText).toBe(true);
+    expect(row.lastSuccessfulAt).not.toBeNull();
+    expect(row.stale).toBe(false);
+  });
+
+  it("FIXTURE: section detection drives the sanity gates (real brochure refusal recorded in docs)", () => {
+    // Bare-act-shaped lines → anchors + headings detected.
+    const lines = [
+      "THE TEST ACT, 2026",
+      "ARRANGEMENT OF SECTIONS",
+      "1. Short title and commencement.—This Act may be called the Test Act.",
+      "2. Definitions.—In this Act, unless the context otherwise requires,",
+      "2A. Power to make rules.—The authority may make rules.",
+    ];
+    const ok = detectSections(lines, { startAt: 1, maxNo: 10 });
+    expect(ok.sections.map((s) => s.anchor)).toEqual(["s 1", "s 2", "s 2A"]);
+    expect(ok.body).toContain("Short title and commencement");
+
+    // Explainer-brochure-shaped lines (what the MHA PDF contained) →
+    // NO anchors — exactly why the live connector refused to store it.
+    const brochure = [
+      "The Act defines a child as any person below the age of 18 years.",
+      "The Act provides for stringent punishments, graded as per the offence.",
+      "An offence is treated as aggravated when committed by a person in authority.",
+    ];
+    const bad = detectSections(brochure, { startAt: 1, maxNo: 46 });
+    expect(bad.sections).toHaveLength(0);
   });
 });
