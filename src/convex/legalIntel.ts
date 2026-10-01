@@ -1170,6 +1170,18 @@ export const recordIngestionResult = mutation({
         });
       }
     }
+    // §32 Phase 3: when a run closes with a NEW latest version, opted-in
+    // matters anchored to this source receive their (deduped) impact alert.
+    if (args.outcome === "updated" && args.newVersionId) {
+      const src = await ctx.db.get(run.sourceId);
+      if (src) {
+        await ctx.runMutation(internal.matterImpact.evaluateSourceUpdate, {
+          stableKey: src.stableKey,
+          newVersionId: args.newVersionId,
+          runId: run._id,
+        });
+      }
+    }
     return { ok: true };
   },
 });
@@ -1214,6 +1226,11 @@ export const ingestSourceText = mutation({
       latestVersion: versionId,
       collectionDate: todayISO(),
       updatedAt: now,
+    });
+    // §32 Phase 3: opted-in matter-impact alerts for the new version.
+    await ctx.runMutation(internal.matterImpact.evaluateSourceUpdate, {
+      stableKey: args.stableKey,
+      newVersionId: versionId,
     });
     return { versionId, version: nextVersion, previousVersion: prev?.version ?? null };
   },
@@ -1337,6 +1354,12 @@ export const ingestSourceTextCli = internalMutation({
         triggeredBy: "manual",
       });
     }
+    // §32 Phase 3: opted-in matter-impact alerts for the new version.
+    await ctx.runMutation(internal.matterImpact.evaluateSourceUpdate, {
+      stableKey: args.stableKey,
+      newVersionId: versionId,
+      runId: args.closeRunId,
+    });
     return {
       versionId,
       version: nextVersion,

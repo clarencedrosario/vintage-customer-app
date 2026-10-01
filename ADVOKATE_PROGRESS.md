@@ -2137,21 +2137,62 @@ working module names; not represented as trademark-cleared.
   intact while the new bundle freezes v3; finalize records state;
   cross-tenant get/manifest/listForMatter all empty.
 
+### PHASE 2 — ADVERSE AUTHORITY & CITATION RECHECKING (implemented + tested)
+
+- NEW adverseAuthority.ts (searchAdverse query / recheck query /
+  recordDecision mutation), reusing legalSources treatment fields
+  (already require treatmentSourceKey) and legalSourceVersions drift —
+  no new tables.
+- searchAdverse: deterministic terminology-overlap search over the
+  AUTHORIZED ingested corpus only (content tokens ≥5 chars minus a
+  stoplist; ≥2 shared terms required; [INGESTION PENDING] bodies
+  skipped). Each hit shows the PASSAGE that drove relevance, court,
+  decision date, citation and the corpus's jurisdictionLevel as a
+  reviewed data field — weight-assessment is explicitly the lawyer's
+  task, never computed. Same-country hits rank first; other-jurisdiction
+  hits are labelled (sameCountry=false) and never silently substituted.
+  Every call returns the scope: corpus size, terms used, coverage limit
+  ("absence from these results does NOT prove that no adverse authority
+  exists") and the jurisdiction note. Relevance framing states the hit
+  is NOT a legal determination of adversity. Treatment labels surface
+  ONLY with treatmentSourceKey (withheld + explanatory note otherwise).
+- recheck: jobId XOR bundleId; compares recorded source versions
+  (aiJobs.legalSourceVersions or a bundle's frozen citations) against
+  the CURRENT corpus → unchanged / changed / unavailable + affected
+  count, with scopeNote (cannot detect treatment changes never
+  ingested; "no change" ≠ "law has not moved") and adverseNote (does
+  not search for adverse authority by itself). Cross-tenant jobs and
+  bundles are refused.
+- recordDecision: lawyer's recheck decision
+  (reviewed_no_change_needed / research_updated /
+  escalated_to_lawyer_review) appended to the matter's event trail with
+  author, gated on note.write and a mandatory ≥10-character reason.
+- Tests (reviewAndBundles.test.ts, Phase-2 block, 3): search shows
+  passage + matched terms + scope + jurisdiction labelling and
+  withholds an unsupported treatment (also refused: trivial positions);
+  recheck unchanged/vanished→unavailable → newer ingestion→changed
+  (recorded 2 vs current 3) → treatment withheld without source and
+  shown WITH it once treatmentSourceKey exists → XOR validated with a
+  REAL bundle id (Convex table validation rejects wrong-table ids
+  before the handler); recordDecision writes the trail, refuses thin
+  notes, rival org is refused on recheck + decision.
+
 ### VERIFIED THIS TURN
 
-- bunx tsc -b --noEmit: 0 errors. bunx convex dev --once: functions ready
-  (moonlit-elk-307). Full suite: 37 files / 554 tests green (baseline
-  36/549 + 5 new). Tests are jsdom/convex-test simulations — no
-  real-provider or browser claims. No production deployment, payment, or
-  destructive action taken.
+- bunx tsc -b --noEmit: 0 errors. bunx convex dev --once: functions
+  ready (moonlit-elk-307; re-run after Phase 2). Full suite: 37 files /
+  557 tests green (baseline 36/549 + 5 Phases 1/4 + 3 Phase 2). Tests
+  are jsdom/convex-test simulations — no real-provider or browser
+  claims. No production deployment, payment, or destructive action
+  taken.
 
-### REMAINING (§32 phases 2, 3, 5-12)
+### REMAINING (§32 phases 3, 5-12)
 
-- Phase 2 adverse authority (treatment fields exist; recheck workflow
-  next), Phase 3 matter-impact alerts (ingestion run state exists),
-  Phases 5-12 per the map in ADVOKATE_REQUIREMENTS.md §32. Externally
-  blocked items unchanged: OPENAI_API_KEY absent; browser verification
-  unavailable; qualified lawyer review outstanding.
+- Phase 3 matter-impact alerts next (ingestion run state exists in
+  legalIntel to build on), then Phases 5-12 per the map in
+  ADVOKATE_REQUIREMENTS.md §32. Externally blocked items unchanged:
+  OPENAI_API_KEY absent; browser verification unavailable; qualified
+  lawyer review outstanding.
 
 ## Turn-15 — 30 Sep 2026: Indian Privacy, Court Updates, Drafting, and Source-Verified AI (§29)
 

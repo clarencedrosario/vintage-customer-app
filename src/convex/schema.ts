@@ -500,6 +500,11 @@ export default defineSchema({
         proceduralStage: v.optional(v.string()),
         governingLawClause: v.optional(v.string()),
         crossBorderFactors: v.optional(v.string()),
+        // §32 Phase 3 — OPT-IN matter-impact alerts: the lawyer anchors
+        // the legal sources this matter stands on and switches alerts on;
+        // nothing is watched or alerted by default.
+        impactAlerts: v.optional(v.boolean()),
+        anchoredSourceKeys: v.optional(v.array(v.string())),
         confirmedById: v.optional(v.id("users")),
         confirmedAt: v.optional(v.number()),
       }),
@@ -3198,6 +3203,68 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_matter", ["matterId"])
+    .index("by_org", ["orgId"]),
+
+  // =====================================================================
+  // §32 Phase 3 — Matter-impact alerts for legal changes (opt-in).
+  //
+  // When an ingestion run CLOSES with outcome="updated" or a source's
+  // treatment status changes, each matter that OPTED IN and anchors that
+  // source gets one alert. Dedupe key `matter:stableKey:version` makes
+  // re-runs idempotent; a later version or a sourced treatment change
+  // RE-ALERTS (same key, bumped version/treatment) — never silently
+  // overwriting what the lawyer already saw. Acknowledgment, dismissal
+  // and assignment are all recorded; task conversion goes through the
+  // existing taskSuggestions propose→approve flow, so nothing is created
+  // without explicit lawyer approval.
+  // =====================================================================
+  matterImpactAlerts: defineTable({
+    orgId: v.id("organizations"),
+    matterId: v.id("matters"),
+    // Unique per matter+source+version: re-running the evaluator is
+    // idempotent; a newer version re-alerts under a bumped key.
+    dedupeKey: v.string(),
+    stableKey: v.string(),
+    sourceTitle: v.string(),
+    fromVersion: v.optional(v.number()),
+    toVersion: v.number(),
+    // Sourced treatment change that accompanied the version change.
+    treatment: v.optional(v.string()),
+    treatmentSourceKey: v.optional(v.string()),
+    // Withheld treatment claim: a label exists WITHOUT a supporting
+    // source. Recorded as a REFERENCE NOTE ONLY — never an alerting
+    // event (withholding is the rule; surfacing this note keeps the
+    // lawyer informed of WHY nothing was alerted).
+    withheldTreatmentNote: v.optional(v.string()),
+    sourceUrl: v.optional(v.string()),
+    // open → acknowledged | dismissed | converted_to_task
+    status: v.union(
+      v.literal("open"),
+      v.literal("acknowledged"),
+      v.literal("dismissed"),
+      v.literal("converted_to_task"),
+      v.literal("superseded"),
+      v.literal("unsubscribed"),
+    ),
+    // Why this matter was considered affected (registry match basis).
+    reason: v.string(),
+    // Re-alert provenance: the earlier alert this one supersedes.
+    supersedesId: v.optional(v.id("matterImpactAlerts")),
+    assignedToId: v.optional(v.id("users")),
+    assignedAt: v.optional(v.number()),
+    acknowledgedAt: v.optional(v.number()),
+    acknowledgedById: v.optional(v.id("users")),
+    acknowledgedNote: v.optional(v.string()),
+    dismissedReason: v.optional(v.string()),
+    // Filled when converted via taskSuggestions.
+    taskSuggestionId: v.optional(v.id("taskSuggestions")),
+    createdTaskId: v.optional(v.id("tasks")),
+    runId: v.optional(v.id("ingestionRuns")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_matter_status", ["matterId", "status"])
+    .index("by_dedupe", ["matterId", "dedupeKey"])
     .index("by_org", ["orgId"]),
 
   // ---------------- GitHub integration ----------------

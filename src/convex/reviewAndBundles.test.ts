@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import { convexTest } from "convex-test";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 
 const modules: Record<string, () => Promise<unknown>> = (import.meta as unknown as {
   glob: (p: string) => Record<string, () => Promise<unknown>>;
@@ -535,5 +535,721 @@ describe("Turn 16 — Phase 4 research evidence bundles", () => {
         matterId: matterId as never,
       }),
     ).toEqual([]);
+  });
+});
+
+describe("Turn 16 — Phase 2 adverse authority & citation recheck", () => {
+  let t: ReturnType<typeof convexTest>;
+
+  beforeEach(() => {
+    t = convexTest(schema, modules);
+  });
+
+  const BODY =
+    "Where the borrower dies before repayment, the tribunal may order the legal representative to discharge the debt from the estate, provided the claim was filed within the limitation period.";
+  const POSITION =
+    "Where a borrower dies before repayment, the legal representative must discharge the debt from the estate.";
+
+  /** Ingest one judgment with a versioned body. */
+  async function seedCorpus(version = 1) {
+    const srcId = await asUser(t, "system").run(async (ctx) =>
+      ctx.db.insert("legalSources", {
+        stableKey: "in:judgment:adverse-test-2026",
+        title: "Estate Recovery v. Representative (synthetic)",
+        kind: "judgment" as const,
+        country: "in",
+        jurisdictionLevel: "national" as never,
+        court: "Supreme Court (synthetic)",
+        decidedAt: Date.parse("2026-02-11"),
+        citation: "(2026) 2 SCC 999 (synthetic)",
+        rights: "Open government data (synthetic)",
+        publisher: "Synthetic reports",
+        sourceUrl: "https://example.test/judgment",
+        collectionDate: "2026-09-30",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      }),
+    );
+    const versionId = await asUser(t, "system").run(async (ctx) =>
+      ctx.db.insert("legalSourceVersions", {
+        sourceId: srcId as never,
+        version,
+        body: BODY,
+        collectedAt: "2026-09-30",
+        createdAt: Date.now(),
+      }),
+    );
+    await asUser(t, "system").run(async (ctx) =>
+      ctx.db.patch(srcId as never, { latestVersion: versionId as never }),
+    );
+    return { srcId, versionId };
+  }
+
+  async function seedResearchJob(
+    ownerId: string,
+    orgId: string,
+    matterId: string,
+    recordedVersion: number,
+  ) {
+    return asUser(t, "system").run(async (ctx) =>
+      ctx.db.insert("aiJobs", {
+        orgId: orgId as never,
+        matterId: matterId as never,
+        kind: "research_question",
+        status: "done" as const,
+        inputNote: "Is the representative liable for the borrower's debt?",
+        result: "The representative may be ordered to discharge the debt.",
+        structured: { citations: [] },
+        legalSourceVersions: [
+          { stableKey: "in:judgment:adverse-test-2026", version: recordedVersion },
+          { stableKey: "in:judgment:vanished-2020", version: 1 },
+        ],
+        requestedById: ownerId as never,
+        createdAt: Date.now(),
+      }),
+    );
+  }
+
+  it("adverse search shows the passage and terms behind every hit, states scope limits, and withholds unsupported treatment", async () => {
+    const { ownerId } = await seedFirm(t);
+    const { srcId } = await seedCorpus();
+    const owner = asUser(t, ownerId);
+
+    const res = await owner.query(api.adverseAuthority.searchAdverse, {
+      position: POSITION,
+      country: "in",
+    });
+    expect(res).not.toBeNull();
+    expect(res!.results).toHaveLength(1);
+    const hit = res!.results[0]!;
+    expect(hit.stableKey).toBe("in:judgment:adverse-test-2026");
+    expect(hit.matchedTerms.length).toBeGreaterThanOrEqual(2);
+    expect(hit.passage).toContain("borrower");
+    expect(hit.sameCountry).toBe(true);
+    expect(hit.court).toContain("Supreme Court");
+    expect(hit.decidedAt).not.toBeNull();
+    // Relevance framing: terminology overlap, never a legal determination.
+    expect(hit.note).toMatch(/NOT a legal determination of adversity/);
+    // Scope honesty, stated on every call.
+    expect(res!.scope.corpusSize).toBe(1);
+    expect(res!.scope.termsUsed.length).toBeGreaterThanOrEqual(2);
+    expect(res!.scope.coverageLimit).toMatch(/does NOT prove/);
+
+    // A treatment label WITHOUT a supporting source is withheld in search
+    // too — same rule as the recheck path.
+    await asUser(t, "system").run(async (ctx) =>
+      ctx.db.patch(srcId as never, { treatment: "questioned" }),
+    );
+    const res2 = await owner.query(api.adverseAuthority.searchAdverse, {
+      position: POSITION,
+    });
+    const hit2 = res2!.results.find(
+      (r) => r.stableKey === "in:judgment:adverse-test-2026",
+    )!;
+    expect(hit2.treatmentSupported).toBe(false);
+    expect(hit2.treatment).toBeNull();
+    expect(hit2.treatmentNote).toMatch(/WITHOUT a supporting source/);
+    expect(hit2.treatmentNote).toMatch(/model inference is never sufficient/);
+
+    // Trivial positions are refused.
+    await expect(
+      owner.query(api.adverseAuthority.searchAdverse, { position: "short" }),
+    ).rejects.toThrow(/at least a sentence/);
+  });
+
+  it("recheck flags changed and unavailable citations; treatment only with its supporting source", async () => {
+    const { ownerId, matterId, orgId } = await seedFirm(t);
+    const owner = asUser(t, ownerId);
+    const { srcId } = await seedCorpus(2);
+    const jobId = await seedResearchJob(ownerId, orgId, matterId, 2);
+
+    // Fresh recheck: recorded 2 == current 2 → unchanged; the vanished
+    // stableKey is unavailable, and that is the only affected item.
+    const fresh = await owner.query(api.adverseAuthority.recheck, {
+      jobId: jobId as never,
+    });
+    expect(fresh!.researchDate).toBeDefined();
+    const ok = fresh!.items.find(
+      (i) => i.stableKey === "in:judgment:adverse-test-2026",
+    )!;
+    expect(ok.status).toBe("unchanged");
+    const gone = fresh!.items.find((i) => i.stableKey === "in:judgment:vanished-2020")!;
+    expect(gone.status).toBe("unavailable");
+    expect(fresh!.affected).toBe(1);
+    expect(fresh!.scopeNote).toMatch(/not that the law has not moved/);
+    expect(fresh!.adverseNote).toMatch(/does not search for adverse authority by itself/);
+
+    // A newer version is ingested → recorded 2 vs current 3 = changed.
+    const v3 = await asUser(t, "system").run(async (ctx) =>
+      ctx.db.insert("legalSourceVersions", {
+        sourceId: srcId as never,
+        version: 3,
+        body: BODY + " Clarified in a later report.",
+        collectedAt: "2026-10-01",
+        createdAt: Date.now(),
+      }),
+    );
+    await asUser(t, "system").run(async (ctx) =>
+      ctx.db.patch(srcId as never, { latestVersion: v3 as never }),
+    );
+    const after = await owner.query(api.adverseAuthority.recheck, {
+      jobId: jobId as never,
+    });
+    const changed = after!.items.find(
+      (i) => i.stableKey === "in:judgment:adverse-test-2026",
+    )!;
+    expect(changed.status).toBe("changed");
+    expect(changed.recordedVersion).toBe(2);
+    expect(changed.currentVersion).toBe(3);
+    expect(after!.affected).toBe(2);
+
+    // Treatment WITHOUT a supporting source → withheld entirely.
+    await asUser(t, "system").run(async (ctx) =>
+      ctx.db.patch(srcId as never, { treatment: "overruled" }),
+    );
+    const withheld = await owner.query(api.adverseAuthority.recheck, {
+      jobId: jobId as never,
+    });
+    const w = withheld!.items.find(
+      (i) => i.stableKey === "in:judgment:adverse-test-2026",
+    )!;
+    expect(w.treatmentSupported).toBe(false);
+    expect(w.treatment).toBeNull();
+    expect(w.treatmentNote).toMatch(/WITHOUT a supporting source/);
+
+    // With the supporting source recorded, the treatment is shown WITH it.
+    await asUser(t, "system").run(async (ctx) =>
+      ctx.db.patch(srcId as never, { treatmentSourceKey: "in:judgment:supporting-2026" }),
+    );
+    const shown = await owner.query(api.adverseAuthority.recheck, {
+      jobId: jobId as never,
+    });
+    const s = shown!.items.find(
+      (i) => i.stableKey === "in:judgment:adverse-test-2026",
+    )!;
+    expect(s.treatmentSupported).toBe(true);
+    expect(s.treatment).toBe("overruled");
+    expect(s.treatmentSourceKey).toBe("in:judgment:supporting-2026");
+    expect(s.treatmentNote).toMatch(/Verify the supporting source yourself/);
+
+    // Exactly one of jobId/bundleId (a REAL bundle id, since Convex
+    // validates table membership before the handler runs).
+    const emptyJob = await asUser(t, "system").run(async (ctx) =>
+      ctx.db.insert("aiJobs", {
+        orgId: orgId as never,
+        matterId: matterId as never,
+        kind: "research_question",
+        status: "done" as const,
+        inputNote: "Scratch job for XOR validation",
+        result: "Scratch answer text.",
+        structured: { citations: [] },
+        requestedById: ownerId as never,
+        createdAt: Date.now(),
+      }),
+    );
+    const anyBundle = await owner.mutation(api.evidenceBundles.createFromJob, {
+      jobId: emptyJob as never,
+      title: "Bundle for XOR validation",
+    });
+    await expect(
+      owner.query(api.adverseAuthority.recheck, {
+        jobId: jobId as never,
+        bundleId: anyBundle.bundleId as never,
+      }),
+    ).rejects.toThrow(/exactly one/);
+  });
+
+  it("recordDecision appends the matter trail; thin notes and cross-tenant calls are refused", async () => {
+    const { ownerId, matterId, orgId } = await seedFirm(t);
+    const owner = asUser(t, ownerId);
+    await seedCorpus(1);
+    const jobId = await seedResearchJob(ownerId, orgId, matterId, 1);
+
+    // Owning org can recheck its own job (2 recorded citations → 2 items).
+    const rec = await owner.query(api.adverseAuthority.recheck, { jobId: jobId as never });
+    expect(rec!.items).toHaveLength(2);
+    expect(rec!.items.every((i) => i.status === "unchanged" || i.status === "unavailable")).toBe(true);
+
+    const decision = await owner.mutation(api.adverseAuthority.recordDecision, {
+      matterId: matterId as never,
+      stableKey: "in:judgment:adverse-test-2026",
+      decision: "reviewed_no_change_needed",
+      note: "Re-read the current version; the position stands as pleaded.",
+    });
+    expect(decision.recorded).toBe(true);
+    const events = await asUser(t, "system").run(async (ctx) =>
+      ctx.db.query("matterEvents").collect(),
+    );
+    const mine = events.filter((e) => e.matterId === matterId);
+    expect(mine).toHaveLength(1);
+    expect(mine[0]!.detail).toContain("reviewed_no_change_needed");
+    expect(mine[0]!.authorId).toBeDefined();
+
+    // Thin notes are refused — the trail must be self-explanatory.
+    await expect(
+      owner.mutation(api.adverseAuthority.recordDecision, {
+        matterId: matterId as never,
+        stableKey: "in:judgment:adverse-test-2026",
+        decision: "research_updated",
+        note: "ok",
+      }),
+    ).rejects.toThrow(/reason for the decision/);
+
+    // Rival org: recheck on the job and a decision on the matter refused.
+    const rivalId = await asUser(t, "system").run(async (ctx) => {
+      const uid = await ctx.db.insert("users", {
+        email: "rival3@t16.test",
+        emailVerified: true,
+        isAnonymous: false,
+        isPlatformAdmin: false,
+      });
+      const rOrg = await ctx.db.insert("organizations", {
+        name: "Rival3 T16",
+        slug: "rival3-t16",
+        kind: "chamber" as const,
+        currency: "INR",
+        timezone: "Asia/Kolkata",
+        financialYearStart: "04-01",
+        taxLabel: "GST",
+        taxPercent: 18,
+        invoicePrefix: "INV",
+        createdBy: uid as never,
+        createdAt: Date.now(),
+      });
+      await ctx.db.insert("memberships", {
+        orgId: rOrg,
+        userId: uid as never,
+        orgRole: "owner" as const,
+        status: "active" as const,
+        createdAt: Date.now(),
+      });
+      await ctx.db.patch(uid as never, { activeOrgId: rOrg });
+      return uid;
+    });
+    await expect(
+      asUser(t, rivalId).query(api.adverseAuthority.recheck, { jobId: jobId as never }),
+    ).rejects.toThrow();
+    await expect(
+      asUser(t, rivalId).mutation(api.adverseAuthority.recordDecision, {
+        matterId: matterId as never,
+        stableKey: "in:judgment:adverse-test-2026",
+        decision: "escalated_to_lawyer_review",
+        note: "hostile org probing a matter it cannot see",
+      }),
+    ).rejects.toThrow();
+    void ownerId;
+  });
+});
+
+describe("Turn 16 — Phase 3 matter-impact alerts (opt-in)", () => {
+  let t: ReturnType<typeof convexTest>;
+
+  beforeEach(() => {
+    t = convexTest(schema, modules);
+  });
+
+  const STABLE_KEY = "in:statute:impact-test-act";
+
+  /** One legal source at the given version. */
+  async function seedAlertSource(version: number) {
+    const srcId = await asUser(t, "system").run(async (ctx) =>
+      ctx.db.insert("legalSources", {
+        stableKey: STABLE_KEY,
+        title: "Impact Test Act (synthetic)",
+        kind: "statute" as const,
+        country: "in",
+        jurisdictionLevel: "national" as never,
+        rights: "Open government data (synthetic)",
+        publisher: "Gazette (synthetic)",
+        sourceUrl: "https://example.test/impact-act",
+        collectionDate: "2026-09-30",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      }),
+    );
+    const versionId = await asUser(t, "system").run(async (ctx) =>
+      ctx.db.insert("legalSourceVersions", {
+        sourceId: srcId as never,
+        version,
+        body: `Section 1 (v${version}): The limitation period shall be ninety days.`,
+        collectedAt: "2026-09-30",
+        createdAt: Date.now(),
+      }),
+    );
+    await asUser(t, "system").run(async (ctx) =>
+      ctx.db.patch(srcId as never, { latestVersion: versionId as never }),
+    );
+    return { srcId, versionId };
+  }
+
+  /** Run the internal evaluator (the ingestion-run closing path). */
+  async function evaluate(versionId: string, runId?: string) {
+    const res = (await t.run(async (ctx) =>
+      ctx.runMutation(internal.matterImpact.evaluateSourceUpdate, {
+        stableKey: STABLE_KEY,
+        newVersionId: versionId as never,
+        runId: runId as never,
+      }),
+    )) as unknown as { alerted: number; withheldNote: string | null };
+    return res;
+  }
+
+  it("alerts only opted-in anchored matters, dedupes re-runs, and preserves superseded alerts", async () => {
+    const { ownerId, matterId, orgId } = await seedFirm(t);
+    void orgId;
+    const owner = asUser(t, ownerId);
+    await seedAlertSource(1);
+
+    // A rival's matter with the SAME anchor is never alerted.
+    const rivalId = await asUser(t, "system").run(async (ctx) => {
+      const uid = await ctx.db.insert("users", {
+        email: "rival4@t16.test",
+        emailVerified: true,
+        isAnonymous: false,
+        isPlatformAdmin: false,
+      });
+      const rOrg = await ctx.db.insert("organizations", {
+        name: "Rival4 T16",
+        slug: "rival4-t16",
+        kind: "chamber" as const,
+        currency: "INR",
+        timezone: "Asia/Kolkata",
+        financialYearStart: "04-01",
+        taxLabel: "GST",
+        taxPercent: 18,
+        invoicePrefix: "INV",
+        createdBy: uid as never,
+        createdAt: Date.now(),
+      });
+      await ctx.db.insert("memberships", {
+        orgId: rOrg,
+        userId: uid as never,
+        orgRole: "owner" as const,
+        status: "active" as const,
+        createdAt: Date.now(),
+      });
+      await ctx.db.patch(uid as never, { activeOrgId: rOrg });
+      const rMatter = await ctx.db.insert("matters", {
+        orgId: rOrg,
+        clientId: (await ctx.db.insert("clients", {
+          orgId: rOrg,
+          kind: "company" as const,
+          name: "Rival Client",
+          createdBy: uid as never,
+          createdAt: Date.now(),
+        })) as never,
+        reference: "R4/2026/0001",
+        title: "Rival matter",
+        practiceArea: "civil",
+        status: "open" as const,
+        legalProfile: {
+          country: "in",
+          impactAlerts: true,
+          anchoredSourceKeys: [STABLE_KEY],
+        },
+        createdBy: uid as never,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+      void rMatter;
+      return uid;
+    });
+
+    // Before the profile carries the anchor + opt-in, nothing is alerted.
+    const v1 = await asUser(t, "system").run(async (ctx) => {
+      const s = (await ctx.db.query("legalSources").collect()).find(
+        (x) => x.stableKey === STABLE_KEY,
+      );
+      return String(s!.latestVersion!);
+    });
+    const none = await evaluate(v1);
+    expect(none.alerted).toBe(0);
+
+    // Opt in AND anchor the source (matter.edit path).
+    await owner.mutation(api.matterImpact.setOptIn, {
+      matterId: matterId as never,
+      enabled: true,
+    });
+    await owner.mutation(api.matterImpact.setAnchor, {
+      matterId: matterId as never,
+      stableKey: STABLE_KEY,
+    });
+    const first = await evaluate(v1);
+    expect(first.alerted).toBe(1);
+
+    // Idempotent: the SAME version never re-alerts.
+    const again = await evaluate(v1);
+    expect(again.alerted).toBe(0);
+
+    const rows = await owner.query(api.matterImpact.list, {
+      matterId: matterId as never,
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.status).toBe("open");
+    expect(rows[0]!.fromVersion).toBeUndefined();
+    expect(rows[0]!.toVersion).toBe(1);
+    expect(rows[0]!.reason).toContain(STABLE_KEY);
+    expect(rows[0]!.coverageNote).toMatch(/does NOT mean the law has not moved/);
+
+    // A NEWER version re-alerts and supersedes the open earlier alert —
+    // the correction is never silent.
+    const srcId2 = await asUser(t, "system").run(async (ctx) => {
+      const s = (await ctx.db.query("legalSources").collect()).find(
+        (x) => x.stableKey === STABLE_KEY,
+      );
+      return String(s!._id);
+    });
+    const v2 = await asUser(t, "system").run(async (ctx) =>
+      ctx.db.insert("legalSourceVersions", {
+        sourceId: srcId2 as never,
+        version: 2,
+        body: "Section 1 (v2, corrected): The limitation period shall be one hundred twenty days.",
+        collectedAt: "2026-10-01",
+        createdAt: Date.now(),
+      }),
+    );
+    await asUser(t, "system").run(async (ctx) =>
+      ctx.db.patch(srcId2 as never, { latestVersion: v2 as never }),
+    );
+    const second = await evaluate(String(v2));
+    expect(second.alerted).toBe(1);
+
+    const after = await owner.query(api.matterImpact.list, {
+      matterId: matterId as never,
+    });
+    expect(after).toHaveLength(2); // superseded stays visible
+    const newest = after.find((r) => r.toVersion === 2)!;
+    const oldest = after.find((r) => r.toVersion === 1)!;
+    expect(newest!.status).toBe("open");
+    expect(newest!.fromVersion).toBe(1);
+    expect(oldest!.status).toBe("superseded"); // actions preserved, flagged
+
+    // The rival's matter got its own alert; cross-tenant reads stay empty.
+    const rivalRows = await asUser(t, rivalId).query(api.matterImpact.list, {
+      matterId: (await asUser(t, rivalId).query(
+        api.matterImpact.list,
+        { matterId: matterId as never },
+      )) as never,
+    });
+    expect(rivalRows).toEqual([]); // cannot see OUR matter's alerts
+    await expect(
+      owner.mutation(api.matterImpact.acknowledge, {
+        alertId: newest!._id as never,
+        note: "x",
+      }),
+    ).rejects.toThrow(); // validated separately below; guard here is thin-note
+  });
+
+  it("acknowledge/dismiss/assign record everything; task conversion reuses the propose→approve flow; unsupported treatment is withheld", async () => {
+    const { ownerId, matterId } = await seedFirm(t);
+    const owner = asUser(t, ownerId);
+    const { srcId } = await seedAlertSource(3);
+    await owner.mutation(api.matterImpact.setOptIn, {
+      matterId: matterId as never,
+      enabled: true,
+    });
+    await owner.mutation(api.matterImpact.setAnchor, {
+      matterId: matterId as never,
+      stableKey: STABLE_KEY,
+    });
+    const latestVersion = await asUser(t, "system").run(async (ctx) => {
+      const s = (await ctx.db.query("legalSources").collect()).find(
+        (x) => x.stableKey === STABLE_KEY,
+      );
+      return String(s!.latestVersion!);
+    });
+
+    // An unsupported treatment label on the source: NO alerting event.
+    await asUser(t, "system").run(async (ctx) =>
+      ctx.db.patch(srcId as never, { treatment: "overruled" }),
+    );
+    const res = await evaluate(latestVersion);
+    expect(res.alerted).toBe(1);
+    expect(res.withheldNote).toMatch(/WITHOUT a supporting source/);
+    expect(res.withheldNote).toMatch(/generated NO alert/);
+    const [row] = await owner.query(api.matterImpact.list, {
+      matterId: matterId as never,
+    });
+    expect(row!.treatment).toBeUndefined(); // withheld
+    expect(row!.withheldTreatmentNote).toMatch(/generated NO alert/);
+
+    // Acknowledge requires a real note.
+    await expect(
+      owner.mutation(api.matterImpact.acknowledge, {
+        alertId: row!._id as never,
+        note: "too short",
+      }),
+    ).rejects.toThrow(/at least 10 characters/);
+    await expect(
+      owner.mutation(api.matterImpact.acknowledge, {
+        alertId: row!._id as never,
+        note: "",
+      }),
+    ).rejects.toThrow();
+
+    // This alert is CONVERTED to a task proposal instead of acknowledged.
+    const conv = await owner.mutation(api.matterImpact.convertToTaskProposal, {
+      alertId: row!._id as never,
+    });
+    const convRow = (await owner.query(api.matterImpact.list, {
+      matterId: matterId as never,
+      includeHandled: true,
+    })).find((r) => r._id === row!._id)!;
+    expect(convRow.status).toBe("converted_to_task");
+    expect(convRow.taskSuggestionId).toBe(conv.suggestionId);
+
+    // The proposal goes through the EXISTING approval flow → real task.
+    const suggestions = await owner.query(api.taskSuggestions.list, {
+      matterId: matterId as never,
+    });
+    expect(suggestions).toHaveLength(1);
+    expect(suggestions[0]!.title).toContain("Impact Test Act");
+    expect(suggestions[0]!.rationale).toMatch(/ingested corpus only/); // coverage disclosure travels
+    const approved = await owner.mutation(api.taskSuggestions.approve, {
+      suggestionId: suggestions[0]!._id as never,
+    });
+    expect(approved.created).toBe(true);
+
+    // Second alert: assign, then acknowledge with a proper note.
+    const v4 = await asUser(t, "system").run(async (ctx) =>
+      ctx.db.insert("legalSourceVersions", {
+        sourceId: srcId as never,
+        version: 4,
+        body: "Section 1 (v4): The limitation period shall be one hundred eighty days.",
+        collectedAt: "2026-10-02",
+        createdAt: Date.now(),
+      }),
+    );
+    await asUser(t, "system").run(async (ctx) =>
+      ctx.db.patch(srcId as never, {
+        latestVersion: v4 as never,
+        treatment: "overruled",
+        treatmentSourceKey: "in:judgment:supporting-impact-2026",
+      }),
+    );
+    await evaluate(String(v4));
+    const rows2 = await owner.query(api.matterImpact.list, {
+      matterId: matterId as never,
+    });
+    const open4 = rows2.find((r) => r.status === "open")!;
+    expect(open4.toVersion).toBe(4);
+    // Treatment now SUPPORTED → surfaced with its source, not withheld.
+    expect(open4.treatment).toBe("overruled");
+    expect(open4.treatmentSourceKey).toBe("in:judgment:supporting-impact-2026");
+
+    await owner.mutation(api.matterImpact.assign, {
+      alertId: open4._id as never,
+      assigneeId: ownerId as never,
+    });
+    await owner.mutation(api.matterImpact.acknowledge, {
+      alertId: open4._id as never,
+      note: "Read v4 in full; limitation position restated in our draft defence.",
+    });
+    const handled = (await owner.query(api.matterImpact.list, {
+      matterId: matterId as never,
+      includeHandled: true,
+    })).find((r) => r._id === open4._id)!;
+    expect(handled.status).toBe("acknowledged");
+    expect(handled.acknowledgedById).toBeDefined();
+    expect(handled.acknowledgedNote).toContain("limitation position");
+
+    // Third alert: dismissed with a recorded reason (never deleted).
+    const v5 = await asUser(t, "system").run(async (ctx) =>
+      ctx.db.insert("legalSourceVersions", {
+        sourceId: srcId as never,
+        version: 5,
+        body: "Section 1 (v5): Editorial consolidation only; no substantive change.",
+        collectedAt: "2026-10-03",
+        createdAt: Date.now(),
+      }),
+    );
+    await asUser(t, "system").run(async (ctx) =>
+      ctx.db.patch(srcId as never, { latestVersion: v5 as never }),
+    );
+    await evaluate(String(v5));
+    const rows3 = await owner.query(api.matterImpact.list, {
+      matterId: matterId as never,
+    });
+    const open5 = rows3.find((r) => r.status === "open")!;
+    await expect(
+      owner.mutation(api.matterImpact.dismiss, {
+        alertId: open5._id as never,
+        reason: "short",
+      }),
+    ).rejects.toThrow(/at least 10 characters/);
+    await owner.mutation(api.matterImpact.dismiss, {
+      alertId: open5._id as never,
+      reason: "Editorial consolidation only — no substantive change to our position.",
+    });
+    const dismissed = (await owner.query(api.matterImpact.list, {
+      matterId: matterId as never,
+      includeHandled: true,
+    })).find((r) => r._id === open5._id)!;
+    expect(dismissed.status).toBe("dismissed");
+    expect(dismissed.dismissedReason).toContain("Editorial consolidation");
+  });
+
+  it("opt-in is refused without a confirmed legal profile and ingest paths drive alerts end-to-end", async () => {
+    const { ownerId, matterId } = await seedFirm(t);
+    const owner = asUser(t, ownerId);
+    await seedAlertSource(1);
+
+    // No legalProfile on the matter yet → opt-in refused with guidance.
+    await expect(
+      owner.mutation(api.matterImpact.setOptIn, {
+        matterId: matterId as never,
+        enabled: true,
+      }),
+    ).rejects.toThrow(/legal profile first/);
+    await expect(
+      owner.mutation(api.matterImpact.setAnchor, {
+        matterId: matterId as never,
+        stableKey: STABLE_KEY,
+      }),
+    ).rejects.toThrow(/legal profile first/);
+
+    // Give the matter a profile (raw patch — the profile-editing flow is
+    // the existing legalIntel profile path), then opt in and anchor.
+    await asUser(t, "system").run(async (ctx) =>
+      ctx.db.patch(matterId as never, {
+        legalProfile: {
+          country: "in",
+          proceduralStage: "trial",
+        },
+      }),
+    );
+    await owner.mutation(api.matterImpact.setOptIn, {
+      matterId: matterId as never,
+      enabled: true,
+    });
+    await owner.mutation(api.matterImpact.setAnchor, {
+      matterId: matterId as never,
+      stableKey: STABLE_KEY,
+    });
+
+    // The BROWSER ingest path (operator-gated) drives the evaluator.
+    await asUser(t, "system").run(async (ctx) =>
+      ctx.db.insert("users", {
+        email: "operator@t16.test",
+        emailVerified: true,
+        isAnonymous: false,
+        isPlatformAdmin: true,
+      }),
+    );
+    const ing = await asUser(t, "operator@t16.test").mutation(
+      api.legalIntel.ingestSourceText,
+      {
+        stableKey: STABLE_KEY,
+        body: "Section 1 (v2 via ingestSourceText): The limitation period shall be one hundred twenty days.",
+      },
+    );
+    expect(ing.version).toBe(2);
+    const rows = await owner.query(api.matterImpact.list, {
+      matterId: matterId as never,
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.toVersion).toBe(2);
+    expect(rows[0]!.runId).toBeUndefined(); // browser path has no run row
+    void ownerId;
   });
 });

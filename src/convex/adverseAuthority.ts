@@ -81,15 +81,18 @@ export const searchAdverse = query({
       citation: string | null;
       treatment: string | null;
       treatmentSourceKey: string | null;
+      treatmentSupported: boolean;
+      treatmentNote?: string;
       matchedTerms: string[];
       passage: string;
       sourceUrl: string;
       note: string;
     }[] = [];
     for (const s of rows) {
-      if (args.country && s.country !== args.country) {
-        // foreign hits are only included when no country filter was given
-      }
+      // NOTE: no country exclusion happens here — hits from other
+      // jurisdictions are included but labelled (sameCountry=false) and
+      // ranked after same-country hits; they are never silently
+      // substituted for local law.
       const version = s.latestVersion ? await ctx.db.get(s.latestVersion) : null;
       const body = version?.body;
       if (!body || body.startsWith("[INGESTION PENDING]")) continue;
@@ -100,6 +103,9 @@ export const searchAdverse = query({
       if (matched.length < 2) continue;
       const firstIdx = lower.indexOf(matched[0]!);
       const passage = body.slice(Math.max(0, firstIdx - 120), firstIdx + 240).trim();
+      // Same withholding rule as recheck: a treatment label is surfaced
+      // ONLY together with its supporting source key.
+      const treatmentSupported = !!(s.treatment && s.treatmentSourceKey);
       results.push({
         stableKey: s.stableKey,
         title: s.title,
@@ -110,8 +116,13 @@ export const searchAdverse = query({
         court: s.court ?? null,
         decidedAt: s.decidedAt ?? null,
         citation: s.citation ?? null,
-        treatment: s.treatment ?? null,
-        treatmentSourceKey: s.treatmentSourceKey ?? null,
+        treatment: treatmentSupported ? s.treatment! : null,
+        treatmentSourceKey: treatmentSupported ? s.treatmentSourceKey! : null,
+        treatmentSupported,
+        treatmentNote:
+          s.treatment && !treatmentSupported
+            ? "A treatment label exists WITHOUT a supporting source — withheld here. Treatment claims require sources; model inference is never sufficient."
+            : undefined,
         matchedTerms: matched,
         passage,
         sourceUrl: s.sourceUrl,
@@ -268,10 +279,16 @@ export const recordDecision = mutation({
     if (!matter || matter.orgId !== ac.org._id) {
       throw new Error("Matter not found in this organization.");
     }
+    const note = args.note.trim();
+    if (note.length < 10) {
+      throw new Error(
+        "State the reason for the decision (at least 10 characters) — the review trail must be self-explanatory.",
+      );
+    }
     await ctx.db.insert("matterEvents", {
       matterId: args.matterId,
       kind: "note",
-      detail: `Authority recheck — ${args.stableKey}: ${args.decision}. ${args.note.trim().slice(0, 300)}`,
+      detail: `Authority recheck — ${args.stableKey}: ${args.decision}. ${note.slice(0, 300)}`,
       authorId: ac.user._id,
       createdAt: Date.now(),
     });
