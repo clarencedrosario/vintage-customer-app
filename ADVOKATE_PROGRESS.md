@@ -4,7 +4,7 @@ Durable progress file so development resumes without repeating completed work.
 Companion to `ADVOKATE_REQUIREMENTS.md` (the master checklist). Handoff log also
 maintained in `docs/DELIVERY.md`.
 
-Last checkpoint: **2 October 2026** — latest record: **Turn 18** (bottom section); turns 17 and earlier below.
+Last checkpoint: **2 October 2026** — latest record: **Turn 19** (bottom section); turns 18 and earlier below.
 
 ---
 
@@ -2557,3 +2557,99 @@ tests only, matching Phases 1–5 scope (no UI, no browser pass).
   operator never listed; the disclosure says exactly this.
 - Derivatives are filed internal-only; downloads/shares remain the
   existing governed paths (capability-checked).
+
+## Turn-19 — 2 Oct 2026: §32 Phase 7 — legal holds & ethical walls
+
+Phase 7 continues the §32 programme (Phases 1–6 implemented; 8–12
+remain pending). Backend + tests only, matching the phase scope.
+
+### BUILT (pushed to moonlit-elk-307; tsc 0)
+
+- Schema: `legalHolds` (matter-scoped preservation order),
+  `ethicalWalls` (scope user/role/all; matter list or whole org;
+  explicit `exemptActorIds`), `emergencyAccessGrants` (per wall+actor,
+  time-boxed, acknowledgement + revocation tracked).
+- `src/lib/wallScope.ts` (pure) — wall-active, scope-membership and
+  matter-coverage helpers (a wall is precise: out-of-scope members keep
+  normal access; the wall is never a blanket gag order the org cannot
+  reason about).
+- `src/convex/ethicalWalls.ts` — placeHold/liftHold/holdsForMatter/
+  activeHolds; createWall/liftWall/listWalls/wallExplanation;
+  grantEmergencyAccess/acknowledgeEmergencyAccess/revokeEmergencyAccess;
+  isWalledInternal (for background paths). Management operations gated
+  on the scarce `matter.close` capability; every action audit-logged
+  with a mandatory ≥10-char reason. Creation guards: named users must
+  be active members; a creator inside the wall's own scope must list
+  themselves in exemptActorIds explicitly (never silently self-walled).
+- ACCESS-GATE ENFORCEMENT (`access.ts`): `requireMatter`/
+  `matterOrNull` now apply walls after the pure policy check — every
+  matter-content path (notes, tasks, hearings, vault, evidence,
+  research, redaction, filing, portals) is covered; `requireMatter`
+  explains the wall ("contact compliance; emergency access requires a
+  pre-approved, acknowledged grant") instead of a bare denial. The pure
+  `canViewMatter(ac, matter)` signature is UNCHANGED (list call sites
+  untouched); `isUserWalledFromMatter` (human path: exemptions +
+  emergency grants) and `isUserWalledFromMatterByUser` (background
+  path: no exemptions) are the new evaluations.
+- WIRED SURFACES: `vault.remove` refuses while an ACTIVE hold exists
+  (every role — preservation duty outranks role); `matters.list` (both
+  list queries) hides walled matters entirely; §32 surfaces
+  (conflictReview.list, evidenceBundles.createFromJob/listForMatter,
+  filingReadiness get/list/create/getVersion, matterImpact
+  list/setOptIn/setAnchor) return nothing or refuse for walled members;
+  `reminders.runScan` skips walled recipients per target (hearing
+  reminders and deadline reminders — a background scan speaks for each
+  user); `aiRunner.runJob` checks `isWalledInternal` for the REQUESTER
+  before processing (AI is a retrieval path too) and fails the job with
+  a visible error.
+
+### THE HONEST ACCESS LINE
+
+- No role is ever implicitly privileged through a wall: exemptions are
+  named per wall, and the ONLY route past a wall is an explicit,
+  time-boxed (≤24 h), detail-carrying emergency grant that the holder
+  must ACKNOWLEDGE before it opens anything; revoked or expired grants
+  close it again. Holds have NO bypass — lifting is the explicit,
+  reason-carrying decision. Walls are not advertised to the people they
+  restrict (list views omit walled matters); `wallExplanation` gives
+  members an honest explanation of their own wall status.
+
+### TESTS (ethicalWalls.test.ts, 4 — synthetic fixtures)
+
+- Hold blocks vault.remove for the OWNER (and therefore every role);
+  duplicate holds refused; lift requires matter.close + a real reason;
+  after lifting, deletion works; audit trail shows placed/lifted/delete.
+- Wall restricts every human path (detail null, writes refused,
+  matters.list omits, all four §32 surfaces return nothing) while the
+  exempt owner keeps access; creation guards (associate refused,
+  self-scope-without-exemption refused, ghost user refused); lift
+  restores; wallExplanation walled/exempt on each side.
+- Emergency grant: unacknowledged opens NOTHING; only the holder can
+  acknowledge; acknowledged → access with a valid-grant explanation;
+  expiry closes it; a second grant + revoke closes it; audit recorded.
+- Background paths: reminder scan skips the walled responsible user for
+  the walled matter's deadline while the clean matter's reminder still
+  fires (exactly one notification, clean-reference body only);
+  isWalledInternal true for the associate / false for the owner.
+- Suite: **38 files / 574 tests green** (turn-18 baseline 37/570 + 4).
+  convex push clean (3 new tables + indexes); tsc 0.
+
+### EVIDENCE SEPARATION
+
+- Implementation + simulated tests only (convex-test, jsdom — no real
+  deployment, no real notification delivery). Browser verification:
+  NONE (automation unavailable). Legal review of the hold/wall posture:
+  OUTSTANDING.
+
+### HONEST LIMITS / BLOCKED (recorded)
+
+- vault.remove is the only deletion path wired to holds so far; matter
+  hard-delete does not exist in the product ("matter.delete" capability
+  has no mutation), and other single-record deletes (contacts,
+  parties, reminders rules) are NOT hold-gated — hold coverage is
+  honest and scoped, not claimed total.
+- Walls are enforced server-side on every listed path; a member with
+  raw database access (platform operator) is outside the model — same
+  trust boundary as the rest of the system.
+- No UI for holds/walls yet (backend + tests, like Phases 1–7 so far);
+  wallExplanation is the ready-made read model for that surface.

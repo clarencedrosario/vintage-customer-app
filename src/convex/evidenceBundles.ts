@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { requireAccess, requireCapability, getAccessContext } from "./access";
+import { requireAccess, requireCapability, getAccessContext, isUserWalledFromMatter } from "./access";
 import { sha256Hex } from "./crypto";
 import type { Doc, Id } from "./_generated/dataModel";
 
@@ -45,6 +45,11 @@ export const createFromJob = mutation({
       const matter = await ctx.db.get(job.matterId);
       if (!matter || matter.orgId !== ac.org._id) {
         throw new Error("Matter not found in this organization.");
+      }
+      // Ethical wall (§32 Phase 7): a walled member cannot bundle this
+      // matter's research.
+      if (await isUserWalledFromMatter(ctx, ac, matter)) {
+        throw new Error("An ethical wall restricts access to this matter.");
       }
     }
     if (!job.result || !job.result.trim()) {
@@ -179,6 +184,8 @@ export const listForMatter = query({
     if (!ac) return [];
     const matter = await ctx.db.get(args.matterId);
     if (!matter || matter.orgId !== ac.org._id) return [];
+    // Ethical wall (§32 Phase 7): walled members get nothing back.
+    if (await isUserWalledFromMatter(ctx, ac, matter)) return [];
     return ctx.db
       .query("researchBundles")
       .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))

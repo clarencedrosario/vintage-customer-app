@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { mutation, query, internalMutation } from "./_generated/server";
-import { requireAccess, requireCapability, getAccessContext } from "./access";
+import { requireAccess, requireCapability, getAccessContext, isUserWalledFromMatter } from "./access";
 import type { Doc, Id } from "./_generated/dataModel";
 import { sha256Hex } from "../lib/evidenceIntegrity";
 
@@ -57,6 +57,8 @@ export const getDraft = query({
     if (!ac) return null;
     const matter = await ctx.db.get(args.matterId);
     if (!matter || matter.orgId !== ac.org._id) return null;
+    // Ethical wall (§32 Phase 7): walled members get nothing back.
+    if (await isUserWalledFromMatter(ctx, ac, matter)) return null;
     const rows = await ctx.db
       .query("filingChecklists")
       .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))
@@ -78,6 +80,8 @@ export const listVersions = query({
     if (!ac) return [];
     const matter = await ctx.db.get(args.matterId);
     if (!matter || matter.orgId !== ac.org._id) return [];
+    // Ethical wall (§32 Phase 7): walled members get nothing back.
+    if (await isUserWalledFromMatter(ctx, ac, matter)) return [];
     const rows = await ctx.db
       .query("filingChecklists")
       .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))
@@ -97,6 +101,11 @@ export const createDraft = mutation({
     const matter = await ctx.db.get(args.matterId);
     if (!matter || matter.orgId !== ac.org._id) {
       throw new Error("Matter not found in this organization.");
+    }
+    // Ethical wall (§32 Phase 7): a walled member cannot start or modify
+    // checklists on this matter.
+    if (await isUserWalledFromMatter(ctx, ac, matter)) {
+      throw new Error("An ethical wall restricts access to this matter.");
     }
     const existing = await ctx.db
       .query("filingChecklists")
@@ -487,6 +496,8 @@ export const get = query({
     if (!cl || cl.orgId !== ac.org._id) return null;
     const matter = await ctx.db.get(cl.matterId);
     if (!matter || matter.orgId !== ac.org._id) return null;
+    // Ethical wall (§32 Phase 7): walled members get nothing back.
+    if (await isUserWalledFromMatter(ctx, ac, matter)) return null;
     let staleness: "current" | "stale" | "n/a" = "n/a";
     if (cl.status === "approved_ready" && cl.approvedSnapshotHash) {
       const snap = await snapshotMatter(ctx, cl.matterId);

@@ -676,6 +676,9 @@ export const jobForRunner = internalQuery({
       kind: job.kind,
       matterId: job.matterId,
       orgId: job.orgId,
+      // The requester: the wall check in the runner speaks for THIS user
+      // (§32 Phase 7 — AI is a retrieval path too).
+      requestedById: job.requestedById,
       inputNote: job.inputNote ?? null,
       transcript: job.transcript ?? null,
       storageId: job.storageId ?? null,

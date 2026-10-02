@@ -1,16 +1,23 @@
 import { v } from "convex/values";
-import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
+import {
+  internalQuery,
+  mutation,
+  query,
+  type MutationCtx,
+} from "./_generated/server";
 import {
   getAccessContext,
+  isUserWalledFromMatterByUser,
   requireAccess,
   requireCapability,
   requireMatter,
 } from "./access";
+import type { AccessContext } from "./access";
 import type { Doc, Id } from "./_generated/dataModel";
-import { logUserAction } from "./auditLogger";
 import {
-  isUserWalledFromMatterByUser,
-} from "./access";
+  EMERGENCY_GRANT_REASONS,
+  LEGAL_HOLD_REASON_KINDS,
+} from "./schemaExtras";
 import { isWallActive, isMemberInScope, wallCoversMatter } from "../lib/wallScope";
 
 // =====================================================================
@@ -24,13 +31,14 @@ import { isWallActive, isMemberInScope, wallCoversMatter } from "../lib/wallScop
 // Ethical walls: access restriction for a targeted scope (one user, one
 // role, or all members) over chosen matters or the whole org. The wall
 // is evaluated by the shared access gate (access.ts requireMatter /
-// matterOrNull — every matter-content path) and by explicit background
-// checks (reminders scan per-recipient, AI runner). Exempt actors are
-// NAMED at creation time — no role is ever implicitly privileged. The
-// ONLY route past a wall is an explicit emergency grant: issued for
-// that wall with a mandatory detail, time-boxed, ACKNOWLEDGED by the
-// holder, usable only while unexpired and unrevoked — each use is
-// recorded on the grant row.
+// matterOrNull — every matter-content path), by list filters
+// (matters.list and the §32 surfaces), and by explicit background
+// checks (reminders scan per-recipient, AI runner via isWalledInternal).
+// Exempt actors are NAMED at creation time — no role is ever implicitly
+// privileged. The ONLY route past a wall is an explicit emergency
+// grant: issued for that wall with a mandatory detail, time-boxed,
+// ACKNOWLEDGED by the holder, usable only while unexpired and
+// unrevoked.
 //
 // Management operations require the scarce "matter.close" capability
 // (owner/partner/administrator by default; never support staff).
@@ -46,11 +54,31 @@ function assertReason(reason: string, what: string): void {
   }
 }
 
-async function actorOf(ac: Awaited<ReturnType<typeof requireAccess>>) {
+function actorOf(ac: AccessContext) {
   return {
     id: ac.user._id,
     name: ac.user.name ?? ac.user.email ?? "Member",
   };
+}
+
+/** Direct append-only audit entry (same pattern as evidence.ts). */
+async function audit(
+  ctx: { db: MutationCtx["db"] },
+  orgId: Id<"organizations">,
+  actor: { id: Id<"users">; name: string },
+  action: string,
+  detail: string,
+  matterId?: Id<"matters">,
+): Promise<void> {
+  await ctx.db.insert("auditLog", {
+    orgId,
+    matterId,
+    actorId: actor.id,
+    actorName: actor.name,
+    action,
+    detail,
+    createdAt: Date.now(),
+  });
 }
 
 // ---------------------------------------------------------------------
@@ -61,7 +89,7 @@ async function actorOf(ac: Awaited<ReturnType<typeof requireAccess>>) {
 export const placeHold = mutation({
   args: {
     matterId: v.id("matters"),
-    reasonKind: v.union(...["litigation", "investigation", "audit", "regulatory", "other"].map((r) => v.literal(r))),
+    reasonKind: v.union(...LEGAL_HOLD_REASON_KINDS.map((r) => v.literal(r))),
     reason: v.string(),
   },
   handler: async (ctx, args) => {
@@ -69,7 +97,7 @@ export const placeHold = mutation({
     requireCapability(ac, "matter.close");
     const matter = await requireMatter(ctx, ac, args.matterId);
     assertReason(args.reason, "place a legal hold");
-    const actor = await actorOf(ac);
+    const actor = actorOf(ac);
 
     // One active hold per matter is enough — a second adds nothing.
     const existing = await ctx.db
@@ -92,7 +120,14 @@ export const placeHold = mutation({
       createdByName: actor.name,
       createdAt: Date.now(),
     });
-    await logUserAction(ctx, ac, "Legal hold placed", `${matter.reference}: ${args.reason.trim()}`, args.matterId);
+    await audit(
+      ctx,
+      matter.orgId,
+      actor,
+      "Legal hold placed",
+      `${matter.reference}: ${args.reason.trim()}`,
+      matter._id,
+    );
     return { holdId };
   },
 });
@@ -112,7 +147,7 @@ export const liftHold = mutation({
     }
     if (hold.status === "lifted") throw new Error("Hold is already lifted.");
     assertReason(args.reason, "lift a legal hold");
-    const actor = await actorOf(ac);
+    const actor = actorOf(ac);
     const matter = await ctx.db.get(hold.matterId);
     await ctx.db.patch(args.holdId, {
       status: "lifted",
@@ -121,24 +156,25 @@ export const liftHold = mutation({
       liftedByName: actor.name,
       liftReason: args.reason.trim(),
     });
-    await logUserAction(
+    await audit(
       ctx,
-      ac,
+      hold.orgId,
+      actor,
       "Legal hold lifted",
-      `${matter?.reference ?? hold.matterId}: ${args.reason.trim()}`,
+      `${matter?.reference ?? "matter"}: ${args.reason.trim()}`,
       hold.matterId,
     );
   },
 });
 
-/** Active/lifted holds for a matter (visible to those who can see it). */
+/** Holds for a matter (visible to those who can see the matter). */
 export const holdsForMatter = query({
   args: { matterId: v.id("matters") },
   handler: async (ctx, args) => {
     const ac = await getAccessContext(ctx);
     if (!ac) return [];
     const matter = await requireMatter(ctx, ac, args.matterId);
-    const rows = await ctx.db
+    const active = await ctx.db
       .query("legalHolds")
       .withIndex("by_matter_status", (q) =>
         q.eq("matterId", matter._id).eq("status", "active"),
@@ -150,7 +186,7 @@ export const holdsForMatter = query({
         q.eq("matterId", matter._id).eq("status", "lifted"),
       )
       .collect();
-    return [...rows, ...lifted].sort((a, b) => b.createdAt - a.createdAt);
+    return [...active, ...lifted].sort((a, b) => b.createdAt - a.createdAt);
   },
 });
 
@@ -203,32 +239,36 @@ export const createWall = mutation({
     const ac = await requireAccess(ctx);
     requireCapability(ac, "matter.close");
     assertReason(args.reason, "erect an ethical wall");
-    const actor = await actorOf(ac);
+    const actor = actorOf(ac);
+    const scope = args.scope;
 
-    // Validations: scope/target sanity + org membership of named users.
-    const exempt = [...new Set(args.exemptActorIds ?? [])];
-    if (args.scope.kind === "user") {
-      const m = await ctx.db
+    // Sanity: named users must be active members of THIS org.
+    const isActiveMember = async (userId: Id<"users">) => {
+      const rows = await ctx.db
         .query("memberships")
-        .withIndex("by_user", (q) => q.eq("userId", args.scope.userId))
+        .withIndex("by_user", (q) => q.eq("userId", userId))
         .collect();
-      if (!m.some((x) => x.orgId === ac.org._id && x.status === "active")) {
-        throw new Error("Walled user is not an active member of this organization.");
-      }
+      return rows.some((x) => x.orgId === ac.org._id && x.status === "active");
+    };
+    if (scope.kind === "user" && !(await isActiveMember(scope.userId))) {
+      throw new Error(
+        "Walled user is not an active member of this organization.",
+      );
     }
+    const exempt = [...new Set(args.exemptActorIds ?? [])];
     for (const uid of exempt) {
-      const m = await ctx.db
-        .query("memberships")
-        .withIndex("by_user", (q) => q.eq("userId", uid))
-        .collect();
-      if (!m.some((x) => x.orgId === ac.org._id && x.status === "active")) {
-        throw new Error("Exempt actor is not an active member of this organization.");
+      if (!(await isActiveMember(uid))) {
+        throw new Error(
+          "Exempt actor is not an active member of this organization.",
+        );
       }
     }
     const matterIds = args.matterIds;
     if (matterIds) {
       if (matterIds.length === 0) {
-        throw new Error("Pass no matterIds (whole-org wall) or a non-empty list.");
+        throw new Error(
+          "Pass no matterIds (whole-org wall) or a non-empty list.",
+        );
       }
       for (const mid of matterIds) {
         const m = await ctx.db.get(mid);
@@ -240,10 +280,10 @@ export const createWall = mutation({
 
     // The creator must never be silently walled out of administration.
     const inOwnScope =
-      args.scope.kind === "all" ||
-      (args.scope.kind === "role" && ac.membership.orgRole === args.scope.orgRole) ||
-      (args.scope.kind === "user" && args.scope.userId === actor.id);
-    if (inOwnScope && !exempt.some((id) => id === actor.id)) {
+      scope.kind === "all" ||
+      (scope.kind === "role" && ac.membership.orgRole === scope.orgRole) ||
+      (scope.kind === "user" && scope.userId === actor.id);
+    if (inOwnScope && !exempt.includes(actor.id)) {
       throw new Error(
         "You are inside this wall's scope — add yourself to exemptActorIds explicitly to remain able to administer it.",
       );
@@ -253,7 +293,7 @@ export const createWall = mutation({
       orgId: ac.org._id,
       title: args.title.trim() || "Ethical wall",
       matterIds,
-      scope: args.scope,
+      scope,
       exemptActorIds: exempt,
       reason: args.reason.trim(),
       status: "active",
@@ -263,11 +303,14 @@ export const createWall = mutation({
       startsAt: Date.now(),
       endsAt: args.endsAt,
     });
-    await logUserAction(
+    await audit(
       ctx,
-      ac,
+      ac.org._id,
+      actor,
       "Ethical wall created",
-      `${args.title.trim() || "Ethical wall"} — scope ${args.scope.kind}${matterIds ? ` over ${matterIds.length} matter(s)` : " over the whole org"}; ${exempt.length} exempt actor(s)`,
+      `${args.title.trim() || "Ethical wall"} — scope ${scope.kind}${
+        matterIds ? ` over ${matterIds.length} matter(s)` : " over the whole org"
+      }; ${exempt.length} exempt actor(s)`,
     );
     return { wallId };
   },
@@ -285,14 +328,20 @@ export const liftWall = mutation({
     }
     if (wall.status === "lifted") throw new Error("Wall is already lifted.");
     assertReason(args.reason, "lift an ethical wall");
-    const actor = await actorOf(ac);
+    const actor = actorOf(ac);
     await ctx.db.patch(args.wallId, {
       status: "lifted",
       liftedAt: Date.now(),
       liftedById: actor.id,
       liftReason: args.reason.trim(),
     });
-    await logUserAction(ctx, ac, "Ethical wall lifted", `${wall.title}: ${args.reason.trim()}`);
+    await audit(
+      ctx,
+      ac.org._id,
+      actor,
+      "Ethical wall lifted",
+      `${wall.title}: ${args.reason.trim()}`,
+    );
   },
 });
 
@@ -305,7 +354,7 @@ export const grantEmergencyAccess = mutation({
   args: {
     wallId: v.id("ethicalWalls"),
     actorId: v.id("users"),
-    reason: v.union(...["hold_setup_or_correction", "wall_correction", "security_incident", "court_order", "other_documented"].map((r) => v.literal(r))),
+    reason: v.union(...EMERGENCY_GRANT_REASONS.map((r) => v.literal(r))),
     detail: v.string(),
     durationMinutes: v.optional(v.number()),
   },
@@ -317,42 +366,46 @@ export const grantEmergencyAccess = mutation({
       throw new Error("Active wall not found in your organization.");
     }
     if (!args.detail || args.detail.trim().length < MIN_REASON) {
-      throw new Error(`A detail of at least ${MIN_REASON} characters is required for an emergency grant.`);
+      throw new Error(
+        `A detail of at least ${MIN_REASON} characters is required for an emergency grant.`,
+      );
     }
-    const m = await ctx.db
+    const rows = await ctx.db
       .query("memberships")
       .withIndex("by_user", (q) => q.eq("userId", args.actorId))
       .collect();
-    if (!m.some((x) => x.orgId === ac.org._id && x.status === "active")) {
-      throw new Error("Grant recipient is not an active member of this organization.");
+    if (!rows.some((x) => x.orgId === ac.org._id && x.status === "active")) {
+      throw new Error(
+        "Grant recipient is not an active member of this organization.",
+      );
     }
     const minutes =
       args.durationMinutes && args.durationMinutes > 0 && args.durationMinutes <= 24 * 60
         ? args.durationMinutes
         : 60;
-    const actor = await actorOf(ac);
+    const actor = actorOf(ac);
+    const holder = await ctx.db.get(args.actorId);
+    const expiresAt = Date.now() + minutes * 60_000;
     const grantId = await ctx.db.insert("emergencyAccessGrants", {
       wallId: wall._id,
       orgId: ac.org._id,
       actorId: args.actorId,
-      actorName:
-        (await ctx.db.get(args.actorId))?.name ??
-        (await ctx.db.get(args.actorId))?.email ??
-        "Member",
+      actorName: holder?.name ?? holder?.email ?? "Member",
       reason: args.reason,
       detail: args.detail.trim(),
       grantedById: actor.id,
       grantedByName: actor.name,
       grantedAt: Date.now(),
-      expiresAt: Date.now() + minutes * 60_000,
+      expiresAt,
     });
-    await logUserAction(
+    await audit(
       ctx,
-      ac,
+      ac.org._id,
+      actor,
       "Emergency access granted",
       `${wall.title} — ${args.reason} (${minutes} min): ${args.detail.trim()}`,
     );
-    return { grantId, expiresAt: Date.now() + minutes * 60_000 };
+    return { grantId, expiresAt };
   },
 });
 
@@ -371,16 +424,25 @@ export const acknowledgeEmergencyAccess = mutation({
     if (grant.actorId !== ac.user._id) {
       throw new Error("Only the grant holder can acknowledge it.");
     }
-    if (grant.revokedAt) throw new Error("This grant has been revoked.");
+    if (grant.revokedAt !== undefined) {
+      throw new Error("This grant has been revoked.");
+    }
     if (grant.expiresAt <= Date.now()) throw new Error("This grant has expired.");
     if (grant.acknowledgedAt === undefined) {
       await ctx.db.patch(args.grantId, { acknowledgedAt: Date.now() });
+      await audit(
+        ctx,
+        grant.orgId,
+        actorOf(ac),
+        "Emergency access acknowledged",
+        `Grant for wall ${grant.wallId} acknowledged (expires ${new Date(grant.expiresAt).toISOString()}).`,
+      );
     }
     return { acknowledgedAt: grant.acknowledgedAt ?? Date.now() };
   },
 });
 
-/** Revoke a grant before its expiry (also works post-hoc for the audit). */
+/** Revoke a grant before its expiry (the audit keeps the reason). */
 export const revokeEmergencyAccess = mutation({
   args: { grantId: v.id("emergencyAccessGrants"), reason: v.string() },
   handler: async (ctx, args) => {
@@ -394,7 +456,13 @@ export const revokeEmergencyAccess = mutation({
     if (grant.revokedAt === undefined) {
       await ctx.db.patch(args.grantId, { revokedAt: Date.now() });
     }
-    await logUserAction(ctx, ac, "Emergency access revoked", `${args.reason.trim()}`);
+    await audit(
+      ctx,
+      ac.org._id,
+      actorOf(ac),
+      "Emergency access revoked",
+      args.reason.trim(),
+    );
   },
 });
 
@@ -435,7 +503,9 @@ export const listWalls = query({
           matters: await Promise.all(
             (w.matterIds ?? []).map(async (mid) => {
               const m: Doc<"matters"> | null = await ctx.db.get(mid);
-              return m ? { _id: m._id, reference: m.reference, title: m.title } : null;
+              return m
+                ? { _id: m._id, reference: m.reference, title: m.title }
+                : null;
             }),
           ),
         })),
@@ -445,7 +515,8 @@ export const listWalls = query({
 
 /**
  * Why the caller is (or is not) walled from a matter — used by the UI to
- * explain the wall instead of a bare 403-style refusal.
+ * EXPLAIN the wall instead of a bare refusal. Shows the wall, its
+ * reason, exemption status and any emergency-grant state.
  */
 export const wallExplanation = query({
   args: { matterId: v.id("matters") },
@@ -463,10 +534,18 @@ export const wallExplanation = query({
         q.eq("orgId", ac.org._id).eq("status", "active"),
       )
       .collect();
+    const memberships = await ctx.db
+      .query("memberships")
+      .withIndex("by_user", (q) => q.eq("userId", ac.user._id))
+      .collect();
+    const member = memberships.find(
+      (m) => m.orgId === ac.org._id && m.status === "active",
+    );
     const applicable: {
       wallId: Id<"ethicalWalls">;
       title: string;
       reason: string;
+      inScope: boolean;
       exempt: boolean;
       emergencyGrantValid: boolean;
     }[] = [];
@@ -477,13 +556,6 @@ export const wallExplanation = query({
       );
       if (!active) continue;
       if (!wallCoversMatter({ matterIds: w.matterIds ?? null }, matter._id)) continue;
-      const memberships = await ctx.db
-        .query("memberships")
-        .withIndex("by_user", (q) => q.eq("userId", ac.user._id))
-        .collect();
-      const member = memberships.find(
-        (m) => m.orgId === ac.org._id && m.status === "active",
-      );
       const inScope =
         !!member &&
         isMemberInScope(w.scope, {
@@ -491,8 +563,7 @@ export const wallExplanation = query({
           status: member.status,
           userId: ac.user._id,
         });
-      if (!inScope) continue;
-      const exempt = (w.exemptActorIds ?? []).some((id) => id === ac.user._id);
+      const exempt = (w.exemptActorIds ?? []).includes(ac.user._id);
       const grants = await ctx.db
         .query("emergencyAccessGrants")
         .withIndex("by_wall_actor", (q) =>
@@ -500,18 +571,22 @@ export const wallExplanation = query({
         )
         .collect();
       const emergencyGrantValid = grants.some(
-        (g) => !g.revokedAt && g.acknowledgedAt !== undefined && g.expiresAt > now,
+        (g) =>
+          g.revokedAt === undefined &&
+          g.acknowledgedAt !== undefined &&
+          g.expiresAt > now,
       );
       applicable.push({
         wallId: w._id,
         title: w.title,
         reason: w.reason,
+        inScope,
         exempt,
         emergencyGrantValid,
       });
     }
     return {
-      walled: applicable.some((a) => !a.exempt && !a.emergencyGrantValid),
+      walled: applicable.some((a) => a.inScope && !a.exempt && !a.emergencyGrantValid),
       walls: applicable,
     };
   },
