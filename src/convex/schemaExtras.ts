@@ -6,6 +6,7 @@
 // schema (extend, never duplicate). All rows are org-scoped.
 // =====================================================================
 import { defineTable } from "convex/server";
+import { REDACTION_REFUSAL_REASONS } from "../lib/redaction";
 import { v } from "convex/values";
 import { DEADLINE_CATEGORIES } from "./constants";
 import { CUSTODY_ACTIONS } from "../lib/evidenceIntegrity";
@@ -1363,4 +1364,56 @@ export const platformOpsTables = {
   })
     .index("by_token", ["tokenHash"])
     .index("by_email", ["email"]),
+};
+
+// =====================================================================
+// §32 PHASE 6 — VERIFIED REDACTION.
+// One row per redaction attempt (verified | failed | refused) — refusals
+// and failures are RECORDED, never silent, and only a scan-passing
+// derivative is ever labelled "verified". The derivative itself is
+// filed as a normal vault document (matterDocuments + storage), so the
+// existing download/share/custody machinery applies to it unchanged.
+// =====================================================================
+
+/** Entry validator shared by the schema, the action and the bridges. */
+export const redactionEntryValidator = v.object({
+  term: v.string(),
+  label: v.string(),
+  reason: v.string(),
+});
+
+export const REDACTION_STATUSES = ["verified", "failed", "refused"] as const;
+
+export const redactionTables = {
+  redactionJobs: defineTable({
+    orgId: v.id("organizations"),
+    matterId: v.id("matters"),
+    documentId: v.id("matterDocuments"),
+    sourceName: v.string(),
+    // Observed SHA-256 of the source bytes THIS job processed (chain of
+    // custody for the derivative — later source edits never rewrite it).
+    sourceSha256: v.optional(v.string()),
+    entries: v.array(redactionEntryValidator),
+    status: v.union(...REDACTION_STATUSES.map((s) => v.literal(s))),
+    refusalReason: v.optional(
+      v.union(...REDACTION_REFUSAL_REASONS.map((r) => v.literal(r))),
+    ),
+    refusalDetail: v.optional(v.string()),
+    // Per-term replacement counts on the source text.
+    hits: v.array(v.object({ term: v.string(), count: v.number() })),
+    // Per-term residue counts on the PRODUCED derivative; all zero is
+    // the only state that may be labelled "verified".
+    verification: v.array(
+      v.object({ term: v.string(), remaining: v.number() }),
+    ),
+    derivativeDocumentId: v.optional(v.id("matterDocuments")),
+    derivativeSha256: v.optional(v.string()),
+    derivativeChars: v.optional(v.number()),
+    coverageNote: v.string(),
+    actorId: v.id("users"),
+    actorName: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_matter", ["matterId"])
+    .index("by_document", ["documentId"]),
 };

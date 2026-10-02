@@ -11,6 +11,7 @@ import {
   hrTables,
   platformOpsTables,
   legalIntelTables,
+  redactionTables,
   LEGAL_DATE_KINDS,
 } from "./schemaExtras";
 
@@ -128,6 +129,7 @@ export default defineSchema({
   ...hrTables,
   ...platformOpsTables,
   ...legalIntelTables,
+  ...redactionTables,
 
   users: defineTable({
     name: v.optional(v.string()),

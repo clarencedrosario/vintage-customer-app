@@ -4,7 +4,7 @@ Durable progress file so development resumes without repeating completed work.
 Companion to `ADVOKATE_REQUIREMENTS.md` (the master checklist). Handoff log also
 maintained in `docs/DELIVERY.md`.
 
-Last checkpoint: **1 October 2026** — latest record: **Turn 17** (bottom section); turns 16 and earlier below.
+Last checkpoint: **2 October 2026** — latest record: **Turn 18** (bottom section); turns 17 and earlier below.
 
 ---
 
@@ -2476,3 +2476,84 @@ Phases 6–12 remain pending (recorded in ADVOKATE_REQUIREMENTS.md §32).
 - Filing-readiness reads carry the NOT_AN_ACCEPTANCE_GUARANTEE
   disclaimer (Phase 5, turn 16; test-verified); browser confirmation
   still pending.
+
+## Turn-18 — 2 Oct 2026: §32 Phase 6 — verified redaction with synthetic-fixture acceptance tests
+
+Phase 6 resumed the §32 programme (turn 17's connector work was the
+user-prioritized insertion; Phases 7–12 remain pending). Backend +
+tests only, matching Phases 1–5 scope (no UI, no browser pass).
+
+### BUILT (pushed to moonlit-elk-307; tsc 0)
+
+- `src/lib/redaction.ts` (pure, unit-exercised) — format-support model
+  (ONLY UTF-8 text family: .txt/.md/.markdown/.csv/.json), binary
+  signature guards (PDF/ZIP/PNG/JPEG/GIF/PostScript/NUL-byte), strict
+  UTF-8 decode, entry validation (2–200-char terms, MANDATORY human
+  reason per entry, case-insensitive dedupe, ≤100 entries, longest-
+  first ordering), ONE matcher for removal AND verification
+  (case-insensitive, whitespace-tolerant so line-wrapped terms are
+  still found), removal + absence re-scan functions, refusal-reason
+  vocabulary, and the coverage disclosure (REDACTION_COVERAGE_NOTE).
+- `src/convex/redaction.ts` (V8) — `redactionSourceInfo` bridge
+  (requireAccess + document.upload capability + requireMatter +
+  canViewDocument; same split as evidence.ts/evidenceVerify.ts),
+  `recordRedactionOutcome` (files verified derivatives as REAL vault
+  documents: storage object + integritySha256 + `redaction_derivative`
+  custody event + auditLog entry, internal visibility — never
+  auto-shared; every attempt recorded in `redactionJobs` with per-term
+  hit/residue counts + coverage note), `listRedactionJobs` (org-scoped).
+- `src/convex/redactionRun.ts` ("use node") —
+  `produceVerifiedRedaction`: format refusal → storage read → size cap
+  (1 MB) → integrity-record match → content guards → entry validation
+  → produce derivative → RE-SCAN with the same matcher → "verified"
+  ONLY on all-absent; residue = status "failed" (recorded, never
+  labelled); every refusal recorded with reason (unsupported_format,
+  unknown_format, binary_content, not_utf8, no_file,
+  source_integrity_mismatch, invalid_entries, too_large,
+  storage_read_failed).
+- `schemaExtras.ts` — `redactionJobs` (+ redactionTables spread in
+  schema.ts); `crypto.ts` — `sha256HexBytes` (byte-exact hashing so the
+  derivative hash matches integrity re-verification);
+  `evidenceIntegrity.ts` — `redaction_derivative` custody action.
+
+### THE HONEST CAPABILITY LINE
+
+- A PDF/image derivative that merely draws boxes leaves the underlying
+  text/pixels — the classic redaction failure — and this module cannot
+  verify such removal, so it REFUSES those formats outright instead of
+  labelling anything "verified". Verification is a mechanical absence
+  check of THIS derivative (same matcher as removal), not a guarantee
+  about the source's other content, rephrasings, encodings or images —
+  the disclosure travels on every job row and result, and human review
+  is required before external use.
+
+### TESTS (synthetic fixtures, labelled SYNTHETIC FIXTURE)
+
+- reviewAndBundles.test.ts Phase-6 block (4): verified path (byte-level
+  derivative proof: markers present, non-sensitive text untouched,
+  every recorded term absent; hash/custody/audit asserted); refusal
+  matrix (PDF → unsupported_format; PNG-in-.txt → binary_content;
+  hash-mismatch → source_integrity_mismatch; no file → no_file;
+  extension-less → unknown_format; reason-less/duplicate terms →
+  invalid_entries); matcher whitespace-tolerance + residue-FAILS
+  fixture (broken derivative caught, failed row keeps residue visible
+  and files NO derivative); cross-tenant call REFUSED with no trail row.
+- Suite: **37 files / 570 tests green** (turn-17 baseline 37/566 + 4).
+  convex push clean (redactionJobs indexes created); tsc 0.
+
+### EVIDENCE SEPARATION
+
+- Implementation + simulated tests only — as with Phases 1–5. Browser
+  verification: NONE (automation unavailable). Legal review of the
+  redaction posture and coverage disclosure: OUTSTANDING. No real
+  personal data was used in any fixture.
+
+### HONEST LIMITS / BLOCKED (recorded)
+
+- Text-family files only (≤1 MB) — PDF/DOCX/image redaction is
+  REFUSED, not attempted; no OCR, no format conversion.
+- Verification is mechanical absence of the recorded terms — it cannot
+  catch synonyms, partial identifiers, encodings, or content the
+  operator never listed; the disclosure says exactly this.
+- Derivatives are filed internal-only; downloads/shares remain the
+  existing governed paths (capability-checked).

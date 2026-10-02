@@ -52,6 +52,7 @@ export const CUSTODY_ACTIONS = [
   "integrity_mismatch", // server re-hash DIFFERED — surfaced for review
   "version_added", // new version filed (vault)
   "restored", // an earlier version restored
+  "redaction_derivative", // verified redaction derivative produced (§32 Phase 6)
   "note", // manual custody note
 ] as const;
 
@@ -96,7 +97,9 @@ export function describeCustodyEvent(e: CustodyEvent): string {
                     ? "New version filed"
                     : e.action === "restored"
                       ? "Earlier version restored"
-                      : "Custody note";
+                      : e.action === "redaction_derivative"
+                        ? "Verified redaction derivative produced"
+                        : "Custody note";
   return `${what} — ${who} · ${when}${e.note ? ` · ${e.note}` : ""}`;
 }
 

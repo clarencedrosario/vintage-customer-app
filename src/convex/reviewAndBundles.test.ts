@@ -3,7 +3,14 @@ import { convexTest } from "convex-test";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { detectSections } from "../lib/pdfExtract";
-import { sha256Hex } from "./crypto";
+import { sha256Hex, sha256HexBytes } from "./crypto";
+import {
+  REDACTION_COVERAGE_NOTE,
+  allAbsent,
+  applyRedactions,
+  buildTermRegex,
+  scanText,
+} from "../lib/redaction";
 
 const modules: Record<string, () => Promise<unknown>> = (import.meta as unknown as {
   glob: (p: string) => Record<string, () => Promise<unknown>>;
@@ -1700,5 +1707,351 @@ describe("Turn 17 — official-source connector (fixtures; live retrieval record
     ];
     const bad = detectSections(brochure, { startAt: 1, maxNo: 46 });
     expect(bad.sections).toHaveLength(0);
+  });
+});
+
+describe("Turn 18 — §32 Phase 6 verified redaction (synthetic fixtures)", () => {
+  let t: ReturnType<typeof convexTest>;
+  beforeEach(() => {
+    t = convexTest(schema, modules);
+  });
+
+  // -----------------------------------------------------------------
+  // SYNTHETIC FIXTURE text — every name, identifier and amount below is
+  // invented for the acceptance test; nothing is real personal data.
+  // -----------------------------------------------------------------
+  const FIXTURE_TEXT = [
+    "AFFIDAVIT (SYNTHETIC FIXTURE)",
+    "",
+    "Deponent: Ramesh Kumar S/o Mahesh Kumar",
+    "Aadhaar-style ID: 2345 6789 0123",
+    "PAN-style ID: ABCDE1234F",
+    "Employer: Acme Trading Pvt. Ltd.",
+    "",
+    "The deponent states that Acme Trading Pvt. Ltd. agreed to pay",
+    "₹4,50,000 under the settlement, and that Ramesh Kumar",
+    "resides at 12/3 Synthetic Lane, New Delhi.",
+  ].join("\n");
+
+  const FIXTURE_ENTRIES = [
+    {
+      term: "Ramesh Kumar",
+      label: "deponent name",
+      reason: "Personal name of the deponent (synthetic fixture)",
+    },
+    {
+      term: "2345 6789 0123",
+      label: "aadhaar",
+      reason: "Aadhaar-style identifier (synthetic fixture)",
+    },
+    {
+      term: "ABCDE1234F",
+      label: "pan",
+      reason: "PAN-style identifier (synthetic fixture)",
+    },
+  ];
+
+  /** Store bytes in test storage and insert a source document row. */
+  async function seedSourceDoc(
+    ownerId: string,
+    matterId: string,
+    name: string,
+    content: string | Uint8Array,
+    opts: { recordedHash?: string; omitStorage?: boolean } = {},
+  ) {
+    const bytes =
+      typeof content === "string" ? new TextEncoder().encode(content) : content;
+    const blobPart: BlobPart =
+      typeof content === "string" ? content : (bytes.slice().buffer as ArrayBuffer);
+    const storageId = opts.omitStorage
+      ? undefined
+      : await asUser(t, "system").run((ctx) =>
+          ctx.storage.store(new Blob([blobPart])),
+        );
+    const documentId = await asUser(t, "system").run((ctx) =>
+      ctx.db.insert("matterDocuments", {
+        matterId: matterId as never,
+        uploaderId: ownerId as never,
+        name,
+        kind: "document" as const,
+        visibility: "internal" as const,
+        storageId,
+        integritySha256: opts.recordedHash,
+        createdAt: Date.now(),
+      }),
+    );
+    return { documentId, storageId };
+  }
+
+  it("verified path: text derivative produced, terms provably absent, filed with hash + custody + audit", async () => {
+    const { ownerId, matterId } = await seedFirm(t);
+    const owner = asUser(t, ownerId);
+    const bytes = new TextEncoder().encode(FIXTURE_TEXT);
+    const { documentId, storageId } = await seedSourceDoc(
+      ownerId,
+      matterId,
+      "affidavit-rk.txt",
+      FIXTURE_TEXT,
+      { recordedHash: sha256HexBytes(bytes) },
+    );
+
+    const result = (await owner.action(
+      api.redactionRun.produceVerifiedRedaction,
+      { documentId: documentId as never, entries: FIXTURE_ENTRIES },
+    )) as unknown as {
+      status: string;
+      derivativeDocumentId: string;
+      derivativeName: string;
+      derivativeSha256: string;
+      derivativeChars: number;
+      hits: { term: string; count: number }[];
+      coverageNote: string;
+    };
+
+    expect(result.status).toBe("verified");
+    expect(result.derivativeName).toBe("affidavit-rk.redacted.txt");
+    expect(result.derivativeSha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.coverageNote).toBe(REDACTION_COVERAGE_NOTE);
+    // Case-insensitive + line-wrapped matches were both replaced.
+    expect(result.hits.find((h) => h.term === "Ramesh Kumar")!.count).toBe(2);
+    expect(result.hits.find((h) => h.term === "2345 6789 0123")!.count).toBe(1);
+    expect(result.hits.find((h) => h.term === "ABCDE1234F")!.count).toBe(1);
+
+    // The derivative is a REAL vault document, internal-only, with the
+    // recorded integrity hash and a redaction custody event.
+    const derivative = await asUser(t, "system").run((ctx) =>
+      ctx.db.get(result.derivativeDocumentId as never),
+    );
+    expect(derivative!.name).toBe("affidavit-rk.redacted.txt");
+    expect(derivative!.integritySha256).toBe(result.derivativeSha256);
+    expect(derivative!.visibility).toBe("internal");
+    expect(
+      ((derivative!.custody ?? []) as { action: string }[]).some(
+        (e) => e.action === "redaction_derivative",
+      ),
+    ).toBe(true);
+
+    // Byte-level proof: the stored derivative contains the markers and
+    // the NON-sensitive content, and none of the recorded terms. The
+    // bytes are read INSIDE the transaction (Blobs cannot cross the
+    // .run boundary) and only the decoded text is returned.
+    const derivativeText = await asUser(t, "system").run(async (ctx) => {
+      const blob = await ctx.storage.get(derivative!.storageId as never);
+      return await blob!.text();
+    });
+    expect(derivativeText).toContain("[REDACTED: deponent name]");
+    expect(derivativeText).toContain("[REDACTED: aadhaar]");
+    expect(derivativeText).toContain("[REDACTED: pan]");
+    expect(derivativeText).toContain("Acme Trading Pvt. Ltd."); // untouched
+    expect(derivativeText).not.toContain("Ramesh");
+    expect(derivativeText).not.toContain("2345 6789 0123");
+    expect(derivativeText).not.toContain("ABCDE1234F");
+
+    // Job history + audit trail.
+    const jobs = await owner.query(api.redaction.listRedactionJobs, {
+      matterId: matterId as never,
+    });
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]!.status).toBe("verified");
+    expect(jobs[0]!.derivativeDocumentId).toBe(result.derivativeDocumentId);
+    expect(jobs[0]!.coverageNote).toBe(REDACTION_COVERAGE_NOTE);
+    const audits = await asUser(t, "system").run((ctx) =>
+      ctx.db.query("auditLog").collect(),
+    );
+    expect(
+      audits.some((a) => a.action === "Verified redaction derivative produced"),
+    ).toBe(true);
+  });
+
+  it("refusals recorded per format/content/integrity — never labelled verified", async () => {
+    const { ownerId, matterId } = await seedFirm(t);
+    const owner = asUser(t, ownerId);
+
+    // (a) A PDF is REFUSED: boxing-over would leave the text layer —
+    // no "verified" label is possible, so none is claimed.
+    const pdfDoc = await seedSourceDoc(ownerId, matterId, "agreement.pdf", new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x37]));
+    const pdfOut = (await owner.action(api.redactionRun.produceVerifiedRedaction, {
+      documentId: pdfDoc.documentId as never,
+      entries: FIXTURE_ENTRIES,
+    })) as unknown as { status: string; reason: string };
+    expect(pdfOut).toMatchObject({ status: "refused", reason: "unsupported_format" });
+
+    // (b) A mislabelled binary (PNG bytes inside a .txt name) is caught
+    // by the content guard before any text is touched.
+    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);
+    const mislabelled = await seedSourceDoc(ownerId, matterId, "notes.txt", pngBytes);
+    const binOut = (await owner.action(api.redactionRun.produceVerifiedRedaction, {
+      documentId: mislabelled.documentId as never,
+      entries: FIXTURE_ENTRIES,
+    })) as unknown as { status: string; reason: string };
+    expect(binOut).toMatchObject({ status: "refused", reason: "binary_content" });
+
+    // (c) The stored bytes differ from the document's integrity record →
+    // refusal (never redact a file that does not match its record).
+    const mismatched = await seedSourceDoc(ownerId, matterId, "ledger.txt", "harmless text", {
+      recordedHash: sha256Hex("intentionally-wrong"),
+    });
+    const misOut = (await owner.action(api.redactionRun.produceVerifiedRedaction, {
+      documentId: mismatched.documentId as never,
+      entries: FIXTURE_ENTRIES,
+    })) as unknown as { status: string; reason: string };
+    expect(misOut).toMatchObject({ status: "refused", reason: "source_integrity_mismatch" });
+
+    // All three refusals are RECORDED with their reasons; no derivatives.
+    const jobs = await owner.query(api.redaction.listRedactionJobs, {
+      matterId: matterId as never,
+    });
+    expect(jobs).toHaveLength(3);
+    expect(new Set(jobs.map((j) => j.refusalReason))).toEqual(
+      new Set(["unsupported_format", "binary_content", "source_integrity_mismatch"]),
+    );
+    expect(jobs.every((j) => j.status === "refused")).toBe(true);
+    // Absent optional fields come back undefined (never a derivative id).
+    expect(jobs.every((j) => j.derivativeDocumentId == null)).toBe(true);
+  });
+
+  it("refusals for missing file, unknown format and invalid entries (incl. reason-less terms)", async () => {
+    const { ownerId, matterId } = await seedFirm(t);
+    const owner = asUser(t, ownerId);
+
+    const noFile = await seedSourceDoc(ownerId, matterId, "memo.txt", "", { omitStorage: true });
+    const noFileOut = (await owner.action(api.redactionRun.produceVerifiedRedaction, {
+      documentId: noFile.documentId as never,
+      entries: FIXTURE_ENTRIES,
+    })) as unknown as { status: string; reason: string };
+    expect(noFileOut).toMatchObject({ status: "refused", reason: "no_file" });
+
+    const unknown = await seedSourceDoc(ownerId, matterId, "scan_output", "some text");
+    const unknownOut = (await owner.action(api.redactionRun.produceVerifiedRedaction, {
+      documentId: unknown.documentId as never,
+      entries: FIXTURE_ENTRIES,
+    })) as unknown as { status: string; reason: string };
+    expect(unknownOut).toMatchObject({ status: "refused", reason: "unknown_format" });
+
+    const valid = await seedSourceDoc(ownerId, matterId, "brief.txt", FIXTURE_TEXT);
+    const thin = (await owner.action(api.redactionRun.produceVerifiedRedaction, {
+      documentId: valid.documentId as never,
+      entries: [{ term: "A", label: "", reason: "" }],
+    })) as unknown as { status: string; reason: string };
+    expect(thin).toMatchObject({ status: "refused", reason: "invalid_entries" });
+
+    const dupe = (await owner.action(api.redactionRun.produceVerifiedRedaction, {
+      documentId: valid.documentId as never,
+      entries: [
+        { term: "Ramesh Kumar", label: "a", reason: "one (synthetic fixture)" },
+        { term: "ramesh kumar", label: "b", reason: "two (synthetic fixture)" },
+      ],
+    })) as unknown as { status: string; reason: string };
+    expect(dupe).toMatchObject({ status: "refused", reason: "invalid_entries" });
+
+    const jobs = await owner.query(api.redaction.listRedactionJobs, {
+      matterId: matterId as never,
+    });
+    expect(jobs).toHaveLength(4);
+  });
+
+  it("verification logic: residue FAILS (fixture of a broken derivative); matcher is whitespace-tolerant; failed rows never file derivatives; unauthorized callers leave no trail", async () => {
+    const { ownerId, matterId } = await seedFirm(t);
+    const owner = asUser(t, ownerId);
+
+    // Whitespace tolerance + case-insensitivity of the ONE matcher used
+    // for both removal and verification.
+    const wrapped = applyRedactions(
+      "Contact Ramesh\n  Kumar at once. RAMESH KUMAR signed.",
+      [{ term: "Ramesh Kumar", label: "deponent name", reason: "synthetic fixture" }],
+    );
+    expect(wrapped.hits[0]!.count).toBe(2);
+    expect(allAbsent(scanText(wrapped.output, [{ term: "Ramesh Kumar", label: "x", reason: "synthetic fixture" }]))).toBe(true);
+    expect(wrapped.output).toContain("[REDACTED: deponent name]");
+
+    // FIXTURE of a BROKEN derivative (what verification must catch):
+    // scanning text that still contains the term → residue → allAbsent
+    // false → the action would record "failed", never "verified".
+    const residue = scanText(
+      "Deponent Ramesh Kumar signed",
+      [{ term: "Ramesh Kumar", label: "x", reason: "synthetic fixture" }],
+    );
+    expect(residue[0]!.remaining).toBe(1);
+    expect(allAbsent(residue)).toBe(false);
+    expect(buildTermRegex("2345 6789 0123").test("id 2345\t6789 0123 here")).toBe(true);
+
+    // The recorded failed path: a failed job keeps the residue visible
+    // and files NO derivative.
+    const bytes = new TextEncoder().encode(FIXTURE_TEXT);
+    const { documentId } = await seedSourceDoc(ownerId, matterId, "brief.txt", FIXTURE_TEXT, {
+      recordedHash: sha256HexBytes(bytes),
+    });
+    await t.run((ctx) =>
+      ctx.runMutation(internal.redaction.recordRedactionOutcome, {
+        documentId: documentId as never,
+        entries: [
+          { term: "Ghost Term", label: "ghost", reason: "synthetic fixture entry" },
+        ],
+        status: "failed" as const,
+        refusalDetail: "Re-scan found residue: Ghost Term (1).",
+        hits: [{ term: "Ghost Term", count: 1 }],
+        verification: [{ term: "Ghost Term", remaining: 1 }],
+        sourceSha256: sha256HexBytes(bytes),
+        byId: ownerId as never,
+        byName: "Owner",
+      }),
+    );
+    const jobs = await owner.query(api.redaction.listRedactionJobs, {
+      matterId: matterId as never,
+    });
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]!.status).toBe("failed");
+    expect(jobs[0]!.verification[0]!.remaining).toBe(1);
+    expect(jobs[0]!.derivativeDocumentId).toBeUndefined();
+
+    // Unauthorized caller: "unauthorized", and NO trail row is created.
+    const rivalId = await asUser(t, "system").run(async (ctx) => {
+      const uid = await ctx.db.insert("users", {
+        email: "rival-redact@t18.test",
+        emailVerified: true,
+        isAnonymous: false,
+        isPlatformAdmin: false,
+      });
+      const orgId = await ctx.db.insert("organizations", {
+        name: "Rival T18",
+        slug: "rival-t18",
+        kind: "chamber" as const,
+        currency: "INR",
+        timezone: "Asia/Kolkata",
+        financialYearStart: "04-01",
+        taxLabel: "GST",
+        taxPercent: 18,
+        invoicePrefix: "INV",
+        createdBy: uid as never,
+        createdAt: Date.now(),
+      });
+      await ctx.db.insert("memberships", {
+        orgId,
+        userId: uid as never,
+        orgRole: "owner" as const,
+        status: "active" as const,
+        createdAt: Date.now(),
+      });
+      await ctx.db.patch(uid as never, { activeOrgId: orgId });
+      return uid;
+    });
+    // Cross-tenant attempt is REFUSED (same convention as the other
+    // access-checked surfaces) and writes NO trail row — the throw
+    // happens in the bridge query before anything is recorded.
+    await expect(
+      asUser(t, rivalId).action(api.redactionRun.produceVerifiedRedaction, {
+        documentId: documentId as never,
+        entries: FIXTURE_ENTRIES,
+      }),
+    ).rejects.toThrow();
+    const rivalJobs = await asUser(t, rivalId).query(
+      api.redaction.listRedactionJobs,
+      { matterId: matterId as never },
+    );
+    expect(rivalJobs).toEqual([]);
+    const allJobs = await owner.query(api.redaction.listRedactionJobs, {
+      matterId: matterId as never,
+    });
+    expect(allJobs).toHaveLength(1); // only the recorded failed fixture row
   });
 });

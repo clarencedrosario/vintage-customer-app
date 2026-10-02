@@ -14,6 +14,16 @@ export function sha256Hex(text: string): string {
   return bytesToHex(sha256(new TextEncoder().encode(text)));
 }
 
+/**
+ * Byte-exact SHA-256 (lowercase hex) of raw bytes. Same value a browser
+ * computes over the same bytes — used where a hash must match what
+ * integrity verification re-computes over stored objects (unlike
+ * sha256Hex(text), which hashes the TEXT's UTF-8 encoding).
+ */
+export function sha256HexBytes(bytes: Uint8Array): string {
+  return bytesToHex(sha256(bytes));
+}
+
 export function hmacSha256Hex(key: string, message: string): string {
   return bytesToHex(
     hmac(sha256, new TextEncoder().encode(key), new TextEncoder().encode(message)),
