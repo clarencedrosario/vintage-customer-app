@@ -370,6 +370,23 @@ export const runJob = internalAction({
     const payload = await ctx.runQuery(internal.ai.jobForRunner, { jobId: args.jobId });
     if (!payload) return;
 
+    // ETHICAL WALL (§32 Phase 7): background AI never processes a
+    // matter the REQUESTER is walled from — the wall applies on every
+    // retrieval path, including model calls. The job fails honestly
+    // with a visible error (never silently swallowed).
+    const walled = await ctx.runQuery(
+      internal.ethicalWalls.isWalledInternal,
+      { orgId: payload.orgId, userId: payload.requestedById, matterId: payload.matterId },
+    );
+    if (walled) {
+      await ctx.runMutation(internal.ai.attachError, {
+        jobId: args.jobId,
+        error:
+          "An ethical wall restricts access to this matter, so this request cannot be processed. Contact compliance if you believe this is an error.",
+      });
+      return;
+    }
+
     // Email jobs: pin the filed email as the single labelled source and
     // the matter's extracted sources as supporting context. The snapshot
     // was taken at request time — nothing is re-read from the thread here.

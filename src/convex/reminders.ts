@@ -26,7 +26,7 @@ import {
 } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { requireAccess, can } from "./access";
+import { requireAccess, can, isUserWalledFromMatterByUser } from "./access";
 
 // ---------------------------------------------------------------------
 // Local-day helpers (Asia/Kolkata — date-only things are never overdue
@@ -92,6 +92,20 @@ export const runScan = internalMutation({
       if (h.at <= now) continue;
       const matter = await ctx.db.get(h.matterId);
       if (!matter) continue;
+      // Ethical wall per TARGET (§32 Phase 7): a recipient walled from
+      // this matter is skipped — background scans speak for each user.
+      const walledTargets: Id<"users">[] = [];
+      for (const uid of [matter.leadLawyerId, h.appearingAdvocateId]) {
+        if (
+          uid &&
+          (await isUserWalledFromMatterByUser(ctx, matter.orgId, uid, matter._id))
+        ) {
+          walledTargets.push(uid);
+        }
+      }
+      const targets = [...new Set([matter.leadLawyerId, h.appearingAdvocateId].filter(
+        (u): u is Id<"users"> => !!u && !walledTargets.includes(u),
+      ))];
       const offsets = (
         h.reminderDays && h.reminderDays.length > 0
           ? h.reminderDays
@@ -106,9 +120,6 @@ export const runScan = internalMutation({
         return fireAt >= todayEnd - 24 * 3600 * 1000 && fireAt < todayEnd;
       });
       if (dueOffsets.length === 0) continue;
-      const targets = new Set<Id<"users">>();
-      if (matter.leadLawyerId) targets.add(matter.leadLawyerId);
-      if (h.appearingAdvocateId) targets.add(h.appearingAdvocateId);
       for (const offset of dueOffsets) {
         for (const uid of targets) {
           const whenLabel =
@@ -144,6 +155,14 @@ export const runScan = internalMutation({
       if (!dueTodayOrPast && !onReminderDay) continue;
       const overdue = dueTodayOrPast && d.dueAt < now;
       const matter = d.matterId ? await ctx.db.get(d.matterId) : null;
+      // Ethical wall (§32 Phase 7): the responsible user is skipped when
+      // walled from the deadline's matter.
+      if (
+        matter &&
+        (await isUserWalledFromMatterByUser(ctx, matter.orgId, d.responsibleId, matter._id))
+      ) {
+        continue;
+      }
       const id = await ctx.runMutation(internal.notifications.createInternal, {
         orgId: d.orgId,
         userId: d.responsibleId,
@@ -245,6 +264,7 @@ export const runScan = internalMutation({
           if (rule.practiceArea && matter.practiceArea !== rule.practiceArea) continue;
           const target = rule.ownerUserId ?? matter.leadLawyerId;
           if (!target) continue;
+          if (await isUserWalledFromMatterByUser(ctx, matter.orgId, target, matter._id)) continue;
           created += await executeRule(ctx, rule, `hearing_tomorrow:${h._id}:${dayKey}`, {
             targetUserId: target,
             matterId: h.matterId,

@@ -534,6 +534,21 @@ export const remove = mutation({
     if (!can(ac, "document.upload")) {
       throw new Error("You need document permission to delete files.");
     }
+    // LEGAL HOLD (§32 Phase 7): while a hold is active on the matter,
+    // ordinary deletion is BLOCKED for every member — preservation duty
+    // outranks role. No bypass exists; lifting the hold is the explicit,
+    // reason-carrying decision.
+    const activeHold = await ctx.db
+      .query("legalHolds")
+      .withIndex("by_matter_status", (q) =>
+        q.eq("matterId", matter._id).eq("status", "active"),
+      )
+      .first();
+    if (activeHold) {
+      throw new Error(
+        `A legal hold is active on this matter (${activeHold.reasonKind}): deletion is blocked while the preservation duty stands. Contact compliance — the hold must be lifted explicitly before records can be removed.`,
+      );
+    }
     const versions = await ctx.db
       .query("vaultVersions")
       .withIndex("by_document", (q) => q.eq("documentId", args.documentId))

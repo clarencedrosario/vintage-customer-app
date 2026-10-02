@@ -3,6 +3,11 @@ import { getCurrentUser } from "./users";
 import type { Doc, Id } from "./_generated/dataModel";
 import { MEMBERSHIP_STATUSES } from "./schema";
 import {
+  isMemberInScope,
+  isWallActive,
+  wallCoversMatter,
+} from "../lib/wallScope";
+import {
   DEFAULT_PERMISSIONS,
   canViewDocument as canViewDocumentPolicy,
   canViewMatter as canViewMatterPolicy,
@@ -141,15 +146,127 @@ export function requireCapability(ac: AccessContext, cap: Capability): void {
 // ---------------------------------------------------------------------
 
 /**
- * May this member open the matter file? Delegates to the pure policy
- * rule (org match first, then role/team restriction) so the two-tenant
- * fixture exercises the same code the server runs.
+ * PURE policy check (org match + role/team restriction) — synchronous,
+ * used directly by ~40 list/filter call sites that pre-date walls. The
+ * WALL layer (§32 Phase 7) is enforced on top by requireMatter /
+ * matterOrNull (every matter-content path) and by the explicit
+ * background/AI helper below. Exempt actors (named on the wall) and
+ * acknowledged, unexpired emergency grants are the only routes past a
+ * wall — no role is ever implicitly privileged through one.
  */
 export function canViewMatter(ac: AccessContext, matter: Doc<"matters">): boolean {
   return canViewMatterPolicy(ac, matter);
 }
 
-/** Load a matter the caller may see, or null. */
+/**
+ * WALL EVALUATION for one org member against one matter (no
+ * exemptions, no emergency grants — used by background/AI scans that
+ * speak for a specific user).
+ */
+export async function isUserWalledFromMatterByUser(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  userId: Id<"users">,
+  matterId: Id<"matters">,
+): Promise<boolean> {
+  const db = ctx.db as QueryCtx["db"];
+  const now = Date.now();
+  const walls = await db
+    .query("ethicalWalls")
+    .withIndex("by_org_status", (q) =>
+      q.eq("orgId", orgId).eq("status", "active"),
+    )
+    .collect();
+  for (const w of walls) {
+    const active = isWallActive(
+      { startsAt: w.startsAt, endsAt: w.endsAt ?? null, liftedAt: w.liftedAt ?? null },
+      now,
+    );
+    if (!active) continue;
+    if (!wallCoversMatter({ matterIds: w.matterIds ?? null }, matterId)) continue;
+    const memberships = await db
+      .query("memberships")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect();
+    const member = memberships.find(
+      (m) => m.orgId === orgId && m.status === "active",
+    );
+    if (
+      member &&
+      isMemberInScope(w.scope, {
+        orgRole: member.orgRole,
+        status: member.status,
+        userId,
+      })
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * HUMAN wall evaluation: scope membership + EXEMPT actors (named on
+ * the wall) + valid emergency grants (issued for this wall,
+ * acknowledged by the holder, not revoked, not expired).
+ */
+export async function isUserWalledFromMatter(
+  ctx: QueryCtx,
+  ac: AccessContext,
+  matter: Doc<"matters">,
+): Promise<boolean> {
+  const db = ctx.db as QueryCtx["db"];
+  const now = Date.now();
+  const walls = await db
+    .query("ethicalWalls")
+    .withIndex("by_org_status", (q) =>
+      q.eq("orgId", ac.org._id).eq("status", "active"),
+    )
+    .collect();
+  for (const w of walls) {
+    const active = isWallActive(
+      { startsAt: w.startsAt, endsAt: w.endsAt ?? null, liftedAt: w.liftedAt ?? null },
+      now,
+    );
+    if (!active) continue;
+    if (!wallCoversMatter({ matterIds: w.matterIds ?? null }, matter._id)) continue;
+    // Exempt actors keep access: the wall names them explicitly.
+    if ((w.exemptActorIds ?? []).some((id) => id === ac.user._id)) continue;
+
+    const memberships = await db
+      .query("memberships")
+      .withIndex("by_user", (q) => q.eq("userId", ac.user._id))
+      .collect();
+    const member = memberships.find(
+      (m) => m.orgId === ac.org._id && m.status === "active",
+    );
+    if (
+      !member ||
+      !isMemberInScope(w.scope, {
+        orgRole: member.orgRole,
+        status: member.status,
+        userId: ac.user._id,
+      })
+    ) {
+      continue;
+    }
+    // In scope and not exempt — the ONLY remaining route is a valid
+    // emergency grant.
+    const grants = await db
+      .query("emergencyAccessGrants")
+      .withIndex("by_wall_actor", (q) =>
+        q.eq("wallId", w._id).eq("actorId", ac.user._id),
+      )
+      .collect();
+    const valid = grants.some(
+      (g) => !g.revokedAt && g.acknowledgedAt !== undefined && g.expiresAt > now,
+    );
+    if (!valid) return true;
+  }
+  return false;
+}
+
+/** Load a matter the caller may see (walls applied), or null. */
 export async function matterOrNull(
   ctx: QueryCtx,
   ac: AccessContext,
@@ -158,19 +275,25 @@ export async function matterOrNull(
   const matter = await ctx.db.get(matterId);
   if (!matter) return null;
   if (!canViewMatter(ac, matter)) return null;
+  if (await isUserWalledFromMatter(ctx, ac, matter)) return null;
   return matter;
 }
 
-/** Require a matter the caller may see; throws otherwise. */
+/** Require a matter the caller may see (walls applied); throws otherwise. */
 export async function requireMatter(
   ctx: QueryCtx | MutationCtx,
   ac: AccessContext,
   matterId: Id<"matters">,
 ): Promise<Doc<"matters">> {
-  const matter = await (ctx.db as QueryCtx["db"]).get(matterId);
+  const matter = await ctx.db.get(matterId);
   if (!matter) throw new Error("Matter not found.");
   if (!canViewMatter(ac, matter)) {
     throw new Error("You do not have access to this matter.");
+  }
+  if (await isUserWalledFromMatter(ctx, ac, matter)) {
+    throw new Error(
+      "An ethical wall restricts access to this matter. If you believe this is an error, contact compliance. Emergency access requires a pre-approved, acknowledged grant.",
+    );
   }
   return matter;
 }

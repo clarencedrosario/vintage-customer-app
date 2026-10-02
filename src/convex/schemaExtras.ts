@@ -1417,3 +1417,120 @@ export const redactionTables = {
     .index("by_matter", ["matterId"])
     .index("by_document", ["documentId"]),
 };
+
+// =====================================================================
+// §32 PHASE 7 — LEGAL HOLDS & ETHICAL WALLS.
+// Holds BLOCK ordinary deletion of held records (preservation duty);
+// walls restrict EVERY retrieval path for the targeted members only —
+// other members keep normal access, so a wall is precise, not a blanket
+// restriction the org cannot reason about. NO automatic privileged
+// access ever exists; the ONLY route in is the explicit emergency grant
+// with reason + window + acknowledgement.
+// =====================================================================
+
+export const LEGAL_HOLD_REASON_KINDS = [
+  "litigation",
+  "investigation",
+  "audit",
+  "regulatory",
+  "other",
+] as const;
+
+export const LEGAL_HOLD_STATUSES = ["active", "lifted"] as const;
+
+export const ETHICAL_WALL_STATUSES = ["active", "lifted"] as const;
+
+export const WALL_SCOPE_KINDS = ["user", "role", "all"] as const;
+
+export const EMERGENCY_GRANT_REASONS = [
+  "hold_setup_or_correction",
+  "wall_correction",
+  "security_incident",
+  "court_order",
+  "other_documented",
+] as const;
+
+export const emergencyAccessGrantValidator = v.object({
+  grantId: v.id("emergencyAccessGrants"),
+  reason: v.union(...EMERGENCY_GRANT_REASONS.map((r) => v.literal(r))),
+  detail: v.string(),
+  grantedAt: v.number(),
+  expiresAt: v.number(),
+  acknowledgedAt: v.optional(v.number()),
+});
+
+export const wallScopeValidator = v.union(
+  v.object({ kind: v.literal("user"), userId: v.id("users") }),
+  v.object({ kind: v.literal("role"), orgRole: v.string() }),
+  v.object({ kind: v.literal("all") }),
+);
+
+export const wallTables = {
+  // Preservation order over a matter's records. While active, ordinary
+  // deletion paths (e.g. vault.remove) are BLOCKED for every member —
+  // including owners/administrators. Lifting a hold is an explicit,
+  // audit-logged decision.
+  legalHolds: defineTable({
+    orgId: v.id("organizations"),
+    matterId: v.id("matters"),
+    reasonKind: v.union(...LEGAL_HOLD_REASON_KINDS.map((r) => v.literal(r))),
+    reason: v.string(), // mandatory human explanation (≥10 chars)
+    status: v.union(...LEGAL_HOLD_STATUSES.map((s) => v.literal(s))),
+    createdById: v.id("users"),
+    createdByName: v.string(),
+    createdAt: v.number(),
+    liftedAt: v.optional(v.number()),
+    liftedById: v.optional(v.id("users")),
+    liftedByName: v.optional(v.string()),
+    liftReason: v.optional(v.string()),
+  })
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_matter_status", ["matterId", "status"]),
+
+  // Access wall over a set of matters (or the whole org) for a targeted
+  // scope. Evaluated inside requireMatter/matterOrNull for HUMAN access
+  // and by explicit background/AI checks — every path that can surface
+  // matter content. Exempt actors (the people who must administer the
+  // wall itself) are listed explicitly at creation time, never implied
+  // by role.
+  ethicalWalls: defineTable({
+    orgId: v.id("organizations"),
+    title: v.string(),
+    matterIds: v.optional(v.array(v.id("matters"))), // null = whole org
+    scope: wallScopeValidator,
+    exemptActorIds: v.array(v.id("users")), // explicit, never role-implied
+    reason: v.string(),
+    status: v.union(...ETHICAL_WALL_STATUSES.map((s) => v.literal(s))),
+    createdById: v.id("users"),
+    createdByName: v.string(),
+    createdAt: v.number(),
+    startsAt: v.number(),
+    endsAt: v.optional(v.number()), // wall may be time-boxed
+    liftedAt: v.optional(v.number()),
+    liftedById: v.optional(v.id("users")),
+    liftReason: v.optional(v.string()),
+  })
+    .index("by_org_status", ["orgId", "status"]),
+
+  // The ONLY route past a wall: an explicit, time-boxed, reason-carrying
+  // emergency grant, listed on the wall itself, acknowledging the wall
+  // (acknowledgeEmergencyAccess), and audit-logged. NO ROLE is ever
+  // implicitly privileged through a wall.
+  emergencyAccessGrants: defineTable({
+    wallId: v.id("ethicalWalls"),
+    orgId: v.id("organizations"),
+    actorId: v.id("users"),
+    actorName: v.string(),
+    reason: v.union(...EMERGENCY_GRANT_REASONS.map((r) => v.literal(r))),
+    detail: v.string(), // mandatory (≥10 chars)
+    grantedById: v.id("users"),
+    grantedByName: v.string(),
+    grantedAt: v.number(),
+    expiresAt: v.number(),
+    usedAt: v.optional(v.number()),
+    acknowledgedAt: v.optional(v.number()),
+    revokedAt: v.optional(v.number()),
+  })
+    .index("by_wall", ["wallId"])
+    .index("by_wall_actor", ["wallId", "actorId"]),
+};

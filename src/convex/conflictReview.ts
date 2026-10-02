@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { requireAccess, requireCapability, getAccessContext } from "./access";
+import { requireAccess, requireCapability, getAccessContext, isUserWalledFromMatter } from "./access";
 import type { Doc, Id } from "./_generated/dataModel";
 
 // =====================================================================
@@ -220,6 +220,8 @@ export const list = query({
     if (!ac) return [];
     const matter = await ctx.db.get(args.matterId);
     if (!matter || matter.orgId !== ac.org._id) return [];
+    // Ethical wall (§32 Phase 7): walled members get nothing back.
+    if (await isUserWalledFromMatter(ctx, ac, matter)) return [];
     const rows = await ctx.db
       .query("reviewFindings")
       .withIndex("by_matter_status", (q) => q.eq("matterId", args.matterId))

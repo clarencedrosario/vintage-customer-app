@@ -8,6 +8,7 @@ import {
   canViewMatter,
   can,
   getAccessContext,
+  isUserWalledFromMatter,
   matterOrNull,
   requireAccess,
   requireCapability,
@@ -116,8 +117,18 @@ export const list = query({
       .query("matters")
       .withIndex("by_org", (q) => q.eq("orgId", ac.org._id))
       .collect();
-    const visible = matters
-      .filter((m) => canViewMatter(ac, m))
+    // Ethical walls (§32 Phase 7): matters behind a wall covering this
+    // member do not appear in the list at all — the wall is not
+    // advertised to the people it restricts.
+    const policyVisible = matters.filter((m) => canViewMatter(ac, m));
+    const visible = (
+      await Promise.all(
+        policyVisible.map(async (m) =>
+          (await isUserWalledFromMatter(ctx, ac, m)) ? null : m,
+        ),
+      )
+    )
+      .filter((m): m is NonNullable<typeof m> => m !== null)
       .sort((a, b) => b.updatedAt - a.updatedAt);
     return Promise.all(
       visible.map(async (m) => ({
@@ -324,8 +335,18 @@ export const registerRows = query({
       .query("matters")
       .withIndex("by_org", (q) => q.eq("orgId", ac.org._id))
       .collect();
-    const visible = matters
-      .filter((m) => canViewMatter(ac, m))
+    // Ethical walls (§32 Phase 7): matters behind a wall covering this
+    // member do not appear in the list at all — the wall is not
+    // advertised to the people it restricts.
+    const policyVisible = matters.filter((m) => canViewMatter(ac, m));
+    const visible = (
+      await Promise.all(
+        policyVisible.map(async (m) =>
+          (await isUserWalledFromMatter(ctx, ac, m)) ? null : m,
+        ),
+      )
+    )
+      .filter((m): m is NonNullable<typeof m> => m !== null)
       .sort((a, b) => b.updatedAt - a.updatedAt);
     return Promise.all(
       visible.map(async (m) => {
