@@ -1534,3 +1534,80 @@ export const wallTables = {
     .index("by_wall", ["wallId"])
     .index("by_wall_actor", ["wallId", "actorId"]),
 };
+
+// =====================================================================
+// §32 Phase 9 — Multilingual evidence review: table definitions.
+// Translations are NEW records beside the original — the original is
+// never modified; machine renderings are always labelled; recording an
+// externally-produced translation requires an explicit per-matter
+// data-handling decision (default: unset = refused).
+// =====================================================================
+import {
+  MIN_POLICY_NOTE_CHARS,
+  TRANSLATION_PROVIDER_KINDS,
+} from "../lib/multilingual";
+
+export const multilingualTables = {
+  // The per-matter data-handling decision about EXTERNAL processors.
+  // "unset" is the honest default: no external automated processing is
+  // authorized until a human records a decision (with the authority it
+  // rests on — engagement letter, client instruction, firm policy).
+  dataHandlingPolicies: defineTable({
+    orgId: v.id("organizations"),
+    matterId: v.id("matters"),
+    externalProcessors: v.union(
+      v.literal("unset"),
+      v.literal("allowed"),
+      v.literal("restricted"),
+    ),
+    // ≥10 chars — WHERE the authority for this decision comes from.
+    authorityNote: v.string(),
+    setById: v.id("users"),
+    setByName: v.string(),
+    setAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_matter", ["matterId"])
+    .index("by_org", ["orgId"]),
+
+  // One translation rendering of one evidence source. Append-only: a
+  // newer rendering for the same target + language SUPERSEDES the old
+  // record (chain preserved, nothing overwritten). The original text
+  // is FROZEN here so the pairing never shifts under the lawyer.
+  translationRecords: defineTable({
+    orgId: v.id("organizations"),
+    matterId: v.id("matters"),
+    targetType: v.union(
+      v.literal("ai_source"), // aiSources.text (documents, emails, transcripts)
+      v.literal("matter_fact"), // matterFacts.statement (fact register)
+    ),
+    targetId: v.union(v.id("aiSources"), v.id("matterFacts")),
+    // Frozen copy of the original at translation time.
+    originalText: v.string(),
+    originalChars: v.number(),
+    sourceLanguage: v.string(), // BCP-47-ish code
+    targetLanguage: v.string(),
+    translatedText: v.string(),
+    translatedChars: v.number(),
+    providerKind: v.union(
+      ...TRANSLATION_PROVIDER_KINDS.map((k) => v.literal(k)),
+    ),
+    providerName: v.optional(v.string()), // service/translator identity
+    providerVersion: v.optional(v.string()), // model/engine version
+    machineTranslated: v.boolean(), // derived from providerKind, stored explicitly
+    externalTransfer: v.boolean(), // recording implies text was sent outside
+    note: v.optional(v.string()),
+    // Human attestation that a lawyer compared rendering vs original.
+    verifiedById: v.optional(v.id("users")),
+    verifiedByName: v.optional(v.string()),
+    verifiedAt: v.optional(v.number()),
+    verifiedNote: v.optional(v.string()),
+    supersededById: v.optional(v.id("translationRecords")),
+    createdById: v.id("users"),
+    createdByName: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_target", ["targetId"])
+    .index("by_matter", ["matterId"])
+    .index("by_org", ["orgId"]),
+};

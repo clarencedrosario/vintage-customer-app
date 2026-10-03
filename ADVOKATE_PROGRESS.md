@@ -4,7 +4,7 @@ Durable progress file so development resumes without repeating completed work.
 Companion to `ADVOKATE_REQUIREMENTS.md` (the master checklist). Handoff log also
 maintained in `docs/DELIVERY.md`.
 
-Last checkpoint: **3 October 2026** — latest record: **Turn 20** (bottom section); turns 19 and earlier below.
+Last checkpoint: **3 October 2026** — latest record: **Turn 21** (bottom section); turns 20 and earlier below.
 
 ---
 
@@ -2731,3 +2731,83 @@ remain pending). Backend + tests only, matching the phase scope.
   no red-team evaluation against a live model has been run.
 - Signals are recorded at job level for lawyer review; there is no
   UI surface yet (backend + tests, like Phases 1–8 so far).
+
+## Turn-21 — 3 Oct 2026: §32 Phase 9 — multilingual evidence review
+
+### BUILT (pushed to moonlit-elk-307; tsc 0)
+
+- `src/lib/multilingual.ts` (pure) + `src/convex/multilingual.ts` +
+  `dataHandlingPolicies` / `translationRecords` tables
+  (schemaExtras `multilingualTables`, spread into schema.ts).
+- ORIGINAL PRESERVED: translations are new APPEND-ONLY records beside
+  the evidence (`aiSources.text` / `matterFacts.statement`), freezing
+  a copy of the original at translation time. The original row is
+  never modified (test-asserted). A newer rendering for the same
+  target+language supersedes the old record — chain preserved, never
+  overwritten. If the live original later changes, the read flags the
+  record STALE and still shows the frozen pairing.
+- SIDE-BY-SIDE: deterministic newline-paragraph segmentation paired
+  by index (language-neutral; sentence splitting deliberately NOT
+  attempted — punctuation conventions differ). Segment-count mismatch
+  is the headline with unpaired remainders exposed, never hidden.
+- PROVIDER/VERSION RECORDING: providerKind (manual /
+  machine_external / machine_self_hosted), providerName,
+  providerVersion, language pair (BCP-47-ish validated; unknown
+  well-formed codes display as themselves), recorder + time.
+- MACHINE-TRANSLATION LABELLING: mandatory disclosure on every read
+  ("MACHINE TRANSLATION — produced automatically by …; NOT
+  authoritative and NOT the evidence"); manual renderings get a
+  MANUAL RENDERING label with the named translator. Human
+  verification is an ATTESTATION (mutation with ≥10-char note, what
+  the comparison covered) that changes no text and never launders the
+  machine label. Matter list carries the standing "review aids, never
+  the evidence" disclosure.
+- DATA-HANDLING RESTRICTION CHECKS: per-matter decision
+  (`setHandlingPolicy`, matter.edit, wall-checked, authorityNote ≥10
+  chars — WHERE the authority comes from) gates recording.
+  machine_external is REFUSED while unset (the honest DEFAULT: no
+  silent external disclosure) and when restricted; manual and
+  machine_self_hosted (no external transfer) never need it;
+  same-language "translations" refused.
+- Walls apply on every path via requireMatter; cross-org reads get
+  null, actions refused.
+
+### TESTS (multilingual.test.ts, 3 — synthetic fixtures)
+
+- Pure layer: language validation incl. hostile inputs; aligned +
+  mismatch pairing; permission matrix (unset default refusal);
+  labels; provider facts; truncation-refusing limits.
+- Recording: original preserved; machine + manual labels;
+  supersession chain (first record's supersededById points at the
+  new one); verification attestation incl. thin-note refusal;
+  staleness after a fact edit (frozen pairing kept); matter list.
+- Data-handling + cross-tenant: unset/restricted refusals; thin
+  authorityNote refusal; manual/self-hosted pass; explicit allowed
+  unlocks; rival org null + refusals + independent policy space.
+- Suite: **40 files / 580 tests green** (turn-20 baseline 39/577 + 3).
+  convex push clean; tsc 0.
+
+### EVIDENCE SEPARATION
+
+- Implementation + simulated tests only (convex-test, synthetic
+  multilingual fixtures — Hindi/Tamil/Kannada strings written for
+  this test, not real case material). No translation engine was run
+  or integrated (OPENAI_API_KEY absent; the layer governs RECORDINGS
+  of renderings, wherever produced). Browser verification: NONE.
+  Qualified review of the data-handling posture: OUTSTANDING.
+
+### HONEST LIMITS / BLOCKED (recorded)
+
+- This is not a translator: no machine translation is produced or
+  claimed by this module. `machine_external` is the integration point
+  where a future runner (with the key configured and the policy
+  allowing) would record output; today recordings come from renderings
+  produced elsewhere and are labelled as such.
+- Pairing is paragraph-level only; no OCR, no right-to-left layout
+  handling, no per-sentence confidence. A segment-count mismatch is
+  flagged, never force-aligned.
+- `machine_self_hosted` exists as a category (no external transfer by
+  definition of the record) but nothing in-product produces such
+  renderings yet — recorded honestly rather than left implied.
+- No UI surface yet (backend + tests, like Phases 1–9 so far);
+  sideBySide is the ready-made read model.
