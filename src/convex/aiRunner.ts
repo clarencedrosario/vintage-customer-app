@@ -25,6 +25,14 @@ import { v } from "convex/values";
 import { internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import {
+  assertEndpointAllowed,
+  buildSystemPrompt,
+  DEFENCE_BANNER,
+  scanSources,
+  wrapUntrusted,
+  type DefenceSignal,
+} from "../lib/aiDefence";
 
 const MODEL = "gpt-4o-mini";
 const TIMEOUT_MS = 90_000;
@@ -33,15 +41,9 @@ const MONTHLY_TOKEN_LIMIT = 2_000_000;
 const DISCLOSURE =
   "Draft — Professional Review Required. AI-assisted draft grounded in the selected sources; verify every reference before use.";
 
-const SYSTEM = `You are a cautious assistant inside a law-practice workspace (Indian courts). You help lawyers organise and review material they have selected.
-
-Hard rules:
-- Use ONLY the labelled sources provided. Never invent cases, statutes, quotations, citations, dates or evidence.
-- Anchor claims to sources as [source name, p.N] using the real page numbers given. If no page applies, cite [source name].
-- If the sources are insufficient for a request, say so plainly and list what is missing. Do not guess.
-- Clearly distinguish facts, allegations, inferences and legal arguments. Never present an allegation as fact.
-- Never suggest deception, fabrication or concealment. Never promise or predict winning. Do not give a strategy that assumes outcome.
-- Write in plain professional English (or the source language where quoting).`;
+// §32 Phase 8: hardened system prompt — untrusted-content boundary, no
+// tools, no fetch — built by the pure defence module (unit-tested).
+const SYSTEM = buildSystemPrompt();
 
 type Source = {
   name: string;
@@ -227,6 +229,9 @@ async function callOpenAI(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
+    // §32 Phase 8: fetch restriction — defence-in-depth guard before
+    // the ONLY outbound call this runtime is permitted to make.
+    assertEndpointAllowed("https://api.openai.com/v1/chat/completions");
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       signal: controller.signal,
@@ -320,6 +325,8 @@ async function transcribeAudio(
     const form = new FormData();
     form.append("file", new Blob([audio]), filename);
     form.append("model", "whisper-1");
+    // §32 Phase 8: fetch restriction applies to every outbound call.
+    assertEndpointAllowed("https://api.openai.com/v1/audio/transcriptions");
     const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
       method: "POST",
       signal: AbortSignal.timeout(TIMEOUT_MS),
@@ -486,9 +493,28 @@ export const runJob = internalAction({
       return;
     }
 
+    // §32 PHASE 8 — DOCUMENT-BASED AI-INSTRUCTION DEFENCE.
+    // (1) Detect instruction-shaped content in the job's UNTRUSTED
+    //     sources (documents/emails can originate from opposing
+    //     parties). Signals never silently pass and never block the
+    //     lawyer's work — they are recorded for review.
+    const untrustedExtras: { name: string; text: string }[] = [
+      ...(transcript ? [{ name: "VOICE TRANSCRIPT (untrusted)", text: transcript }] : []),
+      ...(payload.emailDigest ? [{ name: "FILED EMAIL DIGEST (untrusted)", text: payload.emailDigest }] : []),
+    ];
+    const defenceSignals: DefenceSignal[] = scanSources(
+      payload.sources.map((s) => ({ name: s.name, role: s.role, text: s.text })),
+      untrustedExtras,
+    );
+
+    // (2) Structural confinement: wrap every untrusted text in explicit
+    //     fences (after sanitization) for the prompt.
     const { user, wantsJson } = promptFor(
       payload.kind,
-      payload.sources,
+      payload.sources.map((s) => {
+        const w = wrapUntrusted({ name: s.name, role: s.role, text: s.text });
+        return { ...s, text: w.text };
+      }),
       payload.inputNote,
       transcript,
       payload.emailDigest ?? null,
@@ -502,6 +528,13 @@ export const runJob = internalAction({
         error: result.error.slice(0, 2000),
       });
       return;
+    }
+
+    // (3) Signals travel WITH the output: a visible banner when detected,
+    //     the full signal list persisted on the job for lawyer review.
+    //     Signals are NEVER silently dropped and NEVER auto-block work.
+    if (defenceSignals.length > 0) {
+      result.text = `${DEFENCE_BANNER}\n\n---\n\n${result.text}`;
     }
 
     const structured = wantsJson ? parseStructured(payload.kind, result.text) : null;
@@ -681,6 +714,7 @@ export const runJob = internalAction({
       completionTokens: result.usage.completion,
       costMinor: costMinor(result.usage.prompt, result.usage.completion),
       durationMs: Date.now() - started,
+      defence: defenceSignals.length > 0 ? defenceSignals : undefined,
     });
   },
 });

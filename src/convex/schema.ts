@@ -2285,6 +2285,19 @@ export default defineSchema({
     // missing facts affect applicability (no governing date recorded,
     // jurisdiction unconfirmed). The user question is NEVER lost.
     clarifications: v.optional(v.array(v.string())),
+    // §32 Phase 8 — instruction-defence record: signals detected in the
+    // job's UNTRUSTED sources this run (documents / filed emails can
+    // originate from opposing parties). Empty = none detected; absent =
+    // predates the defence or the kind has no untrusted sources.
+    instructionDefence: v.optional(
+      v.array(
+        v.object({
+          kind: v.string(),
+          excerpt: v.string(),
+          sourceName: v.string(),
+        }),
+      ),
+    ),
     requestedById: v.id("users"),
     createdAt: v.number(),
     completedAt: v.optional(v.number()),

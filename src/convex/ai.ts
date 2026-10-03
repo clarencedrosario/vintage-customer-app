@@ -438,6 +438,17 @@ export const attachResult = internalMutation({
     completionTokens: v.number(),
     costMinor: v.number(),
     durationMs: v.number(),
+    // §32 Phase 8 — detected instruction-shaped signals (persisted for
+    // lawyer review; never silently dropped).
+    defence: v.optional(
+      v.array(
+        v.object({
+          kind: v.string(),
+          excerpt: v.string(),
+          sourceName: v.string(),
+        }),
+      ),
+    ),
   },
   handler: async (ctx, args) => {
     await ctx.db.patch(args.jobId, {
@@ -449,6 +460,7 @@ export const attachResult = internalMutation({
       completionTokens: args.completionTokens,
       costMinor: args.costMinor,
       durationMs: args.durationMs,
+      instructionDefence: args.defence,
       completedAt: Date.now(),
     });
   },
@@ -818,6 +830,8 @@ export const getJob = query({
       transcript: job.transcript ?? null,
       storageId: job.storageId ?? null,
       inputNote: job.inputNote ?? null,
+      // §32 Phase 8 — instruction-defence signals for lawyer review.
+      instructionDefence: job.instructionDefence ?? null,
       // Legal research: the request-time source-version snapshot and any
       // focused clarification questions recorded at submission.
       legalSourceVersions: job.legalSourceVersions ?? null,
