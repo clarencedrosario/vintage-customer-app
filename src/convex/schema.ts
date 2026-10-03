@@ -14,6 +14,7 @@ import {
   redactionTables,
   wallTables,
   multilingualTables,
+  clientUpdateTables,
   LEGAL_DATE_KINDS,
 } from "./schemaExtras";
 
@@ -134,6 +135,7 @@ export default defineSchema({
   ...redactionTables,
   ...wallTables,
   ...multilingualTables,
+  ...clientUpdateTables,
 
   users: defineTable({
     name: v.optional(v.string()),

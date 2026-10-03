@@ -4,7 +4,7 @@ Durable progress file so development resumes without repeating completed work.
 Companion to `ADVOKATE_REQUIREMENTS.md` (the master checklist). Handoff log also
 maintained in `docs/DELIVERY.md`.
 
-Last checkpoint: **3 October 2026** — latest record: **Turn 21** (bottom section); turns 20 and earlier below.
+Last checkpoint: **3 October 2026** — latest record: **Turn 22** (bottom section); turns 21 and earlier below.
 
 ---
 
@@ -2811,3 +2811,88 @@ remain pending). Backend + tests only, matching the phase scope.
   renderings yet — recorded honestly rather than left implied.
 - No UI surface yet (backend + tests, like Phases 1–9 so far);
   sideBySide is the ready-made read model.
+
+## Turn-22 — 3 Oct 2026: §32 Phase 10 — client-update drafts
+
+### BUILT (pushed to moonlit-elk-307; tsc 0)
+
+- `src/lib/clientUpdates.ts` (pure) + `src/convex/clientUpdates.ts` +
+  `clientUpdateDrafts` table (schemaExtras `clientUpdateTables`).
+- Built ON the existing machinery, never a parallel send path:
+  developments = the `matterTimeline` approved chronology; queueing
+  goes through `commOutbox.compose` → outbox `approve` (its own
+  capability gate) → `queue`; delivery stays the outbox's job
+  (`attemptDelivery` posts in_thread onto the client conversation).
+- APPROVED-DEVELOPMENTS-ONLY: body assembled deterministically and
+  exclusively from status="approved" timeline entries; proposed /
+  needs_review refused and excluded from the listing; footer
+  disclosure travels with every body ("drawn only from the
+  developments listed above… documents remain authoritative").
+- RECIPIENT PERMISSION DISPLAY (`draftReview`): portal account
+  linked, recorded clientUpdates preference (null = never recorded —
+  shown absent, NEVER treated as consent), WhatsApp opt-in, thread
+  existence — honest states before any send.
+- SEND-TIME RE-VERIFICATION: each draft freezes per-development
+  digests (entryKind:title:date:detail:status, sha256 via existing
+  crypto helper); queue re-derives CURRENT digest + approval and
+  BLOCKS on missing / downgraded / changed with a precise problem
+  list and a regenerate instruction. Stale drafts cannot be patched
+  or sent.
+- DUPLICATE-SEND PREVENTION via the existing notification machinery:
+  order-independent developmentSetKey over digests; a set already
+  SENT blocks a second queue (with the date); a draft already on the
+  outbox delivery path (queued/sent/delivered/read/
+  awaiting_configuration) is refused; cancelled/failed deliberately
+  stay with the outbox retry/cancel lifecycle.
+- Gates: draft approval = matter.edit; queueing = note.write; walls
+  on every path; cross-org reads null, actions refused.
+
+### TESTS (clientUpdates.test.ts, 3 — synthetic fixtures)
+
+- Pure layer: deterministic assembly (date sort, footer, empty set),
+  order-independent set key, re-verification matrix (missing /
+  not_approved / changed), duplicate decisions incl. non-blocking
+  cancelled/failed.
+- End-to-end: approved-only listing + refusal of a proposed entry;
+  approve-before-send gate; outbox row assertions (category
+  matter_update, status queued, sourceKind client_update_draft,
+  conversation linked); in-thread delivery posts the body (message
+  asserted); duplicate same-set blocked twice (same draft + new draft
+  same key); CHANGED development (detail corrected after approval)
+  and DOWNGRADED development (flipped to needs_review) both block
+  with the regenerate instruction.
+- Recipients + cross-tenant: recorded preference displayed as false
+  (honest NO), WhatsApp opt-in true; rival org gets null review,
+  empty lists, refused actions.
+- Suite: **41 files / 583 tests green** (turn-21 baseline 40/577+3
+  = 40/580, +3). convex push clean; tsc 0.
+
+### INCIDENT (recorded, not fixed here)
+
+- One run of the FULL suite showed a single failure in a turn-17
+  connector test (reviewAndBundles: recentRuns[0] expected "failed",
+  got "unchanged") — a timestamp-sort collision under parallel load.
+  The file passes in isolation (21/21) and the full suite passed on
+  re-run (41/583). Turn-17 code and tests were NOT modified; the
+  flake is recorded for a future hardening pass (stable sort key).
+
+### EVIDENCE SEPARATION
+
+- Implementation + simulated tests only (convex-test, synthetic
+  matter chronology). No real email/WhatsApp delivery: only the
+  in_thread channel is exercised end-to-end; provider channels stay
+  the outbox's paths (unexercised — no provider configured, honest
+  awaiting_configuration behaviour is the outbox's own tested code).
+  Browser verification: NONE. Qualified review: OUTSTANDING.
+
+### HONEST LIMITS / BLOCKED (recorded)
+
+- No free-text drafting channel here BY DESIGN: wording changes
+  happen in the underlying chronology (then re-prepare) or through
+  the outbox's own revise flow (which resets its approval).
+- Digests are change-DETECTION for re-approval, not security
+  attestations; only the in_thread channel is proven end-to-end.
+- Recipient model covers the primary client account; multi-recipient
+  fan-out (several portal users per client) is future work.
+- No UI surface yet (backend + tests, like Phases 1–10 so far);
+  draftReview is the ready-made read model.

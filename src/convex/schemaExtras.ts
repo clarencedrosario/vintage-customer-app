@@ -1611,3 +1611,49 @@ export const multilingualTables = {
     .index("by_matter", ["matterId"])
     .index("by_org", ["orgId"]),
 };
+
+// =====================================================================
+// §32 Phase 10 — Client-update drafts: table definitions.
+// A draft freezes the approved developments it was built from (with
+// change-detection digests); queueing re-verifies them live and goes
+// through the EXISTING comm outbox, whose states prevent duplicates.
+// =====================================================================
+export const clientUpdateTables = {
+  clientUpdateDrafts: defineTable({
+    orgId: v.id("organizations"),
+    matterId: v.id("matters"),
+    subject: v.string(),
+    body: v.string(), // assembled from approved developments only
+    developmentIds: v.array(v.id("matterTimeline")),
+    // Frozen provenance: refKey + digest per development at build time.
+    provenance: v.array(
+      v.object({
+        refKey: v.string(),
+        title: v.string(),
+        digest: v.string(),
+      }),
+    ),
+    // Order-independent digest of the whole set — the duplicate-send key.
+    developmentSetKey: v.string(),
+    status: v.union(
+      v.literal("draft"),
+      v.literal("approved"),
+      v.literal("sent"),
+      v.literal("cancelled"),
+    ),
+    approvedById: v.optional(v.id("users")),
+    approvedByName: v.optional(v.string()),
+    approvedAt: v.optional(v.number()),
+    // Link to the existing comm outbox row this draft was queued as.
+    outboxId: v.optional(v.id("commOutbox")),
+    queuedById: v.optional(v.id("users")),
+    queuedAt: v.optional(v.number()),
+    sentAt: v.optional(v.number()),
+    createdById: v.id("users"),
+    createdByName: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_matter", ["matterId"])
+    .index("by_org", ["orgId"])
+    .index("by_matter_set", ["matterId", "developmentSetKey"]),
+};
