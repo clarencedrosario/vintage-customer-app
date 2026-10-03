@@ -187,7 +187,7 @@ describe("Turn 20 — §32 Phase 8 AI-instruction defence (adversarial fixtures)
           text: sourceText,
           charCount: sourceText.length,
           extraction: "manual" as const,
-          jobId: jobId as never,
+          addedById: ownerId as never,
           createdAt: Date.now(),
         });
         await ctx.db.patch(jobId as never, { sourceIds: [sourceId] });
