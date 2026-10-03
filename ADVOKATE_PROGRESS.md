@@ -4,7 +4,7 @@ Durable progress file so development resumes without repeating completed work.
 Companion to `ADVOKATE_REQUIREMENTS.md` (the master checklist). Handoff log also
 maintained in `docs/DELIVERY.md`.
 
-Last checkpoint: **3 October 2026** — latest record: **Turn 22** (bottom section); turns 21 and earlier below.
+Last checkpoint: **3 October 2026** — latest record: **Turn 23** (bottom section); turns 22 and earlier below.
 
 ---
 
@@ -2896,3 +2896,85 @@ remain pending). Backend + tests only, matching the phase scope.
   fan-out (several portal users per client) is future work.
 - No UI surface yet (backend + tests, like Phases 1–10 so far);
   draftReview is the ready-made read model.
+
+## Turn-23 — 3 Oct 2026: §32 Phase 11 — AI quality/freshness/cost dashboards
+
+### BUILT (pushed to moonlit-elk-307; tsc 0)
+
+- `src/lib/aiDashboards.ts` (pure) + `src/convex/aiDashboards.ts`.
+  Read-only queries over existing tables (aiJobs, legalSources,
+  ingestionRuns) — no new tables, nothing writes.
+- NO UNDEFINED ACCURACY PERCENTAGES (the core rule): no "accuracy"
+  metric exists anywhere (test-asserted); every metric is a
+  DefinedMetric with its exact definition printed alongside —
+  failure rate (failed ÷ (done+failed+expired); pending/blocked
+  excluded as non-outcomes), blocked-clarification rate (framed as a
+  quality guard), instruction-defence incidence (labelled a scan
+  aid, never a verdict), nearest-rank median/p95 durations, cost
+  (minor units) and token totals.
+- FIRM VIEW: aggregates over the org's OWN jobs (rolling window,
+  default 30d/max 120d), by-kind + by-UTC-day buckets, corpus
+  freshness (SHARED corpus; staleness keys on SUCCESS only, failures
+  surfaced separately, registered-but-uningested = no text), honest
+  `liveModelConfigured: false` disclosure (this deployment runs no
+  model key — the dashboard shows that state), content-leak absence
+  asserted (results/errors never enter the payload).
+- CJ GLOBAL PLATFORM VIEW: gated strictly on users.isPlatformAdmin
+  (the platform.ts pattern); per-org rows built from a FIELD
+  WHITELIST — counts, cost/token totals, defence-signal job counts,
+  last-job timestamp, keyed by OPAQUE org ids. NO org names, NO
+  matter references, NO customer content (results, inputs,
+  transcripts, e-mail bodies, errors, defence excerpts all in
+  FORBIDDEN_CONTENT_KEYS). Runtime leak guard (assertPlatformSafe)
+  walks the payload before it leaves and throws on forbidden keys or
+  oversized non-structural strings — defence-in-depth against future
+  field additions.
+
+### TESTS (aiDashboards.test.ts, 3 — synthetic fixtures)
+
+- Pure layer: windowing (out-of-window excluded from totals AND
+  cost), metric definitions present + accuracy-absence assertion,
+  nearest-rank percentile arithmetic ([1..5]: p50=3, p95=5),
+  by-kind/by-day buckets, whitelist row shape (exact field list),
+  leak guard on forbidden keys + oversized strings.
+- Firm view: counts over seeded jobs; 45-day-old job excluded by the
+  30-day window; liveModelConfigured false; SECRET-RESULT-TEXT and
+  SECRET-ERROR-TEXT absent from the serialized payload.
+- Platform view: regular user REFUSED; platform admin (no org
+  membership) sees one opaque-id row with correct counts; payload
+  contains NO org name, NO matter reference, NO content strings;
+  disclosure present. Suite: **42 files / 586 tests green**
+  (turn-22 baseline 41/583 + 3). convex push clean; tsc 0.
+
+### FIXES DURING THE TURN (root causes)
+
+- Helper typing: hand-rolled db shape → proper QueryCtx (same
+  lesson as turn 22).
+- Leak-guard over-breadth: the oversized-string heuristic caught the
+  module's OWN metric definitions (long by design). Fixed
+  structurally: values inside module-authored structural containers
+  (definitions, disclosures) are exempt from the length check; the
+  forbidden-key check remains absolute for everything.
+- Three test-arithmetic miscounts fixed (by-kind tallies, day
+  bucketing) — expectations corrected to the real semantics, never
+  the code bent to the test.
+
+### EVIDENCE SEPARATION
+
+- Implementation + simulated tests only (convex-test, synthetic job
+  rows). No live model on the deployment, so the dashboards show the
+  honest empty/pending configuration state. Browser verification:
+  NONE. Qualified review: OUTSTANDING.
+
+### HONEST LIMITS / BLOCKED (recorded)
+
+- Full-collection aggregation (bounded scale; matches the existing
+  opsCounts pattern) — a production-scale deployment would want
+  windowed indexes; recorded, not claimed.
+- Per-org platform rows carry operational metadata only; anything
+  richer (names, trends per named firm) would need an explicit,
+  separately-authorized decision — deliberately NOT built.
+- Corpus freshness is global (shared corpus) and appears identically
+  in both views; per-firm research-usage freshness is future work.
+- No UI surface yet (backend + tests, like Phases 1–11 so far);
+  firmDashboard/platformDashboard are the ready-made read models.
