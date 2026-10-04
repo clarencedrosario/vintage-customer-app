@@ -15,6 +15,7 @@ import {
   wallTables,
   multilingualTables,
   clientUpdateTables,
+  firmExitTables,
   LEGAL_DATE_KINDS,
 } from "./schemaExtras";
 
@@ -136,6 +137,7 @@ export default defineSchema({
   ...wallTables,
   ...multilingualTables,
   ...clientUpdateTables,
+  ...firmExitTables,
 
   users: defineTable({
     name: v.optional(v.string()),

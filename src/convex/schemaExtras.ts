@@ -1657,3 +1657,72 @@ export const clientUpdateTables = {
     .index("by_org", ["orgId"])
     .index("by_matter_set", ["matterId", "developmentSetKey"]),
 };
+
+// =====================================================================
+// §32 Phase 12 — Complete firm export & exit: table definitions.
+// A resumable export job builds a CHECKSUMMED, COMPLETE-catalogued
+// bundle in object storage; verify re-reads and recomputes; downloads
+// are expiring, single-use and audited; exit REQUIRES a completed
+// verification and blocks while any legal hold is active. Extends the
+// existing backups/saasExports machinery — never replaces it.
+// =====================================================================
+export const firmExitTables = {
+  firmExportJobs: defineTable({
+    orgId: v.id("organizations"),
+    status: v.union(
+      v.literal("collecting"),
+      v.literal("awaiting_reauthentication"),
+      v.literal("awaiting_download"),
+      v.literal("revoked"),
+    ),
+    label: v.string(),
+    matterIds: v.array(v.id("matters")),
+    cursor: v.number(), // resume cursor into the checkpoint plan
+    parts: v.array(
+      v.object({
+        table: v.string(),
+        rows: v.number(),
+        sha256: v.string(),
+        storageId: v.id("_storage"),
+      }),
+    ),
+    // Expiring, single-use download grants (bounded list).
+    downloads: v.array(
+      v.object({
+        storageId: v.id("_storage"),
+        partIndex: v.number(),
+        expiresAt: v.number(),
+        usedAt: v.optional(v.number()),
+      }),
+    ),
+    verification: v.optional(
+      v.object({
+        verified: v.boolean(),
+        checkedParts: v.number(),
+        at: v.number(),
+        failures: v.array(v.string()),
+      }),
+    ),
+    // Row counts of tables NOT exported (the omissions catalogue).
+    omissions: v.array(
+      v.object({ table: v.string(), rows: v.number(), reason: v.string() }),
+    ),
+    // Deletion is REFUSED while this is non-null and the hold exists.
+    activeHoldBlocks: v.optional(
+      v.object({
+        holdId: v.id("legalHolds"),
+        matterId: v.id("matters"),
+        reason: v.string(),
+      }),
+    ),
+    // The reauthentication evidence snapshot at the gated actions.
+    reauthAt: v.optional(v.number()),
+    startedById: v.id("users"),
+    startedByName: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    revokedAt: v.optional(v.number()),
+    revokedReason: v.optional(v.string()),
+  })
+    .index("by_org", ["orgId"]),
+};
