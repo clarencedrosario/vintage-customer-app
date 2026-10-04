@@ -511,7 +511,9 @@ export const redeemDownload = mutation({
     assertExportCapability(ac);
     requireReauth(await lastLoginAt(ctx, ac.user._id), Date.now());
     const job = await loadJob(ctx, ac.org._id, args.jobId);
-    const grant = job.downloads.find((d) => d.storageId === args.storageId && !d.usedAt);
+    // Look up by storageId ONLY: an already-used grant must still be found so
+    // downloadDecision can report "already used" rather than "no grant exists".
+    const grant = job.downloads.find((d) => d.storageId === args.storageId);
     const decision = downloadDecision(
       grant ? { storageId: grant.storageId, expiresAt: grant.expiresAt, usedAt: grant.usedAt ?? null } : null,
       Date.now(),

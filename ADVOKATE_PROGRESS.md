@@ -4,7 +4,7 @@ Durable progress file so development resumes without repeating completed work.
 Companion to `ADVOKATE_REQUIREMENTS.md` (the master checklist). Handoff log also
 maintained in `docs/DELIVERY.md`.
 
-Last checkpoint: **3 October 2026** — latest record: **Turn 23** (bottom section); turns 22 and earlier below.
+Last checkpoint: **4 October 2026** — latest record: **Turn 24** (bottom section; §32 programme COMPLETE after Phases 1–12); turns 23 and earlier below.
 
 ---
 
@@ -2978,3 +2978,124 @@ remain pending). Backend + tests only, matching the phase scope.
   in both views; per-firm research-usage freshness is future work.
 - No UI surface yet (backend + tests, like Phases 1–11 so far);
   firmDashboard/platformDashboard are the ready-made read models.
+
+## Turn-24 — 4 Oct 2026: §32 Phase 12 — complete firm export & exit (FINAL §32 PHASE)
+
+### BUILT (pushed to moonlit-elk-307; tsc 0)
+
+- `src/lib/firmExit.ts` (pure) + `src/convex/firmExit.ts` module +
+  `firmExitTables`/`firmExportJobs` (schemaExtras.ts spread into
+  schema.ts). Extends the existing backupRecords/archive +
+  saasExports token machinery rather than replacing it.
+- RESUMABLE, FENCED COLLECTION: the job row is the single source of
+  truth. `planCheckpoints` expands a FIXED 10-table catalogue (2 org
+  tables — clients, invoices — plus 8 matter tables per matter:
+  matters, hearings, orders, tasks, matterEvents, matterTimeline,
+  matterFacts, matterDocuments) into an ordered checkpoint plan.
+  `collectStep` (internalAction) collects ONLY at the job's stored
+  cursor, re-validates every existing part against the plan, and
+  `appendPart` (internalMutation) re-runs the RESUME FENCE
+  (`appendPartAtCursor` — throws "Resume fence violated" on any
+  cursor/plan mismatch, mutates {parts,cursor} in place). A job that
+  stops mid-run raises again on the next step and CONTINUES —
+  no duplication, no reordering, never a fresh file.
+- CHECKSUMMED PARTS + INDEPENDENT VERIFICATION: each part is
+  JSON-serialised rows → SHA-256 (`sha256HexBytes`) → its own object
+  storage blob. `verifyExport` re-reads EVERY blob, recomputes every
+  digest and row count, records failures[]; the job stays `collecting`
+  until verification passes and only then becomes
+  `awaiting_download` — the stored job is never trusted on its own
+  word.
+- COMPLETE-CATALOGUE MANIFEST: `buildManifest` emits every planned
+  table with rows + sha256; `recordOmissions` covers the FULL
+  catalogue (incl. commOutbox, auditLog, notificationLog,
+  supportTickets, platform workforce tables) and lists zero-row
+  tables with a reason string containing "silently" — silences are
+  visible, not hidden. Legal holds are LISTED (matter reference,
+  kind, placed-at), never lifted. MANIFEST_DEFINITION ("COMPLETE
+  means…") and the honest note that document FILE bytes live in
+  object storage travel on every read.
+- REAUTHENTICATION (evidence = the existing loginEvents
+  successful-sign-in log; no session-reauth state exists in this
+  stack): a successful sign-in within WINDOW_MS (7 days) is required
+  on startExportJob, issueDownload, redeemDownload, closeOrganization
+  and revokeExport.
+- EXPIRING AUDITED DOWNLOADS: issueDownload grants a 1-hour
+  (DOWNLOAD_TTL_MS) link recorded on the job (downloads capped 50);
+  redeemDownload is SINGLE-USE (downloadDecision distinguishes
+  no-grant / already-used / expired) and stamps usedAt; revoked jobs
+  hand out nothing.
+- LEGAL-HOLD RESPECT: closeOrganization refuses while ANY hold is
+  active ("LEGAL HOLD active"; block recorded on activeHoldBlocks
+  with holdId/matterId/reason); issueDownload refuses fresh links
+  while holds stand; an explicit, reason-carrying lift restores the
+  flow — holds obstruct, nobody is suppressed.
+- EXIT: closeOrganization (owner-only + reauth) requires an
+  awaiting_download job with verification.verified and marks closure
+  on the job label ("[ORG CLOSED …]") — an ADDITIVE closure record,
+  NOT hard deletion. revokeExport (owner/admin + reauth + reason
+  ≥10 chars) permanently revokes the job's link-issuing ability.
+  One collecting job at a time + ≤200 matters at start.
+
+### TESTS (firmExit.test.ts, 3 — convex-test, synthetic fixtures)
+
+- Pure layer: plan expansion (2+8×N), resume prefix semantics,
+  fence-violation matrix, download decisions
+  (no-grant/used/expired), omissions incl. the "silently" marker,
+  reauth window incl. no-evidence, TTL constant,
+  MANIFEST_DEFINITION + line count.
+- End-to-end: seeded org + 1 matter + a loginEvents row (the reauth
+  evidence) → collect → resume (remaining=0, second collectStep
+  collects 0, parts[clients].rows=1, parts[hearings].rows=1) →
+  verifyExport verified=true + awaiting_download → manifest →
+  issueDownload expiresAt>now → redeem succeeds → SECOND redeem
+  throws /already used/ → close closed=true → revoke → status
+  revoked.
+- Guards: no loginEvents → /No successful sign-in is on record/;
+  close while hold active → /LEGAL HOLD active/ + activeHoldBlocks
+  recorded; issueDownload refused /legal hold exists/; manifest
+  lists the hold with matterReference "T24/2026/0001"; liftHold
+  restores close; revoke thin reason refused; cross-tenant: rival
+  listJobs empty, revoke/close on a foreign job refused /not found
+  in this organization/.
+- Suite: **43 files / 589 tests green** (turn-23 baseline 42/586
+  + 3). convex push clean; tsc 0.
+
+### FIXES DURING THE TURN (root causes)
+
+- appendPart by-identity bug: partsMut was passed BY VALUE from
+  collectStep, so the fence validated a detached copy while the job
+  row advanced independently. Fixed structurally: appendPart now
+  takes the job ID and re-reads parts/cursor by identity inside the
+  mutation, so the fence validates the row it actually patches.
+- redeemDownload lookup bug: the grant search filtered
+  `&& !d.usedAt`, so an already-used grant resolved to null and the
+  double-redeem error was the misleading "No download grant exists
+  for this part." Fixed at the root: look up by storageId alone and
+  pass usedAt through to downloadDecision, which distinguishes
+  already-used from no-grant. The usedAt-stamping patch still matches
+  only the unused grant — single-use semantics unchanged.
+
+### EVIDENCE SEPARATION
+
+- Implementation + simulated tests only (convex-test, synthetic
+  rows, fixture blobs). No live download URL was fetched in a real
+  browser; no production export has been run. Qualified legal review
+  of the exit semantics: OUTSTANDING.
+
+### HONEST LIMITS (recorded)
+
+- The export is a structured, machine-verifiable record plus
+  checksummed row parts — NOT a single human-readable PDF; the
+  manifest is the human-readable map over the parts.
+- FIXED 10-TABLE CATALOGUE: a future schema addition must
+  consciously update SPECS before it would be exported; the
+  omissions record makes any missed table visible rather than
+  silently dropped.
+- CLOSE IS ADDITIVE: the org label + job label record closure;
+  hard erasure is a separate, separately-authorized decision.
+- Document FILE bytes remain in object storage (noted on the
+  manifest), not inside the row parts.
+- No UI surface yet (backend + tests, like Phases 1–12);
+  firmDashboard is the ready-made read model.
+- §32 PROGRAMME COMPLETE: Phases 1–12 all implemented and verified.
