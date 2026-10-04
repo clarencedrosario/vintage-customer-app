@@ -4,7 +4,7 @@ Durable progress file so development resumes without repeating completed work.
 Companion to `ADVOKATE_REQUIREMENTS.md` (the master checklist). Handoff log also
 maintained in `docs/DELIVERY.md`.
 
-Last checkpoint: **4 October 2026** — latest record: **Turn 24** (bottom section; §32 programme COMPLETE after Phases 1–12); turns 23 and earlier below.
+Last checkpoint: **4 October 2026** — latest record: **Turn 24** (bottom section; §32 programme COMPLETE after Phases 1–12, cross-suite sweep passed and one omissions-catalogue gap fixed); turns 23 and earlier below.
 
 ---
 
@@ -3007,14 +3007,21 @@ remain pending). Backend + tests only, matching the phase scope.
   `awaiting_download` — the stored job is never trusted on its own
   word.
 - COMPLETE-CATALOGUE MANIFEST: `buildManifest` emits every planned
-  table with rows + sha256; `recordOmissions` covers the FULL
-  catalogue (incl. commOutbox, auditLog, notificationLog,
-  supportTickets, platform workforce tables) and lists zero-row
-  tables with a reason string containing "silently" — silences are
-  visible, not hidden. Legal holds are LISTED (matter reference,
-  kind, placed-at), never lifted. MANIFEST_DEFINITION ("COMPLETE
-  means…") and the honest note that document FILE bytes live in
-  object storage travel on every read.
+  table with rows + sha256; `recordOmissions` computes counts
+  SERVER-SIDE over the FULL catalogue — the 12 §32 enhancement
+  tables Phases 1–11 generate (conflictChecks, researchBundles,
+  matterImpactAlerts, filingChecklists, filingSuggestions,
+  redactionJobs, translationRecords, clientUpdateDrafts, aiJobs,
+  legalHolds, ethicalWalls, emergencyAccessGrants) plus the
+  operational tables (commOutbox, auditLog, notificationLog,
+  supportTickets; supportTickets rows with a null orgId are the
+  platform-side queue and are never attributed to a firm) — and
+  lists zero-row tables with a reason string containing "silently"
+  — silences are visible, not hidden; §32 tables carry their own
+  "§32 enhancement" reason. Legal holds are LISTED (matter
+  reference, kind, placed-at), never lifted. MANIFEST_DEFINITION
+  ("COMPLETE means…") and the honest note that document FILE bytes
+  live in object storage travel on every read.
 - REAUTHENTICATION (evidence = the existing loginEvents
   successful-sign-in log; no session-reauth state exists in this
   stack): a successful sign-in within WINDOW_MS (7 days) is required
@@ -3075,6 +3082,39 @@ remain pending). Backend + tests only, matching the phase scope.
   pass usedAt through to downloadDecision, which distinguishes
   already-used from no-grant. The usedAt-stamping patch still matches
   only the unused grant — single-use semantics unchanged.
+
+### SWEEP (turn 24, §32 Phases 1–12 cross-suite verification)
+
+- All seven §32 suites run TOGETHER in one vitest process: 7 files
+  / 40 tests green (reviewAndBundles 21 [Phases 1–6 + turn-17
+  connector], ethicalWalls 4, aiDefence 3, multilingual 3,
+  clientUpdates 3, aiDashboards 3, firmExit 3).
+- Cross-phase seams verified in code (not just asserted in prose):
+  walls gate every §32 surface via access.ts's
+  isUserWalledFromMatter (wallScope.wallCoversMatter underneath) —
+  confirmed in filingReadiness / evidenceBundles / conflictReview /
+  matterImpact + aiRunner; clientUpdates digests matterTimeline and
+  queues through commOutbox; aiDashboards aggregates
+  instructionDefence + legalSources/ingestionRuns; multilingual
+  attaches to aiSources/matterFacts; redaction files verified
+  derivatives as matterDocuments with custody+audit; firmExit
+  queries legalHolds and reuses sha256HexBytes.
+- THE SWEEP FOUND A REAL GAP (and it was fixed, not waved off): the
+  omissions catalogue covered the fixed export tables + operational
+  tables but NOT the tables Phases 1–11 themselves generate — those
+  rows would leave the exit record without appearing anywhere.
+  Worse, the original operational list named a "platformWorkforceRows"
+  table that DOES NOT EXIST in the schema (it compiled only because
+  counts were caller-supplied strings — a phantom name). Fix:
+  recordOmissions now takes no counts, computes them server-side
+  (org-filtered; a caller can never under-report a table into
+  silence), and the catalogue includes all 12 §32 tables plus the 4
+  real operational tables. New test seams: §32-reason branch in the
+  pure layer; after a hold is placed, recordOmissions lists
+  legalHolds rows=1 with the "silently" reason.
+- After the fix: push clean, tsc 0, §32 batch 7/7 files green,
+  full suite 43 files / 589 tests green (unchanged count — the
+  strengthening added assertions inside existing tests).
 
 ### EVIDENCE SEPARATION
 

@@ -18,6 +18,8 @@ import {
   DOWNLOAD_TTL_MS,
   manifestLineCount,
   MANIFEST_DEFINITION,
+  OPERATIONAL_OMISSION_TABLES,
+  SECTION32_OMISSION_TABLES,
   planCheckpoints,
   requireReauth,
   downloadDecision,
@@ -592,26 +594,26 @@ export const buildManifest = query({
   },
 });
 
-/** Record the omissions catalogue onto the job. */
+/**
+ * Record the omissions catalogue onto the job. Counts are computed HERE,
+ * server-side — a caller can never under-report a table into silence.
+ * Every catalogue table is org-scoped; supportTickets rows with a null
+ * orgId are the platform-side queue and are never attributed to a firm.
+ */
 export const recordOmissions = mutation({
-  args: {
-    jobId: v.id("firmExportJobs"),
-    countsByTable: v.array(v.object({ table: v.string(), rows: v.number() })),
-  },
+  args: { jobId: v.id("firmExportJobs") },
   handler: async (ctx, args) => {
     const ac = await requireAccess(ctx);
     assertExportCapability(ac);
     const job = await loadJob(ctx, ac.org._id, args.jobId);
     const counts: Record<string, number> = {};
-    for (const c of args.countsByTable) counts[c.table] = c.rows;
-    const allTables = [
-      ...SPECS.map((s) => s.table),
-      "commOutbox",
-      "auditLog",
-      "notificationLog",
-      "supportTickets",
-      "platformWorkforceRows",
-    ];
+    for (const table of [...SECTION32_OMISSION_TABLES, ...OPERATIONAL_OMISSION_TABLES]) {
+      const rows = (await ctx.db.query(table).collect()) as Array<{
+        orgId?: Id<"organizations">;
+      }>;
+      counts[table] = rows.filter((r) => r.orgId === ac.org._id).length;
+    }
+    const allTables = [...SECTION32_OMISSION_TABLES, ...OPERATIONAL_OMISSION_TABLES];
     const omissions = computeOmissions(
       SPECS.map((s) => s.table),
       allTables,

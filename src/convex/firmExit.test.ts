@@ -169,6 +169,17 @@ describe("Turn 24 — §32 Phase 12 complete firm export & exit", () => {
     expect(omissions.map((o) => o.table).sort()).toEqual(["auditLog", "tasks"]);
     expect(omissions.find((o) => o.table === "auditLog")!.reason).toContain("silently");
 
+    // §32 enhancement tables carry their own reason (still "silently"-visible).
+    const s32 = computeOmissions(
+      ["clients"],
+      ["clients", "translationRecords", "clientUpdateDrafts"],
+      { translationRecords: 4 },
+    );
+    expect(s32).toHaveLength(1);
+    expect(s32[0]!.table).toBe("translationRecords");
+    expect(s32[0]!.reason).toContain("§32 enhancement");
+    expect(s32[0]!.reason).toContain("silently");
+
     // Reauthentication window: 7 days on the last successful sign-in.
     const NOW = Date.UTC(2026, 9, 3, 12, 0, 0);
     expect(reauthState(null, NOW).satisfied).toBe(false);
@@ -216,17 +227,11 @@ describe("Turn 24 — §32 Phase 12 complete firm export & exit", () => {
     const again = await t.action(internal.firmExit.collectStep, { jobId: start.jobId as never });
     expect(again.collected).toBe(0);
 
-    // Omissions recorded (auditLog has rows via placeHold later; here
-    // commOutbox etc. are zero-row and thus not omissions).
+    // Omissions recorded — counts are computed SERVER-SIDE (no caller-
+    // supplied counts). §32 tables and operational tables are all empty
+    // here, so nothing non-empty is outside scope.
     const om = await owner.mutation(api.firmExit.recordOmissions, {
       jobId: start.jobId as never,
-      countsByTable: [
-        { table: "commOutbox", rows: 0 },
-        { table: "auditLog", rows: 0 },
-        { table: "notificationLog", rows: 0 },
-        { table: "supportTickets", rows: 0 },
-        { table: "platformWorkforceRows", rows: 0 },
-      ],
     });
     expect(om.omissions).toHaveLength(0); // nothing non-empty outside scope
 
@@ -329,6 +334,17 @@ describe("Turn 24 — §32 Phase 12 complete firm export & exit", () => {
     const blockedJob = await owner.query(api.firmExit.buildManifest, { jobId: start.jobId as never });
     expect(blockedJob!.manifest.legalHolds).toHaveLength(1);
     expect(blockedJob!.manifest.legalHolds[0]!.matterReference).toBe("T24/2026/0001");
+
+    // SWEEP SEAM (turn 24): the omissions catalogue is SELF-COUNTING and
+    // includes §32 tables — the hold we just placed must now appear as a
+    // visible omission (never silently dropped from the exit record).
+    const omAfterHold = await owner.mutation(api.firmExit.recordOmissions, {
+      jobId: start.jobId as never,
+    });
+    const holdOmission = omAfterHold.omissions.find((o) => o.table === "legalHolds");
+    expect(holdOmission).toBeDefined();
+    expect(holdOmission!.rows).toBe(1);
+    expect(holdOmission!.reason).toContain("silently");
 
     // Lift the hold → the verified export still exists → close passes.
     const holds = await owner.query(api.ethicalWalls.activeHolds, {});
