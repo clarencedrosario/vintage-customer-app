@@ -81,3 +81,25 @@ Same route as Group 0 (sections of the **Review (§32)** tab).
 | 2.13 | Set policy allowed with ≥10-char authority, then machine_external | Saved with MACHINE badge + provider name/version; side-by-side opens with machine disclosure; paragraph pairing; verify with <10 chars refused; with real note → attested badge; if the original later changes → STALE disclosure shown, frozen pairing intact |
 
 ---
+
+## Group 3 — Walls, holds & emergency access
+
+Setup: A = owner (matter.close). B = associate (no matter.close). Identity fixtures from the header above.
+
+| # | Step | Expected outcome |
+|---|---|---|
+| 3.1 | Conflicts page (/conflicts) as B | Walls & holds section renders; hold/wall forms hidden; note explains management needs close-matters capability |
+| 3.2 | As A: place a hold from the Conflicts section (or Matter → Review tab MatterHoldCard) | Hold appears with kind badge + reason; deletion of that matter's records is now blocked firm-wide (try vault remove elsewhere → backend refusal) |
+| 3.3 | Matter → Review tab, MatterHoldCard | Shows the active hold with "preservation active — deletion blocked firm-wide" badge; lifted history (if any) labelled with reason + who lifted |
+| 3.4 | As B on MatterHoldCard / walls section | Place/lift controls hidden (matter.close only) |
+| 3.5 | As A: lift with <10 chars | Toast demands ≥10 chars; with a real reason → hold lifted, decision recorded, row shows lifted-by/reason |
+| 3.6 | As A: create a wall scoped to user B covering a matter | Wall card lists scope + matter + named exempt + reason; badge "active" |
+| 3.7 | Sign in as B, open the walled matter | Matter does not appear in lists; direct URL → refusal; Conflicts desk still accessible |
+| 3.8 | As A: expand "Emergency grants on this wall…" | Empty-state text "No emergency grants have ever been issued against this wall." |
+| 3.9 | As A: Emergency grant… to B with reason court_order + detail | Grant listed: actor, reason, "awaiting acknowledgement — opens nothing yet", expiry ≤24h shown |
+| 3.10 | As B: open a blocked surface (wallExplanation path) | Explanation shows wall title/reason + grant state instead of a bare refusal; acknowledge the grant there |
+| 3.11 | As A: re-expand grants | Row now "active until expiry" with acknowledged timestamp |
+| 3.12 | As A: Revoke… with <10 chars → refused; with a real reason | Row flips to "revoked" with revoked timestamp; B's access closes immediately |
+| 3.13 | Wall lift flow (Lift… → inline reason) | Same ≥10-char enforcement as holds; wall badge becomes "lifted" with lift reason shown |
+
+---

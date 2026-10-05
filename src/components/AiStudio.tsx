@@ -34,6 +34,7 @@ import {
   Mic,
   Scale,
   ScrollText,
+  ShieldAlert,
   Sparkles,
   Trash2,
   Upload,
@@ -770,6 +771,36 @@ function JobResultInner({
 
   return (
     <div className="mt-3 space-y-3 border-t border-border pt-3">
+      {/* §32 Phase 8 — instruction-defence notice. Signals were detected in
+          this job's UNTRUSTED sources (documents/emails can originate from
+          opposing parties). Always shown when present, whatever the outcome. */}
+      {job.instructionDefence && job.instructionDefence.length > 0 && (
+        <div className="rounded-md border border-amber-500/50 bg-amber-500/5 p-3">
+          <p className="flex items-start gap-2 text-sm font-medium">
+            <ShieldAlert className="mt-0.5 size-4 shrink-0 text-amber-600" />
+            Instruction-defence review ({job.instructionDefence.length} signal{job.instructionDefence.length === 1 ? "" : "s"})
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Patterns were detected in this request's untrusted sources that
+            could try to steer the assistant. The lawyer reviewing this output
+            should confirm the result against the underlying sources — the
+            signals below are excerpts, not conclusions.
+          </p>
+          <ul className="mt-2 space-y-1">
+            {job.instructionDefence.map(
+              (s: { kind: string; excerpt: string; sourceName: string }, i: number) => (
+                <li key={i} className="rounded border border-border/60 bg-background/60 p-1.5 text-xs">
+                  <span className="font-mono text-[10px] uppercase tracking-wide text-amber-700 dark:text-amber-400">
+                    {s.kind.replace(/_/g, " ")}
+                  </span>
+                  <span className="ml-2 text-muted-foreground">in {s.sourceName}:</span>
+                  <span className="ml-1 italic">“{s.excerpt}”</span>
+                </li>
+              ),
+            )}
+          </ul>
+        </div>
+      )}
       {job.status === "pending" && (
         <p className="flex items-center gap-2 text-sm ink-faded">
           <Loader2 className="size-4 animate-spin" /> Working on the record…

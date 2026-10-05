@@ -534,7 +534,7 @@ export const grantsForWall = query({
       .collect();
     return Promise.all(
       rows
-        .sort((a, b) => b.createdAt - a.createdAt)
+        .sort((a, b) => b.grantedAt - a.grantedAt)
         .map(async (g) => {
           const actor = await ctx.db.get(g.actorId);
           return {

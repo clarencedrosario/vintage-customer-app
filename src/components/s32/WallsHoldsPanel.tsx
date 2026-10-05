@@ -28,8 +28,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { S32Empty, S32Loading, S32Note, errMessage } from "@/components/s32/shared";
 import { formatDateTimeIN } from "@/lib/format";
 
-const HOLD_KINDS = ["litigation", "investigation", "audit", "regulatory", "other"] as const;
-const GRANT_REASONS = [
+/** Must mirror backend LEGAL_HOLD_REASON_KINDS (drift-checked in group3.test.ts). */
+export const HOLD_KINDS = ["litigation", "investigation", "audit", "regulatory", "other"] as const;
+/** Must mirror backend EMERGENCY_GRANT_REASONS (drift-checked in group3.test.ts). */
+export const GRANT_REASONS = [
   "court_order",
   "hold_setup_or_correction",
   "wall_correction",
@@ -41,12 +43,28 @@ type Wall = {
   _id: string;
   title: string;
   reason: string;
+  status: string;
   scope: { kind: string; userId?: string; orgRole?: string };
   matterIds?: string[] | null;
   matters: { _id: string; reference: string; title: string }[] | null;
   exemptActorIds?: string[] | null;
   createdAt: number;
-  createdBy?: { name?: string | null };
+  createdByName?: string;
+  liftedAt?: number | null;
+  liftReason?: string | null;
+};
+
+/** Row shape of ethicalWalls.grantsForWall (management view). */
+export type EmergencyGrantRow = {
+  grantId: string;
+  actorId: string;
+  actorName: string;
+  reason: string;
+  detail: string;
+  acknowledgedAt: number | null;
+  expiresAt: number;
+  revokedAt: number | null;
+  createdAt: number;
 };
 
 type Hold = {
@@ -114,6 +132,11 @@ export function WallsHoldsPanel({
   const [grantReason, setGrantReason] = useState<string>("court_order");
   const [grantDetail, setGrantDetail] = useState("");
   const [grantBusy, setGrantBusy] = useState(false);
+
+  // Per-wall grants listing + inline wall lift
+  const [expandedGrants, setExpandedGrants] = useState<string | null>(null);
+  const [liftWallFor, setLiftWallFor] = useState<string | null>(null);
+  const [wallLiftReason, setWallLiftReason] = useState("");
 
   const placeHold = async () => {
     if (!holdMatter) {
@@ -185,6 +208,21 @@ export function WallsHoldsPanel({
       toast.error(errMessage(e, "Could not create the wall."));
     } finally {
       setWallBusy(false);
+    }
+  };
+
+  const liftWall = async (wallId: string) => {
+    if (wallLiftReason.trim().length < 10) {
+      toast.error("Lifting a wall needs a reason of at least 10 characters (audited).");
+      return;
+    }
+    try {
+      await liftWallFn({ wallId: wallId as Id<"ethicalWalls">, reason: wallLiftReason });
+      toast.success("Wall lifted — explicit, audited decision recorded.");
+      setLiftWallFor(null);
+      setWallLiftReason("");
+    } catch (e) {
+      toast.error(errMessage(e, "Could not lift the wall."));
     }
   };
 
@@ -347,6 +385,9 @@ export function WallsHoldsPanel({
               <div key={w._id} className="rounded-md border border-border/70 p-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <p className="text-sm font-medium">{w.title}</p>
+                  <Badge variant={w.status === "active" ? "outline" : "secondary"} className="text-[10px]">
+                    {w.status === "active" ? "active" : "lifted"}
+                  </Badge>
                   <Badge variant="outline" className="text-[10px]">
                     {w.scope.kind === "all" ? "whole firm" : w.scope.kind === "user" ? "one member" : `role: ${w.scope.orgRole}`}
                   </Badge>
@@ -355,8 +396,14 @@ export function WallsHoldsPanel({
                       {w.matters.map((m) => m.reference).join(", ")}
                     </span>
                   )}
+                  <span className="ml-auto text-xs text-muted-foreground">
+                    {w.createdByName ?? ""} · {formatDateTimeIN(w.createdAt)}
+                  </span>
                 </div>
                 <p className="mt-1 text-xs italic text-muted-foreground">“{w.reason}”</p>
+                {w.status === "lifted" && w.liftReason && (
+                  <p className="mt-1 text-xs text-muted-foreground">Lifted: “{w.liftReason}”</p>
+                )}
                 {(w.exemptActorIds ?? []).length > 0 && (
                   <p className="mt-1 text-xs text-muted-foreground">
                     Named exempt: {(w.exemptActorIds ?? []).map((u) => members.find((m) => m._id === u)?.name ?? u.slice(-6)).join(", ")}
@@ -405,21 +452,41 @@ export function WallsHoldsPanel({
                           size="sm"
                           variant="ghost"
                           className="h-7 text-xs"
-                          onClick={async () => {
-                            try {
-                              await liftWallFn({
-                                wallId: w._id as Id<"ethicalWalls">,
-                                reason: window.prompt("Reason for lifting the wall (≥10 chars):") ?? "",
-                              });
-                              toast.success("Wall lifted.");
-                            } catch (e) {
-                              toast.error(errMessage(e, "Could not lift the wall."));
-                            }
-                          }}
+                          onClick={() => { setLiftWallFor(w._id); setWallLiftReason(""); }}
                         >
                           Lift…
                         </Button>
                       </>
+                    )}
+                  </div>
+                )}
+                {liftWallFor === w._id && canManage && (
+                  <div className="mt-2 space-y-2">
+                    <Textarea
+                      className="min-h-[52px]"
+                      value={wallLiftReason}
+                      onChange={(e) => setWallLiftReason(e.target.value)}
+                      placeholder="Why the conflict duty ends (≥10 chars, audited)."
+                    />
+                    <div className="flex justify-end gap-2">
+                      <Button size="sm" variant="ghost" onClick={() => setLiftWallFor(null)}>Cancel</Button>
+                      <Button size="sm" variant="destructive" disabled={wallLiftReason.trim().length < 10} onClick={() => void liftWall(w._id)}>
+                        <Unlock className="mr-1 size-3.5" /> Lift wall
+                      </Button>
+                    </div>
+                  </div>
+                )}
+                {canManage && (
+                  <div className="mt-2">
+                    <button
+                      type="button"
+                      className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+                      onClick={() => setExpandedGrants(expandedGrants === w._id ? null : w._id)}
+                    >
+                      {expandedGrants === w._id ? "Hide emergency grants" : "Emergency grants on this wall…"}
+                    </button>
+                    {expandedGrants === w._id && (
+                      <WallGrants wallId={w._id} canManage={canManage} />
                     )}
                   </div>
                 )}
@@ -526,7 +593,7 @@ export function WallsHoldsPanel({
         </CardContent>
       </Card>
 
-      {/* Emergency access grants — acknowledge flow handled on the holder side */}
+      {/* Emergency access discipline — per-wall grant history is listed on each wall */}
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-sm">
@@ -538,10 +605,107 @@ export function WallsHoldsPanel({
             A grant opens nothing until its holder acknowledges it. Grants expire
             within 24 hours, can be revoked with a reason, and every use is
             audited. The holder sees the wall explanation — title, reason, their
-            exemption or grant state — instead of a bare refusal.
+            exemption or grant state — instead of a bare refusal. Each wall
+            above lists every grant ever issued against it: who, why, when it
+            was acknowledged, and whether it was revoked or expired.
           </S32Note>
         </CardContent>
       </Card>
     </section>
+  );
+}
+
+/**
+ * Per-wall emergency-grant history (management view). Mounted only when a
+ * wall's grant list is expanded, so the hooks here are per-instance.
+ */
+function WallGrants({ wallId, canManage }: { wallId: string; canManage: boolean }) {
+  const grants = useQuery(api.ethicalWalls.grantsForWall, {
+    wallId: wallId as Id<"ethicalWalls">,
+  });
+  const revokeFn = useMutation(api.ethicalWalls.revokeEmergencyAccess);
+  const [revokeFor, setRevokeFor] = useState<string | null>(null);
+  const [revokeReason, setRevokeReason] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const revoke = async (grantId: string) => {
+    if (revokeReason.trim().length < 10) {
+      toast.error("Revocation needs a reason of at least 10 characters (audited).");
+      return;
+    }
+    setBusy(true);
+    try {
+      await revokeFn({ grantId: grantId as Id<"emergencyAccessGrants">, reason: revokeReason });
+      toast.success("Grant revoked — access closes immediately and the revocation is audited.");
+      setRevokeFor(null);
+      setRevokeReason("");
+    } catch (e) {
+      toast.error(errMessage(e, "Could not revoke the grant."));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (grants === undefined) return <S32Loading />;
+  if (grants.length === 0) {
+    return (
+      <p className="mt-1 text-xs text-muted-foreground">
+        No emergency grants have ever been issued against this wall.
+      </p>
+    );
+  }
+  return (
+    <div className="mt-1 space-y-1.5 rounded-md border border-amber-500/40 bg-amber-500/5 p-2">
+      {(grants as unknown as EmergencyGrantRow[]).map((g) => {
+        const revoked = g.revokedAt != null;
+        const expired = !revoked && g.expiresAt <= Date.now();
+        const state = revoked
+          ? { label: "revoked", cls: "bg-muted text-muted-foreground" }
+          : expired
+            ? { label: "expired", cls: "bg-muted text-muted-foreground" }
+            : g.acknowledgedAt == null
+              ? { label: "awaiting acknowledgement — opens nothing yet", cls: "bg-amber-500/15 text-amber-700 dark:text-amber-400" }
+              : { label: "active until expiry", cls: "bg-red-500/10 text-red-700 dark:text-red-400" };
+        return (
+          <div key={g.grantId} className="rounded border border-border/60 bg-background/70 p-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-medium">{g.actorName}</span>
+              <Badge variant="outline" className="text-[10px]">{g.reason.replace(/_/g, " ")}</Badge>
+              <span className={`rounded px-1.5 py-0.5 text-[10px] ${state.cls}`}>{state.label}</span>
+              <span className="ml-auto text-[10px] text-muted-foreground">
+                expires {formatDateTimeIN(g.expiresAt)}
+              </span>
+            </div>
+            <p className="mt-0.5 text-xs italic text-muted-foreground">“{g.detail}”</p>
+            <p className="mt-0.5 text-[10px] text-muted-foreground">
+              granted {formatDateTimeIN(g.createdAt)}
+              {g.acknowledgedAt != null ? ` · acknowledged ${formatDateTimeIN(g.acknowledgedAt)}` : " · NOT acknowledged"}
+              {g.revokedAt != null ? ` · revoked ${formatDateTimeIN(g.revokedAt)}` : ""}
+            </p>
+            {canManage && !revoked &&
+              (revokeFor === g.grantId ? (
+                <div className="mt-1.5 space-y-1.5">
+                  <Textarea
+                    className="min-h-[48px]"
+                    value={revokeReason}
+                    onChange={(e) => setRevokeReason(e.target.value)}
+                    placeholder="Why this access ends now (≥10 chars, audited)."
+                  />
+                  <div className="flex justify-end gap-2">
+                    <Button size="sm" variant="ghost" onClick={() => setRevokeFor(null)}>Cancel</Button>
+                    <Button size="sm" variant="destructive" disabled={busy || revokeReason.trim().length < 10} onClick={() => void revoke(g.grantId)}>
+                      Revoke grant
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <Button size="sm" variant="outline" className="mt-1.5 h-6 text-[11px]" onClick={() => { setRevokeFor(g.grantId); setRevokeReason(""); }}>
+                  Revoke…
+                </Button>
+              ))}
+          </div>
+        );
+      })}
+    </div>
   );
 }

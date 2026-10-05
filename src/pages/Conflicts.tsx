@@ -8,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useMutation, useQuery } from "convex/react";
+import { WallsHoldsPanel } from "@/components/s32/WallsHoldsPanel";
 import {
   AlertTriangle,
   Loader2,
@@ -105,6 +106,18 @@ export default function Conflicts() {
   const caps = useQuery(api.workspace.myCapabilities);
   const canCreate = caps?.capabilities.includes("matter.create") ?? false;
   const canOverride = caps?.capabilities.includes("conflict.override") ?? false;
+  // §32 Phase 7 — walls & holds management (chamber-scoped, matter.close).
+  const canManageWalls = caps?.capabilities.includes("matter.close") ?? false;
+  const team = useQuery(api.workspace.team);
+  const allMatters = useQuery(api.matters.list);
+  const wallMemberOptions = (team ?? [])
+    .filter((m) => m.status === "active")
+    .map((m) => ({ _id: String(m.userId), name: m.name ?? m.email ?? "Member" }));
+  const wallMatterOptions = (allMatters ?? []).map((m) => ({
+    _id: String(m._id),
+    reference: m.reference ?? m.title.slice(0, 24),
+    title: m.title,
+  }));
 
   const createCheck = useMutation(api.conflicts.create);
   const classifyFn = useMutation(api.conflicts.classify);
@@ -603,6 +616,13 @@ export default function Conflicts() {
             )}
           </div>
         </div>
+
+        {/* §32 Phase 7 — legal holds, ethical walls & emergency access */}
+        <WallsHoldsPanel
+          matters={wallMatterOptions}
+          members={wallMemberOptions}
+          canManage={canManageWalls}
+        />
       </div>
     </ChamberShell>
   );

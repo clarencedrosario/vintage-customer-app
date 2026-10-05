@@ -31,9 +31,11 @@ import { ConflictReviewPanel } from "@/components/s32/ConflictReviewPanel";
 import { AdverseAuthorityPanel } from "@/components/s32/AdverseAuthorityPanel";
 import { MatterImpactPanel } from "@/components/s32/MatterImpactPanel";
 import { EvidenceBundlesPanel } from "@/components/s32/EvidenceBundlesPanel";
+import { MatterHoldCard } from "@/components/s32/MatterHoldCard";
 import { FilingReadinessPanel } from "@/components/s32/FilingReadinessPanel";
 import { RedactionPanel } from "@/components/s32/RedactionPanel";
 import { TranslationsPanel } from "@/components/s32/TranslationsPanel";
+import { ClientUpdatesPanel } from "@/components/s32/ClientUpdatesPanel";
 import { Badge } from "@/components/ui/badge";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { MatterStatus } from "@/convex/schema";
@@ -423,6 +425,8 @@ export default function MatterDetail() {
   // §32 panels: matter-edit governs alert/wall management surfaces; the
   // team roster (active members) feeds alert assignment.
   const canEditMatter = caps?.capabilities.includes("matter.edit") ?? false;
+  // §32 Phase 7: close-matters capability gates hold placement/lifting.
+  const canCloseMatter = caps?.capabilities.includes("matter.close") ?? false;
   const memberOptions = (members ?? [])
     .filter((m) => m.status === "active")
     .map((m) => ({
@@ -852,6 +856,9 @@ export default function MatterDetail() {
           </TabsTrigger>
           <TabsTrigger value="translations" className="gap-2">
             <Languages className="size-4" /> Translations
+          </TabsTrigger>
+          <TabsTrigger value="client" className="gap-2">
+            <FileText className="size-4" /> Client updates
           </TabsTrigger>
           <TabsTrigger value="docket" className="gap-2">
             <CalendarClock className="size-4" /> Docket
@@ -1660,6 +1667,13 @@ export default function MatterDetail() {
         {/* §32 Phase 9 — multilingual evidence review */}
         <TabsContent value="translations" className="mt-6">
           {matterId && <TranslationsPanel matterId={matterId} canEdit={canEditMatter} />}
+        </TabsContent>
+
+        {/* §32 Phase 10 — client-update drafts from approved developments */}
+        <TabsContent value="client" className="mt-6">
+          {matterId && (
+            <ClientUpdatesPanel matterId={matterId} canEdit={canEditMatter} canSend={canNoteWrite} />
+          )}
         </TabsContent>
 
         {/* Time */}
@@ -2624,6 +2638,7 @@ export default function MatterDetail() {
             />
             <EvidenceBundlesPanel matterId={matterId!} />
             <AdverseAuthorityPanel matterId={matterId!} />
+            <MatterHoldCard matterId={matterId!} canManage={canCloseMatter} />
           </div>
         </TabsContent>
 
