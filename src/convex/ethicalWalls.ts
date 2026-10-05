@@ -514,6 +514,46 @@ export const listWalls = query({
 });
 
 /**
+ * Emergency-access grants for one wall (management visibility). Requires
+ * the close-matters capability: grant lifecycle state is sensitive — it
+ * names who is being let past a wall. The owner console uses this to
+ * show unacknowledged/expiring/revoked grants honestly.
+ */
+export const grantsForWall = query({
+  args: { wallId: v.id("ethicalWalls") },
+  handler: async (ctx, args) => {
+    const ac = await requireAccess(ctx);
+    requireCapability(ac, "matter.close");
+    const wall = await ctx.db.get(args.wallId);
+    if (!wall || wall.orgId !== ac.org._id) {
+      throw new Error("Wall not found in this organization.");
+    }
+    const rows = await ctx.db
+      .query("emergencyAccessGrants")
+      .withIndex("by_wall", (q) => q.eq("wallId", args.wallId))
+      .collect();
+    return Promise.all(
+      rows
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .map(async (g) => {
+          const actor = await ctx.db.get(g.actorId);
+          return {
+            grantId: g._id,
+            actorId: g.actorId,
+            actorName: actor?.name ?? actor?.email ?? "member",
+            reason: g.reason,
+            detail: g.detail,
+            acknowledgedAt: g.acknowledgedAt ?? null,
+            expiresAt: g.expiresAt,
+            revokedAt: g.revokedAt ?? null,
+            createdAt: g._creationTime,
+          };
+        }),
+    );
+  },
+});
+
+/**
  * Why the caller is (or is not) walled from a matter — used by the UI to
  * EXPLAIN the wall instead of a bare refusal. Shows the wall, its
  * reason, exemption status and any emergency-grant state.

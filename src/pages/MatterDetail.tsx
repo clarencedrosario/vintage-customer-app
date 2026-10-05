@@ -27,6 +27,13 @@ import { HearingOutcomeDialog } from "@/components/HearingOutcomeDialog";
 import { HearingRescheduleDialog } from "@/components/HearingRescheduleDialog";
 import { ProposalReviewPanel } from "@/components/ProposalReviewPanel";
 import { AiStudio } from "@/components/AiStudio";
+import { ConflictReviewPanel } from "@/components/s32/ConflictReviewPanel";
+import { AdverseAuthorityPanel } from "@/components/s32/AdverseAuthorityPanel";
+import { MatterImpactPanel } from "@/components/s32/MatterImpactPanel";
+import { EvidenceBundlesPanel } from "@/components/s32/EvidenceBundlesPanel";
+import { FilingReadinessPanel } from "@/components/s32/FilingReadinessPanel";
+import { RedactionPanel } from "@/components/s32/RedactionPanel";
+import { TranslationsPanel } from "@/components/s32/TranslationsPanel";
 import { Badge } from "@/components/ui/badge";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { MatterStatus } from "@/convex/schema";
@@ -60,7 +67,10 @@ import { useMutation, useQuery } from "convex/react";import {
   Plus,
   Receipt,
   Reply,
+  Eraser,
+  Languages,
   ScrollText,
+  ShieldCheck,
   StickyNote,
   Upload,
 } from "lucide-react";
@@ -410,6 +420,16 @@ export default function MatterDetail() {
   const prepareAIJob = useMutation(api.ai.prepareJob);
   const addAISource = useMutation(api.ai.addSource);
   const canNoteWrite = caps?.capabilities.includes("note.write") ?? false;
+  // §32 panels: matter-edit governs alert/wall management surfaces; the
+  // team roster (active members) feeds alert assignment.
+  const canEditMatter = caps?.capabilities.includes("matter.edit") ?? false;
+  const memberOptions = (members ?? [])
+    .filter((m) => m.status === "active")
+    .map((m) => ({
+      _id: String(m.userId),
+      name: m.name ?? m.email ?? "Member",
+      email: m.email ?? "",
+    }));
   const [askDocBusy, setAskDocBusy] = useState<Id<"matterDocuments"> | null>(null);
   // Extracted AI sources on this matter (to pin the viewed document's
   // text for Ask This Document; undefined until loaded).
@@ -823,6 +843,15 @@ export default function MatterDetail() {
           </TabsTrigger>
           <TabsTrigger value="issues" className="gap-2">
             <Scale className="size-4" /> Evidence &amp; issues
+          </TabsTrigger>
+          <TabsTrigger value="review" className="gap-2">
+            <ShieldCheck className="size-4" /> Review (§32)
+          </TabsTrigger>
+          <TabsTrigger value="filing" className="gap-2">
+            <ClipboardCheck className="size-4" /> Filing
+          </TabsTrigger>
+          <TabsTrigger value="translations" className="gap-2">
+            <Languages className="size-4" /> Translations
           </TabsTrigger>
           <TabsTrigger value="docket" className="gap-2">
             <CalendarClock className="size-4" /> Docket
@@ -1404,6 +1433,15 @@ export default function MatterDetail() {
 
         {/* Documents */}
         <TabsContent value="documents" className="mt-6">
+          {/* §32 Phase 6 — verified redaction (document-scoped tool) */}
+          <details className="mb-6 rounded-lg border border-border/70 p-4">
+            <summary className="cursor-pointer text-sm font-medium">
+              Verified redaction (§32) — produce a derivative with terms provably removed
+            </summary>
+            <div className="mt-4">
+              {matterId && <RedactionPanel matterId={matterId} />}
+            </div>
+          </details>
           <div className="mb-4 flex flex-wrap items-end gap-3">
             <div className="w-44">
               <Label>Kind</Label>
@@ -1612,6 +1650,16 @@ export default function MatterDetail() {
         {/* Requests — deep-linkable desk for client document requests */}
         <TabsContent value="requests" className="mt-6">
           <DocumentRequestPanel matterId={matterId!} />
+        </TabsContent>
+
+        {/* §32 Phase 5 — filing-readiness workspace */}
+        <TabsContent value="filing" className="mt-6">
+          {matterId && <FilingReadinessPanel matterId={matterId} />}
+        </TabsContent>
+
+        {/* §32 Phase 9 — multilingual evidence review */}
+        <TabsContent value="translations" className="mt-6">
+          {matterId && <TranslationsPanel matterId={matterId} canEdit={canEditMatter} />}
         </TabsContent>
 
         {/* Time */}
@@ -2565,6 +2613,20 @@ export default function MatterDetail() {
         </TabsContent>
 
         {/* Docket */}
+        {/* §32 Phase 1 — conflicting-evidence review workspace */}
+        <TabsContent value="review" className="mt-6">
+          <div className="space-y-8">
+            <ConflictReviewPanel matterId={matterId!} />
+            <MatterImpactPanel
+              matterId={matterId!}
+              canEdit={canEditMatter}
+              members={memberOptions}
+            />
+            <EvidenceBundlesPanel matterId={matterId!} />
+            <AdverseAuthorityPanel matterId={matterId!} />
+          </div>
+        </TabsContent>
+
         <TabsContent value="docket" className="mt-6">
           {(events ?? []).length === 0 ? (
             <Card className="border-dashed">
