@@ -3139,3 +3139,119 @@ remain pending). Backend + tests only, matching the phase scope.
 - No UI surface yet (backend + tests, like Phases 1–12);
   firmDashboard is the ready-made read model.
 - §32 PROGRAMME COMPLETE: Phases 1–12 all implemented and verified.
+
+## Turn-25 — 5 Oct 2026: §32 user-facing UI — all twelve rows wired
+
+### BUILT (pushed to moonlit-elk-307; tsc 0)
+
+- `docs/S32_INTERFACE_MAP.md` (12-row map, statuses corrected) then
+  Groups 0–2 (prior turns): shared primitives (`shared.tsx`),
+  ConflictReviewPanel, AdverseAuthorityPanel, MatterImpactPanel,
+  EvidenceBundlesPanel (Review tab), FilingReadinessPanel (Filing
+  tab), RedactionPanel (Documents tab section), TranslationsPanel
+  (Translations tab).
+- THIS TURN, Group 3 — walls/holds/emergency access: backend
+  `grantsForWall` query added to ethicalWalls.ts (matter.close; by_wall
+  index; per-grant lifecycle fields; sort fixed grantedAt vs createdAt —
+  the grants table has NO createdAt column). `WallsHoldsPanel` extended:
+  per-wall expandable emergency-grant history (state badges
+  revoked/expired/awaiting-acknowledgement/active, expiry shown,
+  revoke with mandatory ≥10-char reason), wall status badges + lift
+  reason display, INLINE wall-lift (window.prompt removed), lifted
+  history shown. `MatterHoldCard` created for the Matter Review tab
+  (holdsForMatter incl. lifted history; place/lift with audited
+  reasons; canManage = matter.close). Wired into the **Conflicts desk**
+  (`/conflicts`) — the map's original `/owner` destination was WRONG:
+  /owner is the CJ GLOBAL platform-operator console that REFUSES
+  chamber owners; the chamber home for walls is the conflicts page.
+- Group 4 — client updates + AI defence + dashboards + export/exit:
+  `ClientUpdatesPanel` (Matter **Client updates** tab): approved-
+  developments picker (cap 25 = backend MAX_DEVELOPMENTS), prepare,
+  drafts list, review card with LIVE provenance state, duplicate-set
+  block, HONEST recipient display (preference null = "never recorded —
+  shown as absent, not consent"), approve (matter.edit) / queue
+  (note.write) / cancel; queue refusals surface verbatim.
+  `AiStudio.tsx` job view: instruction-defence banner + signals table
+  (kind/source/excerpt) rendered whenever `instructionDefence` is
+  present, whatever the job outcome. `AiQualityDashboard` shared
+  renderer: firm scope at the bottom of `/ai`, platform scope at the
+  top of `/platform` (window selector 7–120d ≤ MAX_WINDOW_DAYS,
+  totals, defined-metric table with definitions printed, by-kind,
+  freshness block, liveModelConfigured honesty note, opaque per-org
+  rows platform-side). `ExportExitPanel` in **Settings**: start →
+  advance collection (cursor/plan progress) → verification (failures
+  LISTED, never smoothed) → omissions refresh → manifest view showing
+  INCLUDED parts (table/rows/sha256/download) BESIDE omitted records
+  (rows + reason) with documentsNote + listed legal holds — manifest
+  before any success labelling — single-use downloads
+  (issueDownload→redeemDownload chained), revoke (≥10 chars),
+  close-organization owner flow (exact "CLOSE ORGANIZATION" confirm;
+  hold-aware; verbatim refusals incl. reauth sentences surfaced in an
+  inline "Last refusal (verbatim)" block).
+
+### TESTS (group3.test.ts 4 + group4.test.ts 4 — drift pins)
+
+- group3: HOLD_KINDS + MatterHoldCard HOLD_REASON_KINDS == backend
+  LEGAL_HOLD_REASON_KINDS; GRANT_REASONS == EMERGENCY_GRANT_REASONS;
+  EmergencyGrantRow covers all 9 grantsForWall fields; wall status
+  labels cover ETHICAL_WALL_STATUSES.
+- group4: UI MAX_DEVELOPMENTS == src/lib/clientUpdates.ts value;
+  dashboard WINDOWS ≤ MAX_WINDOW_DAYS; export job status + client
+  update draft status label coverage vs backend unions.
+- s32 panels suite green; full-suite run + tsc at end of turn.
+
+### FIXES DURING THE TURN (root causes)
+
+- ethicalWalls.ts grantsForWall sort referenced `createdAt` on
+  emergencyAccessGrants rows — the table stores `grantedAt` (createdAt
+  came from the returned-object mapping, not the row). Fixed the sort
+  to `grantedAt`.
+- WallsHoldsPanel first str_replace hit the transient "file does not
+  exist" sync error twice; verified file present via ls, retried,
+  succeeded (known environment quirk).
+- ExportExitPanel initial Settings wiring used invented props
+  (profile.canExport) — replaced with real workspace.myCapabilities
+  query (data.export || owner; isOwner from caps.orgRole).
+- /owner misconception corrected in the interface map: rows 7/11/12
+  destinations changed to /conflicts, /ai + /platform, /settings.
+
+### EVIDENCE SEPARATION
+
+- Backend: implemented + automated tests green (Phases 1–12, turns
+  16–24). UI: implemented + tsc 0 + suite green (this turn).
+- Browser verification: PENDING for ALL groups — browser automation
+  unavailable; `docs/S32_BROWSER_SCRIPT.md` carries Groups 0–4 manual
+  step tables (fixtures A/B/C/D/P).
+- Live third-party integration: NOT VERIFIED (OPENAI_API_KEY absent;
+  dashboards render the honest liveModelConfigured:false state).
+- Legal review of §32 semantics: OUTSTANDING.
+
+### PHASE-7 DESTRUCTIVE-PATH SWEEP (requirement 4 — completed)
+
+- Every ctx.db.delete call site audited: vault.remove hold-enforced
+  (verified turn 19/24); NO matter hard-delete mutation exists (the
+  matter.delete capability is defined but unconsumed — no unguarded
+  path); undertakings.remove drafts-only; billing.deleteInvoice
+  drafts-only; party/contact removal is capability-gated link editing
+  (recorded limit: holds freeze document deletion, not working
+  metadata); restore-verification purges refuse non-sandbox orgs;
+  remaining sites are infra tables. Recorded in full in the interface
+  map's Cross-cutting section.
+- No self-authorized wall bypass: acknowledgeEmergencyAccess refuses
+  non-holders server-side; unacknowledged grants open nothing; expiry
+  ≤24h; revoke closes immediately; exempt actors explicit at creation
+  only; wallExplanation is read-only.
+
+### HONEST LIMITS (recorded)
+
+- All browser steps remain PENDING until executed manually from the
+  script (no automation this session).
+- ExportExitPanel reauth errors surface verbatim but a fresh test user
+  WITHOUT loginEvents will see refusals on start/download/close — the
+  script notes this expectation rather than seeding around it.
+- The /owner console (platform operators) intentionally hosts NO §32
+  chamber surface; firm AI quality lives on /ai for all members —
+  visible cost/metric aggregates are org-scoped by the backend.
+- Connector programme (32.17) reconciliation unchanged: India Code
+  POCSO never retrieved; Gazette/MHA corpus imported via scripts;
+  SCI empty-body; cron pass ≠ live ingestion proof — still OUTSTANDING.

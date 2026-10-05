@@ -17,7 +17,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { S32Loading, S32Note } from "@/components/s32/shared";
 import { formatDateTimeIN } from "@/lib/format";
 
-const WINDOWS = [7, 30, 60, 90, 120] as const;
+/** Dashboard windows — every value must be ≤ backend MAX_WINDOW_DAYS (drift test group4.test.ts). */
+export const WINDOWS = [7, 30, 60, 90, 120] as const;
 
 type Freshness = {
   sourcesTotal: number;

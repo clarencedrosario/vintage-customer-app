@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "convex/react";
 import { toast } from "sonner";
 import { api } from "@/convex/_generated/api";
 import { ChamberShell } from "@/components/ChamberShell";
+import { AiQualityDashboard } from "@/components/s32/AiQualityDashboard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -103,6 +104,10 @@ export default function Platform() {
   return (
     <ChamberShell subtitle="The Digital Chamber" title="Platform console">
       <div className="space-y-8">
+        {/* §32 Phase 11 — cross-chamber AI usage (counts/costs/timings only,
+            opaque org ids; the backend whitelist + leak guard enforce it) */}
+        <AiQualityDashboard scope="platform" />
+
         {/* Summary */}
         <div className="grid gap-4 sm:grid-cols-4">
           {[

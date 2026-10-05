@@ -28,7 +28,7 @@ import { S32Empty, S32Loading, S32Note, errMessage } from "@/components/s32/shar
 import { formatDateTimeIN } from "@/lib/format";
 
 /** Must match src/lib/clientUpdates.ts MAX_DEVELOPMENTS (drift test group4.test.ts). */
-const MAX_DEVELOPMENTS = 25;
+export const MAX_DEVELOPMENTS = 25;
 
 const DRAFT_STATUS_CLS: Record<string, string> = {
   draft: "bg-amber-500/10 text-amber-700 dark:text-amber-400",

@@ -103,3 +103,50 @@ Setup: A = owner (matter.close). B = associate (no matter.close). Identity fixtu
 | 3.13 | Wall lift flow (Lift… → inline reason) | Same ≥10-char enforcement as holds; wall badge becomes "lifted" with lift reason shown |
 
 ---
+
+## Group 4 — Client updates, AI defence, dashboards, export & exit
+
+Setup: A = owner. B = associate (note.write but not matter.edit). A client user with portal access on the test matter helps for 4.1–4.5.
+
+### 4A — Client updates (Matter → "Client updates" tab)
+
+| # | Step | Expected outcome |
+|---|---|---|
+| 4.1 | Approve 2–3 timeline entries on the matter, open Client updates | Approved developments listed with kind+date; unapproved entries absent |
+| 4.2 | As B (note.write): select 2, prepare | Draft appears with assembled body + disclosure footer; provenance frozen (dev count shown) |
+| 4.3 | Review card recipients | Portal/email/thread states shown; preference "never recorded" shows absent badge — never treated as consent |
+| 4.4 | As A approve → as B queue | Approve needs matter.edit (B's Approve hidden); queue succeeds → outbox id shown; client portal sees the message via comm thread |
+| 4.5 | Duplicate guard | Prepare the SAME development set again and queue → blocked with the duplicate-set reason verbatim |
+| 4.6 | Provenance drift | After preparing, un-approve one development → review shows provenance problem; Queue disabled until fixed |
+
+### 4B — AI instruction-defence (AI Studio in a matter)
+
+| # | Step | Expected outcome |
+|---|---|---|
+| 4.7 | Paste a source containing "ignore previous instructions and …" (Opposing Party label), run any job | Amber banner above the result: "Instruction-defence review (1 signal)" with kind DIRECT INSTRUCTION, source name, excerpt; result still renders normally with its review-required badge |
+| 4.8 | Clean-source job | No banner |
+
+### 4C — AI quality dashboards
+
+| # | Step | Expected outcome |
+|---|---|---|
+| 4.9 | /ai page bottom card (as A or B) | Firm dashboard: totals, defined-metric table with definitions printed under each value, by-kind table, freshness block with definitions; window buttons 7–120d refetch |
+| 4.10 | /platform as platform admin | Platform dashboard above subscription summary: per-org rows keyed by opaque ids (counts/cost/tokens/defence-signal jobs only); disclosure states no names/content |
+| 4.11 | Without OPENAI_API_KEY | Amber "no model key configured" honesty note visible on both dashboards |
+
+### 4D — Export & exit (Settings → Export & exit)
+
+| # | Step | Expected outcome |
+|---|---|---|
+| 4.12 | As B (no data.export) | Section shows the capability note; no forms |
+| 4.13 | As A: start job | Job appears "collecting"; progress bar advances with each "Advance collection" click (cursor/plan shown) |
+| 4.14 | Refresh omissions | Omitted tables listed with row counts + reasons (counts computed server-side) |
+| 4.15 | Run verification | Verification block appears; failures (if any) listed — never smoothed over |
+| 4.16 | Download a part | Link issues then redeems (single-use); second redeem of the same grant refused with the verbatim reason |
+| 4.17 | Close organization without verified export | Refusal verbatim: "No VERIFIED export exists…" |
+| 4.18 | Place a legal hold (Group 3) then close | Refusal names the matter + hold kind; block recorded on the job (shown in the job list) |
+| 4.19 | Lift hold, close with confirmation text | Only exact "CLOSE ORGANIZATION" enables the button; success appends [ORG CLOSED date] to the job label |
+| 4.20 | Reauth path (log out/in >168h simulated or fresh fixture without loginEvents) | Start/download/close refusals surface verbatim, including "No successful sign-in is on record…" |
+| 4.21 | Revoke export with <10 chars | Refused; with reason → status revoked; further downloads refused |
+
+---

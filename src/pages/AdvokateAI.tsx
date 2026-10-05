@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { api } from "@/convex/_generated/api";
 import { useQuery } from "convex/react";
+import { AiQualityDashboard } from "@/components/s32/AiQualityDashboard";
 import { Bot, FileWarning, ShieldAlert, Sparkles } from "lucide-react";
 import { Link } from "react-router";
 import { useMemo, useState } from "react";
@@ -243,6 +244,9 @@ export default function AdvokateAI() {
             )}
           </div>
         </div>
+
+        {/* §32 Phase 11 — firm-level AI quality dashboard (defined metrics only) */}
+        <AiQualityDashboard scope="firm" />
       </div>
     </ChamberShell>
   );

@@ -1,5 +1,6 @@
 import { ChamberShell } from "@/components/ChamberShell";
 import { BackupCard, DataImportCard } from "@/components/DataAndBackupCards";
+import { ExportExitPanel } from "@/components/s32/ExportExitPanel";
 import { GitHubCard } from "@/components/GitHubCard";
 import { PromoteMyProfileCard, PromotionsOwnerCard } from "@/components/PromotionsCards";
 import { SubscriptionCard } from "@/components/SubscriptionCard";
@@ -93,6 +94,11 @@ const CAPABILITY_LABELS: Record<string, string> = {
 
 export default function Settings() {
   const profile = useQuery(api.orgs.profile);
+  // §32 Phase 12 — export/exit gating mirrors the backend (data.export
+  // capability or the owner role; close-organization is owner-only).
+  const caps = useQuery(api.workspace.myCapabilities);
+  const canExport = caps?.capabilities.includes("data.export") ?? false;
+  const isOwner = (caps?.orgRole ?? "") === "owner";
 
   return (
     <ChamberShell subtitle="The Digital Chamber" title="Settings">
@@ -115,6 +121,7 @@ export default function Settings() {
           <DataImportCard />
           <BackupCard />
           <GitHubCard />
+          <ExportExitPanel canExport={canExport || isOwner} isOwner={isOwner} />
           <PermissionsMatrixCard />
           <SecurityCard />
         </div>
