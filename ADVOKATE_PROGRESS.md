@@ -3464,3 +3464,69 @@ legal review. Nothing in this file claims all acceptance criteria passed.
   machinery unchanged; not re-verified live this turn.
 - Production deploy, paid-service activation, destructive ops and Git
   publishing remain prohibited; none performed.
+
+## Turn-28 — 6 Oct 2026: billing explicitness, owner setup kit, runnable browser E2E, consolidated release checklist
+
+### Implemented
+
+- **Billing made explicit (requirement 2)** — pure `src/lib/planChange.ts` +
+  `planChange.test.ts` (8 tests): `describePlanChange` /
+  `planChangeConfirmText` state, before any confirmation: charged today
+  ₹0.00, the explicit next charge (new plan's full price), the effective
+  date (now or the scheduled period end), the next-billing-period
+  (no-proration) policy label, and the unpaid consequences (7-day grace →
+  read-only, files viewable/exportable). Both `SubscriptionCard` switch
+  buttons use it; the card shows a standing manual-renewal line (payment
+  link at period end, next-charge amount, no automatic card charge — none
+  implemented). `/pricing` fine print expanded: "Renewal — manual, by
+  payment link" + "Plan changes — next-billing-period policy". No automatic
+  recurring billing is advertised anywhere.
+- **Owner setup kit (requirement 4)** — `docs/OWNER_SETUP_CHECKLIST.md`:
+  exact names (`OPENAI_API_KEY`, `ADVOKATE_ADVANCED_MODEL`,
+  `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`,
+  `https://moonlit-elk-307.convex.cloud/webhooks/razorpay` + 4 events,
+  `SECRET_ENCRYPTION_KEY`, `PLATFORM_OWNER_EMAIL` + admin bootstrap), where
+  to configure each (Keys/API keys UI; Razorpay dashboard for webhooks),
+  test-mode-first sequencing with live activation gated on the test pass +
+  explicit owner approval, CJ GLOBAL vs firm merchant separation, and the
+  verification matrix each item unlocks. No secret values requested anywhere.
+- **Preview routes + workspace demonstration (requirements 1, 3)** —
+  `docs/PREVIEW_ROUTES.md`: exact routes (`/pricing`, `/pricing#contact`,
+  checkout path, `/billing`, `/ai`, `/platform`) with what must agree with
+  server configuration; a 10-minute manual screen-vs-server checklist; and
+  the lawyer-workspace demonstration table (matter tabs incl.
+  documents/chronology/team/pending actions, X-Ray with sources + delta +
+  outdated flag, drafting incl. clarification gate, reply to a filed
+  notice, client contact reaching `/portal`, restricted staff refusals).
+- **Runnable browser E2E (requirement 5)** — self-contained `e2e/`
+  (package.json, chromium config, helpers, `pricing.spec.ts`,
+  `workspace.spec.ts`, README): test identities (owner/associate/clerk/
+  client), email-OTP capture contract (`E2E_OTP_JSON`), seeded matter
+  `E2E/2026/0001`, screen-vs-server assertions incl. "Charged today:
+  ₹0.00" in confirm dialogs. **NOT EXECUTED here** (no browser tooling) —
+  setup + identities documented; execution pending in a Chromium-capable
+  environment.
+- **Consolidated release checklist (requirement 6)** —
+  `docs/RELEASE_CHECKLIST.md`: commercial items, connectors (POCSO/DPDP
+  live evidence retained; India Code timeout + SCI gating retained, not
+  dropped), backup RESTORE DRILL (new explicit open item), monitoring,
+  support, commercial-document review, production/live-charge restrictions.
+  Nothing replaced by unit tests.
+
+### Automated checks (real runs, exit statuses captured)
+
+- `bunx tsc -b --noEmit` → 0 errors. `bunx convex dev --once` → push clean
+  (moonlit-elk-307).
+- Vitest: `src/lib` 25 files / 429 ✓ (+8 planChange), `src/convex` 22 / 226
+  ✓, components+pages 5 / 19 ✓ → **52 files / 674 tests**.
+- **Flake FIXED at cause** (previously "recorded, not modified"):
+  `reviewAndBundles.test.ts` recentRuns ordering tied on same-millisecond
+  `startedAt`; fixture now back-dates the unchanged run deterministically.
+  Assertions unchanged; shard run 22/22 files, 226/226 green, twice.
+
+### Not done / pending (honest)
+
+- Browser E2E execution (no tooling); provider test-mode money flows;
+  bounded real-AI checks; backup restore drill; live activation (owner
+  action). Restrictions preserved: no production deploy, no paid-service
+  activation, no real charges, no destructive ops, no Git publishing.

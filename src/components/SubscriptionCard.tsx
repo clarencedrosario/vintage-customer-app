@@ -5,6 +5,7 @@ import { Link } from "react-router";
 import { toast } from "sonner";
 import { api } from "@/convex/_generated/api";
 import { annualSavings, categoryLabel, monthlyEquivalent } from "@/lib/planCatalog";
+import { planChangeConfirmText, formatPlanCharge } from "@/lib/planChange";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -164,6 +165,20 @@ export function SubscriptionCard() {
             <div className="grid gap-x-8 gap-y-1 text-sm text-muted-foreground sm:grid-cols-2">
               <span>Seats: {seats ? `${seats.billable} billable${seats.limit ? ` of ${seats.limit}` : ""}` : "—"}</span>
               <span>Current period ends: {day(sub.currentPeriodEnd)}</span>
+              <span className="sm:col-span-2 text-xs">
+                Manual renewal: at the period end above we issue a payment link for the next period
+                {sub.planId
+                  ? (() => {
+                      const cur = data.plans.find((pl) => pl._id === sub.planId);
+                      return cur && cur.priceMinor > 0
+                        ? ` — next charge ${formatPlanCharge(cur.priceMinor)} (${cur.interval === "yearly" ? "annual" : "monthly"})`
+                        : "";
+                    })()
+                  : ""}
+                . The subscription renews when the link is paid; no automatic card charge is made. If
+                payment is not received within 7 days after the period end, the workspace moves to a
+                7-day grace period and then becomes read-only (files stay viewable and exportable).
+              </span>
               {sub.trialEndsAt && <span>Trial ends: {day(sub.trialEndsAt)}</span>}
               {sub.cancelAt && <span>Cancellation scheduled for: {day(sub.cancelAt)}</span>}
               {sub.scheduledChange && (
@@ -352,7 +367,13 @@ export function SubscriptionCard() {
                           onClick={async () => {
                             if (
                               !confirm(
-                                `Switch to ${p.name} NOW? The new plan applies immediately; proration is not calculated in this release — the next payment covers the new plan's full price.`,
+                                planChangeConfirmText({
+                                  planName: p.name,
+                                  interval: p.interval,
+                                  priceMinor: p.priceMinor,
+                                  currentPeriodEnd: sub?.currentPeriodEnd ?? 0,
+                                  timing: "immediately",
+                                }),
                               )
                             )
                               return;
@@ -377,7 +398,13 @@ export function SubscriptionCard() {
                           onClick={async () => {
                             if (
                               !confirm(
-                                `Switch to ${p.name} at the end of the current period (${day(sub?.currentPeriodEnd ?? null)})? The current plan stays active until then.`,
+                                planChangeConfirmText({
+                                  planName: p.name,
+                                  interval: p.interval,
+                                  priceMinor: p.priceMinor,
+                                  currentPeriodEnd: sub?.currentPeriodEnd ?? 0,
+                                  timing: "period_end",
+                                }),
                               )
                             )
                               return;

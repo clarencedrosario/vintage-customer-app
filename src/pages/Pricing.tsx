@@ -351,9 +351,19 @@ export default function Pricing() {
                   <p className="type-label ink-faded">The fine print, in plain sight</p>
                   <ul className="mt-3 space-y-2 text-sm text-muted-foreground">
                     <li>
-                      <strong className="text-foreground">Renewal:</strong> at the end of each
-                      period we issue a payment link for the next period. We do not advertise
-                      automatic card charges — renewal completes when the link is paid.
+                      <strong className="text-foreground">Renewal — manual, by payment link:</strong> at
+                      the end of each period we issue a payment link for the next period; renewal
+                      completes when the link is paid. No automatic card charge is made — none is
+                      implemented. If payment is not received within 7 days after the period end, the
+                      subscription moves to a 7-day grace period and then becomes read-only (your
+                      files stay viewable and exportable throughout).
+                    </li>
+                    <li>
+                      <strong className="text-foreground">Plan changes — next-billing-period policy:</strong>{" "}
+                      proration is not calculated in this release. Upgrades apply immediately and
+                      nothing is charged at the moment of switching; the next payment covers the new
+                      plan's full price. Downgrades can be scheduled for the period end and withdrawn
+                      any time before it.
                     </li>
                     <li>
                       <strong className="text-foreground">Tax:</strong>{" "}

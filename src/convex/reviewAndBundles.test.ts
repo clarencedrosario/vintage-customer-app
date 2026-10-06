@@ -1574,7 +1574,7 @@ describe("Turn 17 — official-source connector (fixtures; live retrieval record
 
   it("identical bytes commit as unchanged (no new version); failures never advance freshness", async () => {
     await seedFirm(t);
-    const { versionId } = await seedSource(1, BODY_V1, BYTES_V1);
+    const { srcId, versionId } = await seedSource(1, BODY_V1, BYTES_V1);
 
     // Identical bytes → "unchanged": same version, no alerts, no rewrite.
     const r = (await t.run((ctx) =>
@@ -1593,6 +1593,18 @@ describe("Turn 17 — official-source connector (fixtures; live retrieval record
     expect(r.version).toBe(1);
     expect(r.alerted).toBe(0);
     expect(r.versionId).toBe(versionId); // the SAME version row
+
+    // Deterministic recentRuns ordering: back-date this run so the
+    // failure below cannot tie it on startedAt (same-millisecond ties
+    // resolve by insertion order — a real flake source under load).
+    await asUser(t, "system").run(async (ctx) => {
+      const runs = (await ctx.db.query("ingestionRuns").collect()).filter(
+        (r) => String(r.sourceId) === String(srcId),
+      );
+      for (const run of runs) {
+        await ctx.db.patch(run._id, { startedAt: Date.now() - 10_000 });
+      }
+    });
 
     // A FAILED check records the attempt but touches nothing freshness-
     // related (no lastSuccessfulAt advance, no version bump).

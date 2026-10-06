@@ -1,0 +1,14 @@
+{
+  "name": "advokate-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:billing": "playwright test billing.spec.ts",
+    "test:workspace": "playwright test workspace.spec.ts",
+    "test:pricing": "playwright test pricing.spec.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}
