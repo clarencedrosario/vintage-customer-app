@@ -82,6 +82,14 @@ function promptFor(
   transcript: string | null,
   briefingEmailDigest: string | null,
   legalContext: string | null = null,
+  xrayDelta: {
+    previousJobId: string;
+    previousAt: number;
+    added: string[];
+    changed: string[];
+    removed: string[];
+    unchangedCount: number;
+  } | null = null,
 ): {
   user: string;
   wantsJson: boolean;
@@ -95,11 +103,24 @@ function promptFor(
         wantsJson: false,
         user: `Summarise the selected sources for the case file. Separate: (1) Facts established by the documents, (2) Allegations or claims made by a party, (3) What remains unclear. Keep every factual statement anchored to its source.${noteLine}\n\n${ctx}`,
       };
-    case "xray":
+    case "xray": {
+      // Incremental reassessment (turn 27): when a previous X-Ray exists,
+      // the model is told EXACTLY what changed at source level (a fact
+      // recorded at request time, never a model opinion) and is told to
+      // focus on it, carry forward what is unchanged, and disclose both.
+      const deltaBlock = xrayDelta
+        ? `\nINCREMENTAL REASSESSMENT CONTEXT (recorded facts, verified — not model output): this request updates a previous X-Ray of the same file prepared on ${new Date(xrayDelta.previousAt).toISOString().slice(0, 10)}.
+Sources ADDED since then: ${xrayDelta.added.length ? xrayDelta.added.join("; ") : "none"}.
+Sources CHANGED (newer version) since then: ${xrayDelta.changed.length ? xrayDelta.changed.join("; ") : "none"}.
+Sources REMOVED from the analysis since then: ${xrayDelta.removed.length ? xrayDelta.removed.join("; ") : "none"}.
+Sources carried forward UNCHANGED: ${xrayDelta.unchangedCount}.
+Produce an incremental X-Ray: open with "WHAT CHANGED IN THE RECORD" covering the added/changed/removed sources and their effect on the assessment (or stating plainly that the record is unchanged), then reassess. Carry forward conclusions that still stand and say they are carried forward; revise only what the changes affect. End with the analyzed-sources disclosure: list every source this X-Ray is built from. If a removed source had supported a prior conclusion, say that the conclusion now rests only on the remaining sources.`
+        : `\nANALYZED-SOURCES DISCLOSURE (mandatory): end the X-Ray with a section "Sources analyzed" listing exactly the sources below — these and only these were analyzed. If important classes of document are absent from that list, name what is missing rather than guessing.`;
       return {
         wantsJson: false,
-        user: `Produce a "Case X-Ray" overview from the selected sources: the dispute in five sentences, the parties and their claimed positions (labelled as claims, not facts), the documents that matter most, and the open questions. Anchor every reference.${noteLine}\n\n${ctx}`,
+        user: `Produce a "Case X-Ray" overview from the selected sources: the dispute in five sentences, the parties and their claimed positions (labelled as claims, not facts), the documents that matter most, and the open questions. Anchor every reference.${deltaBlock}${noteLine}\n\n${ctx}`,
       };
+    }
     case "chronology":
       return {
         wantsJson: true,
@@ -532,6 +553,7 @@ export const runJob = internalAction({
       transcript,
       payload.emailDigest ?? null,
       payload.legalContext ?? null,
+      payload.xrayDelta ?? null,
     );
 
     // Tier→model resolution (turn 27): "advanced" runs ONLY when the

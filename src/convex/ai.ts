@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import {
   internalMutation,
@@ -454,6 +455,69 @@ export const prepareJob = mutation({
       }
     }
 
+    // Case X-Ray incremental reassessment (turn 27): compare this
+    // request against the most recent COMPLETED X-Ray on the matter and
+    // record the source-level difference at request time. The runner
+    // focuses on it; the UI discloses it. No diff is stored when this is
+    // the first X-Ray — there is nothing honest to compare against.
+    let xrayDelta:
+      | {
+          previousJobId: Id<"aiJobs">;
+          previousAt: number;
+          added: string[];
+          changed: string[];
+          removed: string[];
+          unchangedCount: number;
+        }
+      | undefined;
+    let previousXrayJobId: Id<"aiJobs"> | undefined;
+    if (args.kind === "xray") {
+      const prev = (
+        await ctx.db
+          .query("aiJobs")
+          .withIndex("by_matter", (q) => q.eq("matterId", args.matterId))
+          .collect()
+      )
+        .filter((j) => j.kind === "xray" && j.status === "done")
+        .sort((a, b) => (b.completedAt ?? b.createdAt) - (a.completedAt ?? a.createdAt))[0];
+      if (prev) {
+        previousXrayJobId = prev._id;
+        const prevAt = prev.completedAt ?? prev.createdAt;
+        const prevSet = new Set((prev.sourceIds ?? []).map(String));
+        const added: string[] = [];
+        const changed: string[] = [];
+        let unchangedCount = 0;
+        for (const sid of sourceIds) {
+          const s = await ctx.db.get(sid);
+          if (!s) continue;
+          if (!prevSet.has(String(s._id))) {
+            added.push(s.name);
+          } else if (s.documentUpdatedAt && s.documentUpdatedAt > prevAt) {
+            changed.push(s.name);
+          } else {
+            unchangedCount += 1;
+          }
+        }
+        const removed = (
+          await Promise.all(
+            (prev.sourceIds ?? []).map(async (sid) => {
+              if (sourceIds.some((c) => String(c) === String(sid))) return null;
+              const s = await ctx.db.get(sid);
+              return s ? s.name : "(a source later removed from the record)";
+            }),
+          )
+        ).filter((x): x is string => x !== null);
+        xrayDelta = {
+          previousJobId: prev._id,
+          previousAt: prevAt,
+          added,
+          changed,
+          removed,
+          unchangedCount,
+        };
+      }
+    }
+
     const id = await ctx.db.insert("aiJobs", {
       orgId: ac.org._id,
       matterId: args.matterId,
@@ -472,9 +536,15 @@ export const prepareJob = mutation({
       // reservation counts only pending jobs).
       reservedTokens: reserved > 0 ? reserved : undefined,
       modelTier: args.modelTier ?? "standard",
+      // Case X-Ray incremental reassessment (turn 27).
+      xrayDelta,
       requestedById: ac.user._id,
       createdAt: Date.now(),
     });
+    // The previous X-Ray is no longer the current assessment of the file.
+    if (previousXrayJobId) {
+      await ctx.db.patch(previousXrayJobId, { supersededByJobId: id });
+    }
     // Deployment-supported execution: the request is saved and the Node
     // runner is scheduled server-side. Failure handling is end-to-end —
     // a claim/timeout marks the job failed/expired for the user to retry.
@@ -760,6 +830,8 @@ export const jobForRunner = internalQuery({
       emailBody: job.emailBody ?? null,
       // Morning briefings: yesterday's filed inbound emails, digested.
       emailDigest: job.emailDigest ?? null,
+      // Case X-Ray incremental reassessment: the request-time source diff.
+      xrayDelta: job.xrayDelta ?? null,
       // Legal research: jurisdiction + date + verified-source context.
       legalContext,
       noSourcesAvailable:
@@ -907,6 +979,9 @@ export const getJob = query({
       // focused clarification questions recorded at submission.
       legalSourceVersions: job.legalSourceVersions ?? null,
       clarifications: job.clarifications ?? null,
+      // Case X-Ray (turn 27): analyzed-source diff + supersession flag.
+      xrayDelta: job.xrayDelta ?? null,
+      supersededByJobId: job.supersededByJobId ?? null,
       sources: sources.filter((x): x is NonNullable<typeof x> => x !== null),
       requestedByName: requester?.name ?? requester?.email ?? "Member",
       createdAt: job.createdAt,
@@ -945,6 +1020,9 @@ export const listJobs = query({
         requestedById: r.requestedById,
         createdAt: r.createdAt,
         completedAt: r.completedAt ?? null,
+        // Turn 27: an X-Ray superseded by a newer one is flagged here so
+        // the history list marks it outdated — it is never deleted.
+        supersededByJobId: r.supersededByJobId ?? null,
       }));
   },
 });

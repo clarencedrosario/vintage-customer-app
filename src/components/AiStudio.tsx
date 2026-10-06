@@ -730,6 +730,11 @@ export function AiStudio({ matterId }: { matterId: Id<"matters"> }) {
                     <div className="min-w-0">
                       <p className="text-sm font-medium">
                         {KIND_LABELS[j.kind] ?? j.kind}
+                        {j.kind === "xray" && j.supersededByJobId && (
+                          <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-900">
+                            outdated — a newer X-Ray exists
+                          </span>
+                        )}
                       </p>
                       <p className="type-label mt-0.5 ink-faded">
                         {formatDateTimeIN(j.createdAt)}
@@ -746,6 +751,67 @@ export function AiStudio({ matterId }: { matterId: Id<"matters"> }) {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Case X-Ray disclosures (turn 27): what the X-Ray is built from, what
+ * changed since the previous one (recorded facts, not model opinion),
+ * and an honest outdated flag when a newer assessment exists.
+ */
+function XrayDisclosure({
+  xrayDelta,
+  supersededByJobId,
+}: {
+  xrayDelta:
+    | {
+        previousJobId: string;
+        previousAt: number;
+        added: string[];
+        changed: string[];
+        removed: string[];
+        unchangedCount: number;
+      }
+    | null;
+  supersededByJobId: string | null;
+}) {
+  return (
+    <div className="space-y-2 rounded-md border border-border bg-background p-3 text-xs">
+      {supersededByJobId && (
+        <p className="font-medium text-amber-900">
+          Outdated: a newer Case X-Ray has since been prepared for this matter. This one remains
+          available as a record but is no longer the current assessment of the file.
+        </p>
+      )}
+      {xrayDelta ? (
+        <details>
+          <summary className="cursor-pointer font-medium">
+            What changed since the previous X-Ray ({formatDateTimeIN(xrayDelta.previousAt)})
+          </summary>
+          <ul className="mt-2 space-y-1 text-muted-foreground">
+            <li>
+              Added to the analysis: {xrayDelta.added.length ? xrayDelta.added.join(", ") : "none"}
+            </li>
+            <li>
+              Changed (newer version analyzed): {xrayDelta.changed.length ? xrayDelta.changed.join(", ") : "none"}
+            </li>
+            <li>
+              No longer analyzed: {xrayDelta.removed.length ? xrayDelta.removed.join(", ") : "none"}
+            </li>
+            <li>Carried forward unchanged: {xrayDelta.unchangedCount}</li>
+          </ul>
+          <p className="mt-1 text-muted-foreground">
+            This comparison is a record of which sources each X-Ray was built from — not a model
+            opinion. The model was instructed to focus on exactly these differences.
+          </p>
+        </details>
+      ) : (
+        <p className="text-muted-foreground">
+          No previous X-Ray to compare against — this was the first for the matter, so the
+          analyzed-sources list below the result is the complete disclosure.
+        </p>
+      )}
     </div>
   );
 }
@@ -915,6 +981,9 @@ function JobResultInner({
       )}
       {job.status === "done" && (
         <>
+          {job.kind === "xray" && (
+            <XrayDisclosure xrayDelta={job.xrayDelta} supersededByJobId={job.supersededByJobId} />
+          )}
           <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded border border-border bg-background p-3 font-serif text-sm leading-relaxed">
             {job.result}
           </pre>

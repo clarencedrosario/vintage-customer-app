@@ -2339,6 +2339,24 @@ export default defineSchema({
         v.object({ stableKey: v.string(), version: v.number() }),
       ),
     ),
+    // Case X-Ray incremental reassessment (turn 27): the source-level
+    // diff against the previous completed X-Ray, recorded at REQUEST time
+    // so the "what changed" disclosure is a fact of the record — never a
+    // model opinion. Empty sets are meaningful (record unchanged).
+    xrayDelta: v.optional(
+      v.object({
+        previousJobId: v.id("aiJobs"),
+        previousAt: v.number(),
+        added: v.array(v.string()),
+        changed: v.array(v.string()),
+        removed: v.array(v.string()),
+        unchangedCount: v.number(),
+      }),
+    ),
+    // An older completed X-Ray stops being a current assessment of the
+    // file once a newer one is prepared — it carries this pointer so the
+    // UI can flag it "outdated" without deleting anything.
+    supersededByJobId: v.optional(v.id("aiJobs")),
     // Focused clarification questions recorded at request time when
     // missing facts affect applicability (no governing date recorded,
     // jurisdiction unconfirmed). The user question is NEVER lost.
