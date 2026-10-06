@@ -13,6 +13,7 @@ import "./index.css";
 const Landing = lazy(() => import("./pages/Landing.tsx"));
 const LoginPage = lazy(() => import("./pages/Login.tsx"));
 const FindALawyer = lazy(() => import("./pages/FindALawyer.tsx"));
+const Pricing = lazy(() => import("./pages/Pricing.tsx"));
 const Dashboard = lazy(() => import("./pages/Dashboard.tsx"));
 const Matters = lazy(() => import("./pages/Matters.tsx"));
 const Conflicts = lazy(() => import("./pages/Conflicts.tsx"));
@@ -161,6 +162,7 @@ createRoot(document.getElementById("root")!).render(
                 element={<IntakeComplete />}
               />
               <Route path="/find-a-lawyer" element={<FindALawyer />} />
+              <Route path="/pricing" element={<Pricing />} />
               <Route
                 path="/dashboard"
                 element={

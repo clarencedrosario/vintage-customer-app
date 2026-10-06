@@ -15,6 +15,7 @@ import { api } from "@/convex/_generated/api";
 import type { Doc, Id } from "@/convex/_generated/dataModel";
 import { formatDateTimeIN } from "@/lib/format";
 import { useMutation, useQuery } from "convex/react";
+import { Link } from "react-router";
 import {
   Dialog,
   DialogContent,
@@ -138,6 +139,9 @@ export function AiStudio({ matterId }: { matterId: Id<"matters"> }) {
   const generateVoiceUploadUrlFn = useMutation(api.ai.generateVoiceUploadUrl);
 
   const [kind, setKind] = useState("summary");
+  // Turn-27: tier is offered ONLY when the server's entitlement actually
+  // lists it — the selector never advertises a model the org can't run.
+  const [modelTier, setModelTier] = useState("standard");
   const [inputNote, setInputNote] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
   const [launching, setLaunching] = useState(false);
@@ -229,6 +233,7 @@ export function AiStudio({ matterId }: { matterId: Id<"matters"> }) {
         kind: "voice_note",
         sourceIds: selected as Id<"aiSources">[],
         storageId: storageId as Id<"_storage">,
+        modelTier: effectiveTier,
       });
       toast.success(
         "Voice note saved — the assistant will transcribe it and suggest follow-ups for your approval.",
@@ -249,6 +254,7 @@ export function AiStudio({ matterId }: { matterId: Id<"matters"> }) {
         kind,
         sourceIds: selected as Id<"aiSources">[],
         inputNote: inputNote || undefined,
+        modelTier: effectiveTier,
       });
       setSelected([]);
       setInputNote("");
@@ -268,6 +274,10 @@ export function AiStudio({ matterId }: { matterId: Id<"matters"> }) {
   }
 
   const overCap = usage ? usage.remaining <= 0 : false;
+  const tierOptions = usage?.plan.availableTiers ?? [];
+  const effectiveTier: "standard" | "advanced" = tierOptions.some((t) => t.id === modelTier)
+    ? (modelTier as "standard" | "advanced")
+    : (tierOptions[0]?.id as "standard" | "advanced" | undefined) ?? "standard";
 
   return (
     <div className="space-y-6">
@@ -313,6 +323,37 @@ export function AiStudio({ matterId }: { matterId: Id<"matters"> }) {
       )}
 
       <div className="grid gap-6 lg:grid-cols-[380px_1fr]">
+        {/* Plan-aware entitlement banners (turn 27): non-AI users keep the
+            full workspace; exhausted users see usage, reset and options —
+            never a silent charge and never a dead button without a reason. */}
+        {usage?.plan.reason && !usage.plan.aiEnabled && (
+          <div className="rule-frame border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 lg:col-span-2">
+            <p className="font-medium">AI is not available on this plan right now.</p>
+            <p className="mt-1 text-xs leading-relaxed">{usage.plan.reason}</p>
+            <Link to="/billing" className="mt-2 inline-block text-xs underline underline-offset-2">
+              Review plans &amp; AI usage →
+            </Link>
+          </div>
+        )}
+        {usage && usage.plan.aiEnabled && usage.remaining <= 0 && (
+          <div className="rule-frame border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 lg:col-span-2">
+            <p className="font-medium">This month's AI allowance is exhausted.</p>
+            <p className="mt-1 text-xs leading-relaxed">
+              {usage.tokens.toLocaleString("en-IN")} of{" "}
+              {usage.plan.allowanceTokens == null
+                ? "—"
+                : usage.plan.allowanceTokens.toLocaleString("en-IN")}{" "}
+              tokens used{usage.plan.reserved > 0 && ` · ${usage.plan.reserved.toLocaleString("en-IN")} reserved by requests in progress`}. The allowance resets on{" "}
+              {formatDateTimeIN(usage.plan.resetAt)}. Nothing is charged automatically and your
+              saved work stays available — you can wait for the reset or upgrade to a plan with a
+              higher allowance.
+            </p>
+            <Link to="/billing" className="mt-2 inline-block text-xs underline underline-offset-2">
+              Review plans &amp; AI usage →
+            </Link>
+          </div>
+        )}
+
         {/* Left: sources */}
         <div className="space-y-4">
           <Card className="rule-frame bg-card">
@@ -505,9 +546,13 @@ export function AiStudio({ matterId }: { matterId: Id<"matters"> }) {
                   <Bot className="size-4" /> New request
                 </h3>
                 {usage && (
-                  <Badge variant="outline" className="font-mono text-xs">
-                    {usage.remaining.toLocaleString("en-IN")} /{" "}
-                    {usage.limit.toLocaleString("en-IN")} tokens left this month
+                  <Badge
+                    variant="outline"
+                    className={`font-mono text-xs ${usage.remaining <= 0 ? "border-amber-300 bg-amber-50 text-amber-900" : ""}`}
+                  >
+                    {usage.plan.allowanceTokens == null
+                      ? `${usage.remaining.toLocaleString("en-IN")} tokens left this month (allowance not configured)`
+                      : `${usage.remaining.toLocaleString("en-IN")} / ${usage.plan.allowanceTokens.toLocaleString("en-IN")} tokens left this month`}
                   </Badge>
                 )}
               </div>
@@ -527,6 +572,7 @@ export function AiStudio({ matterId }: { matterId: Id<"matters"> }) {
                           matterId,
                           kind: "ask_matter",
                           inputNote: askMatter,
+                          modelTier: effectiveTier,
                         });
                         setAskMatter("");
                         setOpenJob(jobId);
@@ -583,6 +629,26 @@ export function AiStudio({ matterId }: { matterId: Id<"matters"> }) {
                       ))}
                     </SelectContent>
                   </Select>
+                  {tierOptions.length > 0 && (
+                    <div className="space-y-1.5">
+                      <Label htmlFor="ai-tier" className="text-xs text-muted-foreground">
+                        AI model tier (as configured for your plan)
+                      </Label>
+                      <Select value={effectiveTier} onValueChange={setModelTier}>
+                        <SelectTrigger id="ai-tier" className="h-8">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {tierOptions.map((t) => (
+                            <SelectItem key={t.id} value={t.id}>
+                              {t.label}
+                              {t.modelId ? ` — ${t.modelId}` : ""}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="ai-note">

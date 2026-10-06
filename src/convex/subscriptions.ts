@@ -132,6 +132,16 @@ export const mySubscription = query({
           sub.status === "past_due" && !!sub.paymentLinkUrl && !sub.paymentLinkIdConsumed,
         lastInvoiceNumber: sub.lastInvoiceNumber ?? null,
         history: (sub.history ?? []).slice(-20).reverse(),
+        // Turn-27: the explicitly scheduled plan change (downgrades default
+        // to period end) surfaced so the billing UI can show and withdraw it.
+        scheduledChange: sub.scheduledPlanId
+          ? {
+              planId: sub.scheduledPlanId,
+              planName: plans.find((p) => p._id === sub.scheduledPlanId)?.name ?? "—",
+              at: sub.scheduledChangeAt ?? null,
+              note: sub.scheduledChangeNote ?? null,
+            }
+          : null,
       },
       plans,
       readOnly,
@@ -616,6 +626,33 @@ export const changePlan = mutation({
       effectiveAt: sub.currentPeriodEnd,
       scheduled: true as const,
     };
+  },
+});
+
+/** Withdraw a scheduled plan change (the current plan simply continues). */
+export const cancelScheduledPlanChange = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const ac = await requireWriteAccess(ctx);
+    requireCapability(ac, "billing.invoice");
+    const sub = await getSubForOrg(ctx, ac.org._id);
+    if (!sub) throw new Error("No subscription to change.");
+    if (!sub.scheduledPlanId) {
+      throw new Error("There is no scheduled plan change to withdraw.");
+    }
+    const target = sub.scheduledPlanId ? await ctx.db.get(sub.scheduledPlanId) : null;
+    await ctx.db.patch(sub._id, {
+      scheduledPlanId: undefined,
+      scheduledChangeAt: undefined,
+      scheduledChangeNote: undefined,
+      updatedAt: now(),
+    });
+    await history(
+      ctx,
+      sub,
+      `Scheduled plan change to ${target ? target.name : "another plan"} withdrawn — the current plan continues unchanged.`,
+    );
+    return { ok: true as const };
   },
 });
 

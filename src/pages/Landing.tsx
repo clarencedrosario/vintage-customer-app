@@ -69,6 +69,12 @@ export default function Landing() {
           </Link>
           <div className="flex items-center gap-3">
             <Link
+              to="/pricing"
+              className="hidden text-sm font-medium text-slate-300 underline-offset-4 hover:text-white hover:underline sm:inline"
+            >
+              Pricing
+            </Link>
+            <Link
               to="/find-a-lawyer"
               className="hidden text-sm font-medium text-slate-300 underline-offset-4 hover:text-white hover:underline sm:inline"
             >
@@ -121,6 +127,15 @@ export default function Landing() {
               </Link>
             </Button>
           </div>
+          <p className="mt-5 text-sm text-slate-400">
+            Plans from simple practice management to AI-assisted chambers ·{" "}
+            <Link
+              to="/pricing"
+              className="text-slate-200 underline-offset-4 hover:text-white hover:underline"
+            >
+              see plans &amp; pricing
+            </Link>
+          </p>
         </section>
 
         {/* Light section: capabilities */}

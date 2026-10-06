@@ -1,7 +1,10 @@
 import { useState } from "react";
 import { useAction, useMutation, useQuery } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
+import { Link } from "react-router";
 import { toast } from "sonner";
 import { api } from "@/convex/_generated/api";
+import { annualSavings, categoryLabel, monthlyEquivalent } from "@/lib/planCatalog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,6 +31,17 @@ function inr(minor: number): string {
     maximumFractionDigits: 2,
   })}`;
 }
+
+function tokens(n: number | null | undefined): string {
+  if (n == null) return "—";
+  return n.toLocaleString("en-IN");
+}
+
+const TIER_LABEL: Record<string, string> = {
+  none: "Not included",
+  standard: "Standard tier",
+  advanced: "Advanced tier",
+};
 
 function day(ts: number | null): string {
   if (!ts) return "—";
@@ -59,6 +73,10 @@ export function SubscriptionCard() {
   const resume = useMutation(api.subscriptions.resumeSubscription);
   const createToken = useMutation(api.subscriptions.createExportToken);
   const consume = useMutation(api.subscriptions.consumeExportToken);
+  // Turn-27 commercial extension: live AI entitlement + explicit plan changes.
+  const ai = useQuery(api.entitlements.myAiEntitlement);
+  const changePlan = useMutation(api.subscriptions.changePlan);
+  const withdrawScheduled = useMutation(api.subscriptions.cancelScheduledPlanChange);
 
   const [busy, setBusy] = useState(false);
   const [exportToken, setExportToken] = useState<string | null>(null);
@@ -148,6 +166,12 @@ export function SubscriptionCard() {
               <span>Current period ends: {day(sub.currentPeriodEnd)}</span>
               {sub.trialEndsAt && <span>Trial ends: {day(sub.trialEndsAt)}</span>}
               {sub.cancelAt && <span>Cancellation scheduled for: {day(sub.cancelAt)}</span>}
+              {sub.scheduledChange && (
+                <span>
+                  Plan change to <strong>{sub.scheduledChange.planName}</strong> scheduled for{" "}
+                  {day(sub.scheduledChange.at)}
+                </span>
+              )}
               {sub.lastInvoiceNumber && <span>Last invoice: {sub.lastInvoiceNumber}</span>}
             </div>
             <div className="flex flex-wrap gap-2 pt-1">
@@ -177,6 +201,22 @@ export function SubscriptionCard() {
               {sub.status !== "active" && sub.status !== "read_only" && sub.status !== "closed" && (
                 <Button size="sm" variant="outline" disabled={busy} onClick={openCheckout}>
                   New payment link
+                </Button>
+              )}
+              {sub.scheduledChange && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={async () => {
+                    try {
+                      await withdrawScheduled({});
+                      toast.success("Scheduled plan change withdrawn — the current plan continues.");
+                    } catch (err) {
+                      toast.error(err instanceof Error ? err.message : "Could not withdraw the change.");
+                    }
+                  }}
+                >
+                  Withdraw scheduled change
                 </Button>
               )}
               {sub.cancelAt && sub.status !== "closed" && (
@@ -232,12 +272,30 @@ export function SubscriptionCard() {
           </p>
         )}
 
+        {ai && <AiUsageBlock ai={ai} />}
+
         {data.plans.length > 0 && (
-          <div className="space-y-2">
-            <p className="type-label">Available plans</p>
+          <div className="space-y-2" id="plans">
+            <div className="flex items-center justify-between gap-2">
+              <p className="type-label">Available plans</p>
+              <Link to="/pricing" className="text-xs underline-offset-2 hover:underline">
+                Full plan comparison →
+              </Link>
+            </div>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {data.plans.map((p) => {
                 const current = sub?.planId === p._id && ["trialing", "active", "past_due", "grace"].includes(sub.status);
+                const monthlySibling =
+                  p.interval === "yearly" && p.planGroup
+                    ? data.plans.find((o) => o.planGroup === p.planGroup && o.interval === "monthly")
+                    : null;
+                const savings =
+                  p.interval === "yearly"
+                    ? annualSavings(monthlySibling?.priceMinor ?? null, p.priceMinor)
+                    : null;
+                const enterprise = p.category === "enterprise";
+                const unpriced = p.priceMinor === 0;
+                const live = !!sub && ["trialing", "active", "past_due"].includes(sub.status);
                 return (
                   <div
                     key={p._id}
@@ -246,45 +304,139 @@ export function SubscriptionCard() {
                     <div className="flex items-baseline justify-between gap-2">
                       <span className="font-medium">{p.name}</span>
                       <span>
-                        {inr(p.priceMinor)}
-                        <span className="text-xs text-muted-foreground">/{p.interval === "yearly" ? "yr" : "mo"}</span>
+                        {p.priceMinor > 0 ? (
+                          <>
+                            {inr(p.priceMinor)}
+                            <span className="text-xs text-muted-foreground">/{p.interval === "yearly" ? "yr" : "mo"}</span>
+                          </>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">price not set</span>
+                        )}
                       </span>
                     </div>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {categoryLabel(p.category)} · {p.billingUnit === "per_user" ? "per user" : "per firm"}
+                    </p>
+                    {p.interval === "yearly" && p.priceMinor > 0 && monthlyEquivalent(p.priceMinor) != null && (
+                      <p className="text-xs text-muted-foreground">≈ {inr(monthlyEquivalent(p.priceMinor)!)} per month, billed yearly</p>
+                    )}
+                    {savings && (
+                      <p className="mt-0.5 text-xs text-emerald-800">
+                        Saves {inr(savings.amountMinor)} a year ({savings.percent}%) vs paying monthly
+                      </p>
+                    )}
                     <p className="mt-1 text-xs text-muted-foreground">
                       {p.kind === "individual" ? "Single-lawyer chamber" : "Firm"} ·{" "}
-                      {p.seatLimit ? `${p.seatLimit} seats` : "unlimited seats"}
+                      {p.seatLimit ? `${p.seatLimit} seats` : "seat count not set"}
                       {p.trialDays ? ` · ${p.trialDays}-day trial` : ""}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {p.aiEnabled
+                        ? `AI included · ${tokens(p.aiAllowanceTokens)} tokens/mo${p.aiAdvancedModel ? " · advanced tier when configured" : ""}`
+                        : "No AI · practice workspace only"}
                     </p>
                     {p.features.length > 0 && (
                       <p className="mt-1 text-xs text-muted-foreground">{p.features.join(" · ")}</p>
                     )}
-                    <Button
-                      size="sm"
-                      variant={current ? "secondary" : "outline"}
-                      className="mt-2 h-7 w-full text-xs"
-                      disabled={busy || current}
-                      onClick={async () => {
-                        setBusy(true);
-                        try {
-                          const res = await start({ planId: p._id });
-                          if (res.needsPayment) {
-                            await openCheckout();
-                          } else {
-                            toast.success("Subscription started — trial is running.");
+                    {enterprise ? (
+                      <Button size="sm" variant="outline" className="mt-2 h-7 w-full text-xs" asChild>
+                        <Link to="/pricing#contact">Contact sales</Link>
+                      </Button>
+                    ) : live && !current ? (
+                      <div className="mt-2 grid grid-cols-2 gap-1">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs"
+                          disabled={busy || unpriced}
+                          onClick={async () => {
+                            if (
+                              !confirm(
+                                `Switch to ${p.name} NOW? The new plan applies immediately; proration is not calculated in this release — the next payment covers the new plan's full price.`,
+                              )
+                            )
+                              return;
+                            setBusy(true);
+                            try {
+                              await changePlan({ planId: p._id, timing: "immediately" });
+                              toast.success("Plan changed now. The next payment covers the new plan's full price.");
+                            } catch (err) {
+                              toast.error(err instanceof Error ? err.message : "Could not change plan.");
+                            } finally {
+                              setBusy(false);
+                            }
+                          }}
+                        >
+                          Switch now
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 text-xs"
+                          disabled={busy || unpriced}
+                          onClick={async () => {
+                            if (
+                              !confirm(
+                                `Switch to ${p.name} at the end of the current period (${day(sub?.currentPeriodEnd ?? null)})? The current plan stays active until then.`,
+                              )
+                            )
+                              return;
+                            setBusy(true);
+                            try {
+                              await changePlan({ planId: p._id, timing: "period_end" });
+                              toast.success(
+                                "Change scheduled for the end of the current period. You can withdraw it any time.",
+                              );
+                            } catch (err) {
+                              toast.error(err instanceof Error ? err.message : "Could not schedule the change.");
+                            } finally {
+                              setBusy(false);
+                            }
+                          }}
+                        >
+                          Period end
+                        </Button>
+                      </div>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant={current ? "secondary" : "outline"}
+                        className="mt-2 h-7 w-full text-xs"
+                        disabled={busy || current || unpriced}
+                        onClick={async () => {
+                          setBusy(true);
+                          try {
+                            const res = await start({ planId: p._id });
+                            if (res.needsPayment) {
+                              await openCheckout();
+                            } else {
+                              toast.success("Subscription started — trial is running.");
+                            }
+                          } catch (err) {
+                            toast.error(err instanceof Error ? err.message : "Could not start plan.");
+                          } finally {
+                            setBusy(false);
                           }
-                        } catch (err) {
-                          toast.error(err instanceof Error ? err.message : "Could not start plan.");
-                        } finally {
-                          setBusy(false);
-                        }
-                      }}
-                    >
-                      {current ? "Current plan" : "Choose plan"}
-                    </Button>
+                        }}
+                      >
+                        {current
+                          ? "Current plan"
+                          : unpriced
+                            ? "Configuration pending — not purchasable yet"
+                            : "Choose plan"}
+                      </Button>
+                    )}
                   </div>
                 );
               })}
             </div>
+            {!data.plans.some((p) => p.priceMinor > 0) && (
+              <p className="text-xs text-muted-foreground">
+                No plan has a configured price yet, so nothing can be purchased or charged. The
+                cards above show the honest plan structure; purchasing opens once the platform
+                operator configures prices and the payment provider.
+              </p>
+            )}
           </div>
         )}
 
@@ -381,5 +533,75 @@ export function SubscriptionCard() {
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+type AiEntitlement = FunctionReturnType<typeof api.entitlements.myAiEntitlement>;
+
+/**
+ * Live AI allowance for this chamber — the same numbers the server gate
+ * enforces (used + reserved against the plan allowance, reset date, tier
+ * availability). No invented quotas, no silent charges: when access is
+ * refused the exact reason and the approved options are shown.
+ */
+function AiUsageBlock({ ai }: { ai: AiEntitlement }) {
+  const pct =
+    ai.usage.allowance && ai.usage.allowance > 0
+      ? Math.min(100, Math.round((ai.usage.used / ai.usage.allowance) * 100))
+      : 0;
+  return (
+    <div className="space-y-3 rounded-md border border-border bg-muted/30 p-4" id="ai-usage">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="type-label">AI usage — this month</p>
+        <div className="flex items-center gap-2">
+          <Badge variant="outline" className="bg-background">
+            {TIER_LABEL[ai.tier] ?? ai.tier}
+          </Badge>
+          {ai.planName && <span className="text-xs text-muted-foreground">on {ai.planName}</span>}
+        </div>
+      </div>
+
+      {ai.usage.allowance != null ? (
+        <>
+          <div className="h-2 w-full overflow-hidden rounded-full bg-stone-200">
+            <div className="h-full rounded-full bg-emerald-700" style={{ width: `${pct}%` }} />
+          </div>
+          <p className="text-sm text-muted-foreground">
+            {tokens(ai.usage.used)} of {tokens(ai.usage.allowance)} tokens used
+            {ai.usage.reserved > 0 && <> · {tokens(ai.usage.reserved)} reserved by requests in progress</>} ·{" "}
+            {tokens(ai.usage.remaining)} remaining · resets {day(ai.resetAt)}
+          </p>
+          {!ai.allowed && ai.reason && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              {ai.reason}
+            </div>
+          )}
+        </>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          This plan does not include AI. The full practice workspace — drafting by hand, documents,
+          tasks, communication — stays available. Plans with AI are marked in the list below.
+        </p>
+      )}
+
+      {!ai.liveConfigured && (
+        <p className="text-xs text-amber-800">
+          AI execution is not configured on this platform yet. Requests can be prepared but will
+          report honestly that the model is unavailable — nothing is charged, and no allowance is
+          consumed by failed requests.
+        </p>
+      )}
+
+      {ai.availableTiers.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          Models offered to this chamber: {ai.availableTiers.map((t) => `${t.label} (${t.modelId})`).join(", ")}.
+          Advanced is offered only when the platform operator has actually configured it.
+        </p>
+      )}
+
+      {ai.aiFeatures.length > 0 && (
+        <p className="text-xs text-muted-foreground">Included AI features: {ai.aiFeatures.join(" · ")}</p>
+      )}
+    </div>
   );
 }
