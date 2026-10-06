@@ -95,6 +95,17 @@ export const mySubscription = query({
         storageLimitMb: p.storageLimitMb ?? null,
         features: p.features ?? [],
         trialDays: p.trialDays ?? null,
+        // Turn-27 commercial fields (display + change-plan UI).
+        category: p.category ?? null,
+        billingUnit: p.billingUnit ?? (p.kind === "firm" ? "per_firm" : "per_user"),
+        planGroup: p.planGroup ?? null,
+        aiEnabled: p.aiEnabled === true,
+        aiFeatures: p.aiFeatures ?? [],
+        aiAllowanceTokens: p.aiAllowanceTokens ?? null,
+        aiAdvancedModel: p.aiAdvancedModel === true,
+        taxInclusive: p.taxInclusive ?? null,
+        renewalTerms: p.renewalTerms ?? null,
+        overagePolicy: p.overagePolicy ?? null,
       }));
 
     if (!sub) {
@@ -193,6 +204,25 @@ export const upsertPlan = mutation({
     features: v.optional(v.array(v.string())),
     trialDays: v.optional(v.number()),
     active: v.boolean(),
+    // Turn-27 commercial fields (all optional — existing callers keep working).
+    category: v.optional(
+      v.union(
+        v.literal("practice"),
+        v.literal("practice_ai"),
+        v.literal("firm_ai"),
+        v.literal("enterprise"),
+      ),
+    ),
+    billingUnit: v.optional(v.union(v.literal("per_user"), v.literal("per_firm"))),
+    planGroup: v.optional(v.string()),
+    aiEnabled: v.optional(v.boolean()),
+    aiFeatures: v.optional(v.array(v.string())),
+    aiAllowanceTokens: v.optional(v.number()),
+    aiAdvancedModel: v.optional(v.boolean()),
+    aiMaxConcurrentJobs: v.optional(v.number()),
+    taxInclusive: v.optional(v.boolean()),
+    renewalTerms: v.optional(v.string()),
+    overagePolicy: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const admin = await getCurrentUser(ctx);
@@ -210,6 +240,37 @@ export const upsertPlan = mutation({
     if (args.seatLimit !== undefined && args.seatLimit < 1) {
       throw new Error("Seat limit must be at least 1 when set.");
     }
+    // Commercial honesty validations (turn 27).
+    if (args.category === "enterprise" && args.priceMinor > 0) {
+      throw new Error(
+        "Enterprise plans are contact-sales only — leave the price at 0 so nothing is advertised as purchasable.",
+      );
+    }
+    if (args.aiAllowanceTokens !== undefined && args.aiAllowanceTokens < 0) {
+      throw new Error("AI allowance cannot be negative.");
+    }
+    if (args.aiAllowanceTokens !== undefined && args.aiAllowanceTokens > 0 && args.aiEnabled !== true) {
+      throw new Error("Set aiEnabled to true when configuring an AI allowance.");
+    }
+    if (args.aiAdvancedModel === true && args.aiEnabled !== true) {
+      throw new Error("Advanced-model access requires the plan to include AI.");
+    }
+    if (args.aiMaxConcurrentJobs !== undefined && (args.aiMaxConcurrentJobs < 1 || args.aiMaxConcurrentJobs > 20)) {
+      throw new Error("Concurrent AI jobs must be between 1 and 20.");
+    }
+    const aiFields = {
+      category: args.category,
+      billingUnit: args.billingUnit ?? (args.kind === "firm" ? ("per_firm" as const) : ("per_user" as const)),
+      planGroup: args.planGroup?.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "").slice(0, 24) || undefined,
+      aiEnabled: args.aiEnabled,
+      aiFeatures: args.aiFeatures?.map((f) => f.trim().slice(0, 80)).filter(Boolean).slice(0, 12),
+      aiAllowanceTokens: args.aiAllowanceTokens,
+      aiAdvancedModel: args.aiAdvancedModel,
+      aiMaxConcurrentJobs: args.aiMaxConcurrentJobs,
+      taxInclusive: args.taxInclusive,
+      renewalTerms: args.renewalTerms?.trim().slice(0, 400) || undefined,
+      overagePolicy: args.overagePolicy?.trim().slice(0, 400) || undefined,
+    };
     const existing = args.planId
       ? await ctx.db.get(args.planId)
       : (
@@ -228,6 +289,7 @@ export const upsertPlan = mutation({
         features: args.features?.map((f) => f.trim().slice(0, 60)).filter(Boolean).slice(0, 12),
         trialDays: args.trialDays,
         active: args.active,
+        ...aiFields,
         updatedAt: now(),
       });
       await ctx.db.insert("platformAdminAudit", {
@@ -252,6 +314,7 @@ export const upsertPlan = mutation({
       features: args.features?.map((f) => f.trim().slice(0, 60)).filter(Boolean).slice(0, 12),
       trialDays: args.trialDays,
       active: args.active,
+      ...aiFields,
       createdAt: now(),
     });
     await ctx.db.insert("platformAdminAudit", {
@@ -479,6 +542,84 @@ export const resumeSubscription = mutation({
 });
 
 // ---------------------------------------------------------------------
+// Plan changes (turn 27) — upgrades apply immediately; downgrades (or
+// any deferred change) apply at the end of the current period via the
+// expiry scan. PRORATION POLICY, stated honestly everywhere it matters:
+// this release does NOT calculate proration — a change made today simply
+// changes which plan's price the NEXT payment link covers; no automatic
+// credit or differential charge is issued. Nothing is charged by this
+// mutation itself; live charges additionally require the payment
+// provider to be configured and an explicit approval by the operator.
+// ---------------------------------------------------------------------
+
+export const changePlan = mutation({
+  args: {
+    planId: v.id("saasPlans"),
+    timing: v.union(v.literal("immediately"), v.literal("period_end")),
+  },
+  handler: async (ctx, args) => {
+    const ac = await requireWriteAccess(ctx);
+    requireCapability(ac, "billing.invoice");
+    const sub = await getSubForOrg(ctx, ac.org._id);
+    if (!sub) throw new Error("No subscription to change.");
+    if (!["trialing", "active", "past_due"].includes(sub.status)) {
+      throw new Error("The plan can be changed only while the subscription is live.");
+    }
+    const plan = await ctx.db.get(args.planId);
+    if (!plan || !plan.active) throw new Error("That plan is not available.");
+    if (plan.category === "enterprise") {
+      throw new Error(
+        "Enterprise plans are arranged with our team — use the contact-sales workflow on the pricing page.",
+      );
+    }
+    if (plan._id === sub.planId && !sub.scheduledPlanId) {
+      throw new Error("This organization is already on that plan.");
+    }
+    if (plan.kind === "individual" && ac.org.kind === "firm") {
+      throw new Error("Individual plans are for single-lawyer chambers.");
+    }
+    const t = now();
+    if (args.timing === "immediately") {
+      await ctx.db.patch(sub._id, {
+        planId: plan._id,
+        interval: plan.interval,
+        seatLimit: plan.seatLimit,
+        storageLimitMb: plan.storageLimitMb,
+        scheduledPlanId: undefined,
+        scheduledChangeAt: undefined,
+        scheduledChangeNote: undefined,
+        updatedAt: t,
+      });
+      await history(
+        ctx,
+        sub,
+        `Plan changed to ${planLabel(plan, plan.interval)} effective immediately (${new Date(t).toISOString().slice(0, 10)}). Proration: not calculated in this release — the next payment covers the new plan's full price.`,
+      );
+      await ctx.db.patch(ac.org._id, {
+        subscription: { planId: plan._id, status: sub.status },
+      });
+      return { applied: true as const, effectiveAt: t, scheduled: false as const };
+    }
+    await ctx.db.patch(sub._id, {
+      scheduledPlanId: plan._id,
+      scheduledChangeAt: sub.currentPeriodEnd,
+      scheduledChangeNote: `Change to ${plan.name} (${plan.interval})`,
+      updatedAt: t,
+    });
+    await history(
+      ctx,
+      sub,
+      `Plan change to ${planLabel(plan, plan.interval)} scheduled for ${new Date(sub.currentPeriodEnd).toISOString().slice(0, 10)} (end of the current period). The current plan stays active until then.`,
+    );
+    return {
+      applied: false as const,
+      effectiveAt: sub.currentPeriodEnd,
+      scheduled: true as const,
+    };
+  },
+});
+
+// ---------------------------------------------------------------------
 // Expiry engine (internal, driven by crons.ts daily)
 // ---------------------------------------------------------------------
 
@@ -490,6 +631,40 @@ export const runExpiryScan = internalMutation({
     let changed = 0;
     for (const sub of subs) {
       if (["closed", "read_only"].includes(sub.status)) continue;
+
+      // 0) Scheduled plan change (turn 27): applies at its explicit
+      // effective date, before any other lifecycle transition.
+      if (sub.scheduledPlanId && sub.scheduledChangeAt && t >= sub.scheduledChangeAt) {
+        const target = await ctx.db.get(sub.scheduledPlanId);
+        if (target && target.active) {
+          await ctx.db.patch(sub._id, {
+            planId: target._id,
+            interval: target.interval,
+            seatLimit: target.seatLimit,
+            storageLimitMb: target.storageLimitMb,
+            scheduledPlanId: undefined,
+            scheduledChangeAt: undefined,
+            scheduledChangeNote: undefined,
+            updatedAt: t,
+          });
+          await history(
+            ctx,
+            sub,
+            `Scheduled change applied — plan is now ${planLabel(target, target.interval)} from ${new Date(t).toISOString().slice(0, 10)}.`,
+          );
+          await ctx.db.patch(sub.orgId, { subscription: { planId: target._id, status: sub.status } });
+        } else {
+          await ctx.db.patch(sub._id, {
+            scheduledPlanId: undefined,
+            scheduledChangeAt: undefined,
+            scheduledChangeNote: undefined,
+            updatedAt: t,
+          });
+          await history(ctx, sub, "Scheduled plan change cancelled — the target plan is no longer available.");
+        }
+        changed++;
+        continue;
+      }
 
       // 1) Trial expiry -> past_due (payment window) 
       if (sub.status === "trialing" && sub.trialEndsAt && t > sub.trialEndsAt) {

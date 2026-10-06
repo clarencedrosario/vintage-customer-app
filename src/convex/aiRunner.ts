@@ -33,8 +33,9 @@ import {
   wrapUntrusted,
   type DefenceSignal,
 } from "../lib/aiDefence";
+import { resolveModelId } from "../lib/aiModels";
 
-const MODEL = "gpt-4o-mini";
+const MODEL = "gpt-4o-mini"; // Standard tier default; overridden per job via resolveModelId.
 const TIMEOUT_MS = 90_000;
 const MAX_COMPLETION_TOKENS = 2_000;
 const MONTHLY_TOKEN_LIMIT = 2_000_000;
@@ -225,6 +226,7 @@ async function callOpenAI(
   system: string,
   user: string,
   wantsJson: boolean,
+  model: string,
 ): Promise<Parsed> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -240,7 +242,7 @@ async function callOpenAI(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: MODEL,
+        model,
         messages: [
           { role: "system", content: system },
           { role: "user", content: user },
@@ -264,7 +266,7 @@ async function callOpenAI(
     return {
       ok: true,
       text,
-      model: json.model ?? MODEL,
+      model: json.model ?? model,
       usage: {
         prompt: json.usage?.prompt_tokens ?? 0,
         completion: json.usage?.completion_tokens ?? 0,
@@ -469,14 +471,25 @@ export const runJob = internalAction({
       });
     }
 
-    // Re-check usage at run time (cap could have been hit since enqueue).
-    const month = await ctx.runQuery(internal.ai.usageForRunner, {
+    // Re-check entitlement + usage at run time (plan/allowance could have
+    // changed since enqueue — downgrade, unpaid renewal, concurrent jobs).
+    const meter = (await ctx.runQuery(internal.ai.usageForRunner, {
       orgId: payload.orgId,
-    });
-    if (month >= MONTHLY_TOKEN_LIMIT) {
+    })) as { allowed: boolean; reason: string | null; remaining: number };
+    if (!meter.allowed) {
       await ctx.runMutation(internal.ai.attachError, {
         jobId: args.jobId,
-        error: "The chamber's monthly AI allowance was exhausted before this request could run.",
+        error:
+          meter.reason ??
+          "AI is no longer available on this plan, so the request was not run. Saved drafts and research records are untouched.",
+      });
+      return;
+    }
+    if (meter.remaining <= 0) {
+      await ctx.runMutation(internal.ai.attachError, {
+        jobId: args.jobId,
+        error:
+          "The monthly AI allowance was used up by other requests before this one could run. The request is saved; nothing was charged; it can be retried after the allowance resets or the plan is upgraded.",
       });
       return;
     }
@@ -521,7 +534,21 @@ export const runJob = internalAction({
       payload.legalContext ?? null,
     );
 
-    const result = await callOpenAI(apiKey, SYSTEM, user, wantsJson);
+    // Tier→model resolution (turn 27): "advanced" runs ONLY when the
+    // operator configured ADVOKATE_ADVANCED_MODEL; anything else runs on
+    // the Standard tier. A missing tier is an honest error, never a
+    // silent substitution.
+    const modelPick = resolveModelId(
+      payload.modelTier,
+      !!apiKey,
+      (process.env.ADVOKATE_ADVANCED_MODEL ?? "").trim() || null,
+    );
+    if (!modelPick.ok) {
+      await ctx.runMutation(internal.ai.attachError, { jobId: args.jobId, error: modelPick.error });
+      return;
+    }
+
+    const result = await callOpenAI(apiKey, SYSTEM, user, wantsJson, modelPick.modelId);
     if (!result.ok) {
       await ctx.runMutation(internal.ai.attachError, {
         jobId: args.jobId,

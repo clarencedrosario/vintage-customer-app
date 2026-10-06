@@ -1873,6 +1873,34 @@ export default defineSchema({
     trialDays: v.optional(v.number()),
     active: v.boolean(),
     sortOrder: v.optional(v.number()),
+    // ---- Commercial-release plan configuration (turn 27) ----
+    // Category groups the catalog (A–D). Names stay editable; category
+    // decides WHAT the plan is sold as and what the server enforces.
+    category: v.optional(
+      v.union(
+        v.literal("practice"),
+        v.literal("practice_ai"),
+        v.literal("firm_ai"),
+        v.literal("enterprise"),
+      ),
+    ),
+    // How the price is charged: per user (seat) or per firm.
+    billingUnit: v.optional(v.union(v.literal("per_user"), v.literal("per_firm"))),
+    // Groups the monthly/yearly variants of the SAME tier so the pricing
+    // page can compute savings from configured prices only.
+    planGroup: v.optional(v.string()),
+    // AI entitlement. Absence/false = an AI-free plan (requirement 3).
+    aiEnabled: v.optional(v.boolean()),
+    aiFeatures: v.optional(v.array(v.string())),
+    aiAllowanceTokens: v.optional(v.number()),
+    // Plan may request the advanced model tier (only offered when the
+    // operator has actually configured ADVOKATE_ADVANCED_MODEL).
+    aiAdvancedModel: v.optional(v.boolean()),
+    aiMaxConcurrentJobs: v.optional(v.number()),
+    // Tax treatment + policy copy as configured (displayed verbatim).
+    taxInclusive: v.optional(v.boolean()),
+    renewalTerms: v.optional(v.string()),
+    overagePolicy: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.optional(v.number()),
   }).index("by_code", ["code"]),
@@ -1910,6 +1938,11 @@ export default defineSchema({
     providerPaymentId: v.optional(v.string()),
     paidAt: v.optional(v.number()),
     lastInvoiceNumber: v.optional(v.string()),
+    // Scheduled plan change (downgrades apply at period end; upgrades are
+    // immediate — see subscriptions.changePlan). Explicit effective date.
+    scheduledPlanId: v.optional(v.id("saasPlans")),
+    scheduledChangeAt: v.optional(v.number()),
+    scheduledChangeNote: v.optional(v.string()),
     history: v.optional(
       v.array(
         v.object({
@@ -1970,6 +2003,19 @@ export default defineSchema({
     usedAt: v.optional(v.number()),
     createdAt: v.number(),
   }).index("by_org", ["orgId"]),
+
+  // Enterprise plan enquiries (contact-sales workflow). Publicly
+  // submittable, platform-operator readable; no org attached — the
+  // enquirer does not have an account yet.
+  enterpriseLeads: defineTable({
+    name: v.string(),
+    email: v.string(),
+    orgName: v.optional(v.string()),
+    orgSize: v.optional(v.string()),
+    requirements: v.string(),
+    status: v.union(v.literal("new"), v.literal("contacted"), v.literal("closed")),
+    createdAt: v.number(),
+  }).index("by_created", ["createdAt"]),
 
   // Audited platform-owner administrative actions (staff/owner
   // management, plan changes, exceptional access). One row per action.
@@ -2267,6 +2313,12 @@ export default defineSchema({
     durationMs: v.optional(v.number()),
     // Used tokens for the monthly usage-cap meter.
     monthKey: v.optional(v.string()), // YYYY-MM (IST)
+    // Plan-aware AI entitlement (turn 27): the token ESTIMATE reserved
+    // while this job is pending (reconciled to actual usage on success;
+    // released on failure/expiry because reservation counts only pending
+    // jobs), and the tier the plan entitles this job to.
+    reservedTokens: v.optional(v.number()),
+    modelTier: v.optional(v.union(v.literal("standard"), v.literal("advanced"))),
     // For voice jobs: the preserved recording + transcript.
     transcript: v.optional(v.string()),
     storageId: v.optional(v.id("_storage")),

@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
+import type { MutationCtx } from "./_generated/server";
 import {
   internalMutation,
   internalQuery,
@@ -8,6 +9,7 @@ import {
 } from "./_generated/server";
 import { can, requireAccess, requireMatter } from "./access";
 import { insertResearchAttempt } from "./researchCore";
+import { AI_RESERVE_ESTIMATE_TOKENS } from "./entitlements";
 import {
   resolveJurisdiction,
   governingLegalDate,
@@ -49,6 +51,29 @@ export function monthKeyIST(at = Date.now()): string {
     year: "numeric",
     month: "2-digit",
   }).format(at);
+}
+
+/**
+ * Plan-aware AI gate (commercial release, turn 27). Every entry point —
+ * prepareJob, retries, briefings, legal research — resolves the org's
+ * entitlement through entitlements.orgAiEntitlement and throws the
+ * honest reason when AI is unavailable, the allowance is exhausted, or
+ * the plan's concurrency limit is in use. Returns the entitlement so the
+ * caller can reserve the estimate and record the tier.
+ */
+async function aiGate(
+  ctx: Pick<MutationCtx, "runQuery">,
+  orgId: import("./_generated/dataModel").Id<"organizations">,
+  requestedTier?: "standard" | "advanced",
+): Promise<{ tier: "none" | "standard" | "advanced"; remainingTokens: number }> {
+  const ent = await ctx.runQuery(internal.entitlements.orgAiEntitlement, { orgId });
+  if (!ent.allowed) throw new Error(ent.reason ?? "AI is unavailable on this plan.");
+  if (requestedTier === "advanced" && !ent.availableTiers.some((t) => t.id === "advanced")) {
+    throw new Error(
+      "The Advanced model tier is not available here — it exists only when the platform operator has configured an advanced model and your plan maps to it. Retry on the Standard tier.",
+    );
+  }
+  return { tier: ent.tier, remainingTokens: ent.usage.remaining };
 }
 
 // ---------------------------------------------------------------------
@@ -283,7 +308,7 @@ export const AUTO_SOURCE_KINDS: ReadonlySet<string> = new Set([
 export const MORNING_BRIEFING_MATTER_CAP = 8;
 export const MORNING_BRIEFING_SOURCE_CAP = 10;
 
-/** Organization tokens used this month (IST month key). */
+/** Organization tokens used this month (IST month key) + plan entitlement. */
 export const usage = query({
   args: {},
   handler: async (ctx) => {
@@ -295,12 +320,46 @@ export const usage = query({
       .collect();
     const tokens =
       rows.reduce((s, r) => s + (r.promptTokens ?? 0) + (r.completionTokens ?? 0), 0);
+    // Plan-aware entitlement (turn 27). Display-only: the gate itself
+    // runs at every request path. allowance null = no AI plan — never
+    // displayed as unlimited.
+    const ent = (await ctx.runQuery(internal.entitlements.orgAiEntitlement, {
+      orgId: ac.org._id,
+    })) as {
+      allowed: boolean;
+      reason: string | null;
+      tier: "none" | "standard" | "advanced";
+      usage: { used: number; reserved: number; allowance: number | null; remaining: number };
+      resetAt: number;
+      planName: string | null;
+      status: string;
+      availableTiers: { id: string; label: string; modelId: string | null; provider: string }[];
+      aiFeatures: string[];
+      liveConfigured: boolean;
+    };
     return {
       monthKey: key,
       tokens,
-      limit: MONTHLY_TOKEN_LIMIT,
+      // Legacy field kept for existing readers: the effective ceiling.
+      limit: ent.usage.allowance ?? MONTHLY_TOKEN_LIMIT,
       jobs: rows.length,
-      remaining: Math.max(0, MONTHLY_TOKEN_LIMIT - tokens),
+      remaining:
+        ent.usage.allowance == null
+          ? Math.max(0, MONTHLY_TOKEN_LIMIT - tokens)
+          : ent.usage.remaining,
+      plan: {
+        aiEnabled: ent.tier !== "none",
+        tier: ent.tier,
+        allowanceTokens: ent.usage.allowance,
+        reserved: ent.usage.reserved,
+        resetAt: ent.resetAt,
+        planName: ent.planName,
+        status: ent.status,
+        reason: ent.reason,
+        availableTiers: ent.availableTiers,
+        aiFeatures: ent.aiFeatures,
+        liveConfigured: ent.liveConfigured,
+      },
     };
   },
 });
@@ -316,6 +375,9 @@ export const prepareJob = mutation({
     storageId: v.optional(v.id("_storage")),
     // Email integration: the filed email the job works from.
     emailMessageId: v.optional(v.id("messages")),
+    // Plan-aware model tier (turn 27): "advanced" only when the plan maps
+    // it AND the operator configured a real model — otherwise refused.
+    modelTier: v.optional(v.union(v.literal("standard"), v.literal("advanced"))),
   },
   handler: async (ctx, args) => {
     const ac = await requireAccess(ctx);
@@ -327,21 +389,13 @@ export const prepareJob = mutation({
       throw new Error("Unknown AI request kind.");
     }
 
-    // Usage cap: refuse before spending when the monthly budget is out.
+    // Plan-aware entitlement gate (turn 27): AI availability, monthly
+    // allowance with pending reservations, concurrency limit — enforced
+    // HERE before any job row exists. Paying for AI never bypasses the
+    // matter authorization above.
+    const ent = await aiGate(ctx, ac.org._id, args.modelTier);
     const key = monthKeyIST();
-    const month = await ctx.db
-      .query("aiJobs")
-      .withIndex("by_org_month", (q) => q.eq("orgId", ac.org._id).eq("monthKey", key))
-      .collect();
-    const used = month.reduce(
-      (s, r) => s + (r.promptTokens ?? 0) + (r.completionTokens ?? 0),
-      0,
-    );
-    if (used >= MONTHLY_TOKEN_LIMIT) {
-      throw new Error(
-        "The chamber's monthly AI usage allowance is exhausted. It resets next month; ask the firm owner to review usage.",
-      );
-    }
+    const reserved = Math.min(AI_RESERVE_ESTIMATE_TOKENS, ent.remainingTokens);
 
     const sourceIds = args.sourceIds ?? [];
     if (sourceIds.length > 12) {
@@ -413,6 +467,11 @@ export const prepareJob = mutation({
       emailMessageId: args.emailMessageId,
       emailBody: emailBody ?? undefined,
       monthKey: key,
+      // Turn 27: the token estimate this pending job holds against the
+      // plan allowance (reconciled on completion; released on failure —
+      // reservation counts only pending jobs).
+      reservedTokens: reserved > 0 ? reserved : undefined,
+      modelTier: args.modelTier ?? "standard",
       requestedById: ac.user._id,
       createdAt: Date.now(),
     });
@@ -688,6 +747,9 @@ export const jobForRunner = internalQuery({
       kind: job.kind,
       matterId: job.matterId,
       orgId: job.orgId,
+      // Turn 27: the tier this job may use + the estimate it reserved.
+      modelTier: job.modelTier ?? null,
+      reservedTokens: job.reservedTokens ?? 0,
       // The requester: the wall check in the runner speaks for THIS user
       // (§32 Phase 7 — AI is a retrieval path too).
       requestedById: job.requestedById,
@@ -715,21 +777,30 @@ export const saveTranscript = internalMutation({
   },
 });
 
-/** Tokens already used this month by an org (internal, for the runner). */
+/**
+ * Runner-side entitlement re-check (internal): the plan gate runs again
+ * in the background path, because entitlement can change between request
+ * and execution (downgrade, unpaid renewal, allowance exhausted by
+ * concurrent jobs). usedTokens/remaining include the pending
+ * reservations; the runner refuses when nothing remains.
+ */
 export const usageForRunner = internalQuery({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
-    const key = monthKeyIST();
-    const rows = await ctx.db
-      .query("aiJobs")
-      .withIndex("by_org_month", (q) =>
-        q.eq("orgId", args.orgId).eq("monthKey", key),
-      )
-      .collect();
-    return rows.reduce(
-      (s, r) => s + (r.promptTokens ?? 0) + (r.completionTokens ?? 0),
-      0,
-    );
+    const ent = (await ctx.runQuery(internal.entitlements.orgAiEntitlement, {
+      orgId: args.orgId,
+    })) as {
+      allowed: boolean;
+      reason: string | null;
+      usage: { used: number; reserved: number; allowance: number | null; remaining: number };
+    };
+    return {
+      allowed: ent.allowed,
+      reason: ent.reason,
+      used: ent.usage.used,
+      reserved: ent.usage.reserved,
+      remaining: ent.usage.remaining,
+    };
   },
 });
 
@@ -962,21 +1033,11 @@ export const retryJob = mutation({
 
     // Other kinds keep the direct retry path: their inputs live on the
     // original job (filed email, transcript, extracted sources) and there
-    // is no clarification gate for them.
+    // is no clarification gate for them. The plan-aware entitlement gate
+    // applies to retries exactly as to fresh requests.
+    const ent = await aiGate(ctx, ac.org._id, job.modelTier ?? undefined);
     const key = monthKeyIST();
-    const month = await ctx.db
-      .query("aiJobs")
-      .withIndex("by_org_month", (q) => q.eq("orgId", ac.org._id).eq("monthKey", key))
-      .collect();
-    const used = month.reduce(
-      (s2, r) => s2 + (r.promptTokens ?? 0) + (r.completionTokens ?? 0),
-      0,
-    );
-    if (used >= MONTHLY_TOKEN_LIMIT) {
-      throw new Error(
-        "The chamber's monthly AI usage allowance is exhausted. It resets next month; ask the firm owner to review usage.",
-      );
-    }
+    const reserved = Math.min(AI_RESERVE_ESTIMATE_TOKENS, ent.remainingTokens);
     const id = await ctx.db.insert("aiJobs", {
       orgId: job.orgId,
       matterId: job.matterId,
@@ -991,6 +1052,8 @@ export const retryJob = mutation({
       sourceIds: job.sourceIds,
       transcript: job.transcript,
       storageId: job.storageId,
+      reservedTokens: reserved > 0 ? reserved : undefined,
+      modelTier: job.modelTier ?? "standard",
       requestedById: ac.user._id,
       createdAt: Date.now(),
     });
@@ -1018,21 +1081,10 @@ export const prepareMorningBriefing = mutation({
       throw new Error("You need note-writing permission to use AI assistance.");
     }
 
-    // Usage cap first (same policy as prepareJob).
+    // Plan-aware entitlement gate first (same policy as prepareJob).
+    const ent = await aiGate(ctx, ac.org._id);
     const key = monthKeyIST();
-    const month = await ctx.db
-      .query("aiJobs")
-      .withIndex("by_org_month", (q) => q.eq("orgId", ac.org._id).eq("monthKey", key))
-      .collect();
-    const used = month.reduce(
-      (s, r) => s + (r.promptTokens ?? 0) + (r.completionTokens ?? 0),
-      0,
-    );
-    if (used >= MONTHLY_TOKEN_LIMIT) {
-      throw new Error(
-        "The chamber's monthly AI usage allowance is exhausted. It resets next month; ask the firm owner to review usage.",
-      );
-    }
+    const reserved = Math.min(AI_RESERVE_ESTIMATE_TOKENS, ent.remainingTokens);
 
     // The caller's visible matters, most recently active first.
     const matters = await ctx.db
@@ -1131,6 +1183,8 @@ export const prepareMorningBriefing = mutation({
         // matters, snapshotted at request time (IST day window).
         emailDigest: emailDigest ?? undefined,
         monthKey: key,
+        reservedTokens: reserved > 0 ? reserved : undefined,
+        modelTier: "standard",
         requestedById: ac.user._id,
         createdAt: Date.now(),
       });

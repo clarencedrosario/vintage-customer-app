@@ -6,7 +6,8 @@ import {
   governingLegalDate,
   resolveJurisdiction,
 } from "../lib/legalIntel";
-import { MONTHLY_TOKEN_LIMIT, monthKeyIST } from "./ai";
+import { monthKeyIST } from "./ai";
+import { AI_RESERVE_ESTIMATE_TOKENS } from "./entitlements";
 
 /**
  * Shared core for legal-research request submission and retry (turn 10).
@@ -36,21 +37,15 @@ export async function insertResearchAttempt(
     carriedSourceVersions?: { stableKey: string; version: number }[];
   },
 ): Promise<Id<"aiJobs">> {
-  // Usage cap for this attempt's own cost (same policy as prepareJob).
+  // Plan-aware entitlement gate (turn 27) — the identical policy to
+  // prepareJob, enforced for legal research on BOTH the submit and the
+  // retry path (this core is the shared funnel).
+  const ent = await ctx.runQuery(internal.entitlements.orgAiEntitlement, {
+    orgId: args.orgId,
+  });
+  if (!ent.allowed) throw new Error(ent.reason ?? "AI is unavailable on this plan.");
   const key = monthKeyIST();
-  const month = await ctx.db
-    .query("aiJobs")
-    .withIndex("by_org_month", (q) => q.eq("orgId", args.orgId).eq("monthKey", key))
-    .collect();
-  const used = month.reduce(
-    (s, r) => s + (r.promptTokens ?? 0) + (r.completionTokens ?? 0),
-    0,
-  );
-  if (used >= MONTHLY_TOKEN_LIMIT) {
-    throw new Error(
-      "The chamber's monthly AI usage allowance is exhausted. It resets next month; ask the firm owner to review usage.",
-    );
-  }
+  const reserved = Math.min(AI_RESERVE_ESTIMATE_TOKENS, ent.usage.remaining);
 
   // Jurisdiction/date context: the matter's legal profile wins, else the
   // firm default (labelled not-confirmed, which the gate then asks about).
@@ -103,6 +98,10 @@ export async function insertResearchAttempt(
     monthKey: key,
     legalSourceVersions: sourceVersions,
     clarifications: gated ? clarifications : undefined,
+    // Reservation only when the runner will actually be scheduled — a
+    // blocked_clarification attempt holds no allowance.
+    reservedTokens: !gated && reserved > 0 ? reserved : undefined,
+    modelTier: "standard",
     requestedById: args.requestedById,
     createdAt: Date.now(),
   });
