@@ -3255,3 +3255,126 @@ remain pending). Backend + tests only, matching the phase scope.
 - Connector programme (32.17) reconciliation unchanged: India Code
   POCSO never retrieved; Gazette/MHA corpus imported via scripts;
   SCI empty-body; cron pass ≠ live ingestion proof — still OUTSTANDING.
+  [SUPERSEDED by Turn 26 below: POCSO text IN corpus via the Delhi
+  Police connector; cron-fired connector executions observed; eGazette
+  DPDP connector added — see the Turn-26 section for the current state.]
+
+---
+
+## Turn-26 — 6 Oct 2026: completion-language correction; eGazette connector made working (pinned public TLS); cron-fired connector evidence; AI config readiness
+
+### COMPLETION LANGUAGE (adopted as the binding reporting rule)
+
+Every artifact records exactly: **backend and UI implemented; automated
+checks passed.** Kept SEPARATE and never collapsed: browser verification,
+live provider execution, live source-connector scheduled verification,
+legal review. Nothing in this file claims all acceptance criteria passed.
+
+### BUILT (pushed to moonlit-elk-307; tsc 0)
+
+- `src/convex/gazetteCa.ts` — pinned PUBLIC Let's Encrypt/ISRG anchors
+  (ISRG Root X1 `96BCEC06…`, Root YR cross-signed `072639D0…`, YR2
+  `238B85A0…`; fingerprints verified against the AIA-published
+  originals byte-for-byte) + `node:https` GET helper. Root cause of the
+  turn-17 refusal: egazette.gov.in serves leaf + YR2 ONLY — a valid
+  chain missing its issuer; undici offers no extra-anchor channel.
+  Custom `ca` REPLACES the store → an untrusted chain still fails.
+  Verification ON; redirects HTTPS-only; ≤2 hops. Live module test
+  against the real host: 200, application/pdf, 987,228 bytes, `%PDF-`.
+- `src/convex/sourceNotices.ts` — `tlsFix:"lets-encrypt-aia"` flag
+  (exception posture) + `in:rules:dpdp-2025` notice (G.S.R. 846(E)
+  English gazette PDF, maxNo 23 / minSections 20, access basis
+  documenting the pinned-public-anchor rationale).
+- `src/convex/sourceConnector.ts` — notice-gated retrieval branch
+  (pinned path only where flagged; all other notices keep global
+  fetch); status-range gate replaces `resp.ok` with identical failure
+  recording. Gates/dedupe/failure flow untouched.
+- `src/convex/legalIntel.ts` — SeedSource kind widened (`rules`),
+  9th INDIA_SEED row (`in:rules:dpdp-2025`, honest mid-phase notes:
+  phased commencement, per-requirement dates stay in dpdpRegister with
+  `legalReview: outstanding`).
+- Tests: `sourceNotices.test.ts` (registry-shape invariants; exactly
+  one pinned-TLS host); `legalIntel.test.ts` seed count 8→9 (real
+  behavioral change; no assertions weakened).
+
+### LIVE RETRIEVAL + SCHEDULER EVIDENCE (moonlit-elk-307, read back via CLI)
+
+- DPDP Rules gazette, scheduled-path function: `updated` → **v2,
+  versionId `hh7zwadhdkne600vdmgkyn5h1h8frc95`**, runId
+  `h17ncg77gwye2y6rcxg4k8bnhs8frj7w`, bytesHash `13ee60a7…`, textHash
+  `331084de…`, **118,579 chars, 23/23 sections**, collectionDate
+  2026-10-06. Registry row seeded via `seedIndianCoreCli`
+  (sourcesCreated: 1 — idempotent, existing 8 untouched).
+- **Repeat-import dedupe (live):** second fetch → `unchanged` (runId
+  `h17g3teyzmv764n5bxcm09xmy58fr336`), SAME versionId, 0 new versions,
+  0 alerts. Independent local probe of the same URL: 2,492,944 bytes,
+  `%PDF-1.6`, raw sha256 `eabc7d05…` (project bytesHash uses its
+  base64 convention — both recorded).
+- **Scheduler OBSERVED executing (POCSO):** `connectorStatusCli` shows
+  daily `triggeredBy:"schedule"` runs 86,400,0xx ms apart (Oct 1–5
+  ticks), all `unchanged`, `lastCheckedAt` = Oct 5 **17:45:30 UTC** —
+  exactly the connector-sweep tick. Daily repeat-`unchanged` via cron
+  = scheduler executing AND dedupe holding, live. The Oct-5 18:30 open
+  (`outcome:null`) run is the TEXT sweep's by-design state-machine row
+  (awaiting the next 17:45 connector tick), NOT a hung fetch — and it
+  did NOT advance freshness (live demonstration of the invariant).
+- DPDP's own cron-fired tick pending (registered ~06:18 UTC, after the
+  Oct-6 tick). India Code deep-URL timeout re-confirmed (root 200 in
+  80ms / deep path 20s timeout — service-side, recorded, not bypassed);
+  SCI unchanged (registration-gated, no credentials — no bypass).
+
+### TESTS (turn 26)
+
+- Full suite: **48 files / 606 tests green** (turn-25 baseline 47/603
+  + `sourceNotices.test.ts` 3; no test skipped or weakened). `bun
+  convex dev --once` push clean; `tsc -b --noEmit` **0 errors**.
+
+### EVIDENCE SEPARATION (turn 26)
+
+- Implementation: files above (pushed; tsc 0).
+- Simulated: 48/606 green incl. the new registry tests.
+- Real retrieval: DPDP v2 + POCSO v2 values recorded in
+  `docs/OFFICIAL_SOURCES.md` §6 (verified against stored
+  fingerprints, not logs alone).
+- Scheduled execution: connector sweep OBSERVED via cron for POCSO
+  (daily Oct 1–5); DPDP's own cron tick pending.
+- Browser verification: **NONE** (tooling unavailable; walkthrough
+  added to `docs/S32_BROWSER_SCRIPT.md`, marked NOT EXECUTED).
+- Legal review: **OUTSTANDING** (POCSO 44/46 consolidation caveat;
+  DPDP bilingual + phased commencement).
+
+### READINESS TABLE (single summary — statuses are per-kind, never collapsed)
+
+| Feature | Implemented | Automated tests | Browser verified | Live integration | Remaining blocker |
+|---|---|---|---|---|---|
+| 32.1 Conflict review | ✓ backend+UI | ✓ (incl. drift pins) | ✗ PENDING | n/a (deterministic) | browser walkthrough P1 |
+| 32.2 Adverse authority + recheck | ✓ backend+UI | ✓ | ✗ PENDING | n/a (corpus-scoped search) | browser P2 |
+| 32.3 Matter-impact alerts | ✓ backend+UI | ✓ | ✗ PENDING | wired to live connector commits | browser P1/P2 companion |
+| 32.4 Evidence bundles | ✓ backend+UI | ✓ | ✗ PENDING | n/a | browser P2 |
+| 32.5 Filing readiness | ✓ backend+UI | ✓ | ✗ PENDING | n/a | browser P3 |
+| 32.6 Verified redaction | ✓ backend+UI | ✓ | ✗ PENDING | n/a (deterministic) | browser P4 |
+| 32.7 Walls/holds/emergency | ✓ backend+UI | ✓ | ✗ PENDING | n/a | browser P5/P6 |
+| 32.8 AI instruction defence | ✓ backend+UI | ✓ | ✗ PENDING | ✗ live-model path unexercised | OPENAI_API_KEY; browser P/4B |
+| 32.9 Multilingual review | ✓ backend+UI | ✓ | ✗ PENDING | n/a (no engine built, by design) | browser — |
+| 32.10 Client updates | ✓ backend+UI | ✓ | ✗ PENDING | outbox delivery path unexercised (no provider) | browser P7 |
+| 32.11 AI dashboards | ✓ backend+UI | ✓ | ✗ PENDING | ✗ honest `liveModelConfigured:false` | OPENAI_API_KEY |
+| 32.12 Firm export & exit | ✓ backend+UI | ✓ | ✗ PENDING | n/a (deterministic) | browser P8 |
+| 32.17 Connectors — POCSO | ✓ working | ✓ | ✗ PENDING | ✓ LIVE (v2 + cron-fired daily unchanged observed) | legal review (44/46 caveat) |
+| 32.17 Connectors — DPDP Rules | ✓ working | ✓ | ✗ PENDING | ✓ LIVE (v2 retrieved + dedupe); cron tick pending next sweep | legal review (bilingual/phased); Hindi counterpart |
+| 32.17 Connectors — India Code | registry only | ✓ | ✗ | ✗ deep-URL timeout (service-side) | recorded; NOT bypassed |
+| 32.17 Connectors — SCI | registry only | ✓ | ✗ | ✗ registration-gated APIs | credentials (authorization blocker) |
+
+### HONEST LIMITS (turn 26, recorded)
+
+- Browser tooling unavailable all turn: the 8-workflow walkthrough is a
+  script, not a result. Nothing in the table above may be read as
+  browser-verified.
+- OPENAI_API_KEY absent: no live model call was made or simulated;
+  dashboards honestly report unconfigured. Config: add the secret
+  **OPENAI_API_KEY** via the platform Keys/API keys UI (the runner
+  reads `process.env.OPENAI_API_KEY` in `aiRunner.ts`, the only reader).
+- DPDP gazette is bilingual (Hindi rule lines + English text); English
+  corpus only; phased commencement means per-requirement operative
+  dates remain a legal-review item, not a code item.
+- Production deploy, paid-service activation, destructive actions and
+  Git publishing remain prohibited; none performed.

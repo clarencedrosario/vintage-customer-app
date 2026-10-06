@@ -3,8 +3,9 @@
 Statuses used: **B** = backend implemented + automated tests green (turn 16–24) · **UI** =
 user-facing screen implemented this programme · **UI-PENDING** = no screen yet ·
 **BV-PENDING** = browser verification pending (browser tooling unavailable in this
-environment; manual script below). Backend tests: 43 files / 589 tests green (turn-24
-baseline, preserved).
+environment; manual script below — turn-26 addendum adds a prioritized 8-workflow
+walkthrough, still NOT EXECUTED). Backend tests: 48 files / 606 tests green (turn-26;
+turn-24 baseline 43/589 preserved, never weakened).
 
 Principle: **no twelve disconnected nav entries.** Matter-specific tools live in the
 matter file (`/matters/:matterId` tabs); firm administration lives in the Owner console
@@ -71,19 +72,26 @@ states; panel components and console/tab wiring are the next bounded phase.
 - **AI-result delivery:** instruction-defence records are visible only through
   `ai.getJob` (org-gated); the platform dashboard's leak guard remains the outer boundary.
 
-## Connector reconciliation (requirement 7) — summary (full report: ADVOKATE_PROGRESS.md)
+## Connector reconciliation (requirement 7) — summary (full report: OFFICIAL_SOURCES.md / ADVOKATE_PROGRESS.md)
 
-- **India Code (POCSO 2012)** — scheduled daily sweep (`crons.ts` official-source-connector-sweep
-  → `sourceConnector.scheduledConnectorSweep`) checks the Delhi Police official reproduction
-  notice. No automated full-text fetcher is configured: opened runs are completed by explicit
-  authenticated ingestion (`scripts/ingest-legal-text.mjs`). POCSO full text was NEVER retrieved
-  from official hosts (documented refusal log, turn 7); retrieval NOT exhaustive.
-- **Gazette of India (DPDP Rules 2025, BNS/BNSS/BSA 2023 gazette copies)** — MHA/Gazette PDFs
-  for BNS/BNSS/BSA/Constitution were successfully imported (sha256-verified, see
-  `docs/evidence/legal-corpus-manifest.json`); DPDP Rules text itself is registered, ingestion
-  pending official retrieval. No live automated fetcher runs against gazette.gov.in.
+- **India Code (POCSO 2012)** — **working connector** (turn 17, Delhi Police official
+  reproduction notice) with scheduled daily checks; **cron-fired executions OBSERVED**
+  (read back 2026-10-06: daily `triggeredBy:"schedule"` runs Oct 1–5, all `unchanged`,
+  `lastCheckedAt` = Oct 5 17:45:30 UTC). India Code deep URLs themselves still time out
+  (service-side; recorded, not bypassed) — retrieval NOT exhaustive.
+- **Gazette of India / eGazette (DPDP Rules 2025)** — **working connector** (turn 26):
+  the turn-17 TLS refusal was root-caused (host serves an incomplete chain: leaf + YR2 only)
+  and resolved by pinning the PUBLIC Let's Encrypt/ISRG anchors (`gazetteCa.ts`) —
+  verification fully enabled, nothing bypassed. Live retrieval on moonlit-elk-307:
+  `updated` → v2 `hh7zwadhdkne600vdmgkyn5h1h8frc95`, 118,579 chars, 23/23 sections;
+  repeat → `unchanged`. DPDP Rules text is now IN the corpus, indexed and citable;
+  its own cron-fired tick pending the next 17:45 UTC sweep. (BNS/BNSS/BSA/Constitution
+  gazette copies were imported earlier via MHA PDFs — sha256-verified, corpus manifest.)
 - **Supreme Court of India** — api.sci.gov.in returned an empty body at retrieval attempts
-  (turn 7 log); no connector registered; search over SCI material is unavailable.
+  (turn 7 log); APIs are registration-gated and no credentials exist → authorization
+  blocker; no connector registered; search over SCI material is unavailable. Nothing is
+  scraped around the gate.
 - A cron passing ≠ live ingestion: sweep rows + `legalSweepLogs` are the evidence trail;
   last successful scheduled execution evidence = sweep/connector run rows in the deployment
-  (verifiable in-product), not test assertions.
+  (verifiable in-product), not test assertions. See OFFICIAL_SOURCES.md §2e for the
+  five-way distinction applied to the current deployment state.
