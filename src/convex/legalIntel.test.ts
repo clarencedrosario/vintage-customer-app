@@ -80,6 +80,35 @@ async function seedFirm(t: ReturnType<typeof convexTest>) {
       createdAt: Date.now(),
     });
   });
+  // Turn 27: AI runs only for paid AI plans — seed the subscription the
+  // entitlement gate now requires (active chamber on an AI plan with a
+  // generous synthetic allowance and concurrency headroom).
+  const aiPlanId = await asUser(t, "system").run(async (ctx) =>
+    ctx.db.insert("saasPlans", {
+      code: "research_test_ai",
+      name: "Research Test AI",
+      kind: "firm",
+      priceMinor: 99_900,
+      interval: "monthly",
+      active: true,
+      category: "practice_ai",
+      planGroup: "research_test_ai",
+      aiEnabled: true,
+      aiAllowanceTokens: 1_000_000,
+      aiMaxConcurrentJobs: 5,
+      createdAt: Date.now(),
+    }),
+  );
+  await asUser(t, "system").run(async (ctx) => {
+    await ctx.db.insert("subscriptions", {
+      orgId,
+      planId: aiPlanId as never,
+      status: "active",
+      interval: "monthly",
+      currentPeriodEnd: Date.now() + 30 * 86_400_000,
+      createdAt: Date.now(),
+    });
+  });
   const clientId = await asUser(t, "system").run(async (ctx) =>
     ctx.db.insert("clients", {
       orgId,

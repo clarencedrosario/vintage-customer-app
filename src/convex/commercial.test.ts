@@ -823,3 +823,85 @@ describe("Subscription surface (mySubscription)", () => {
     expect(ms2.subscription!.awaitingPayment).toBe(false);
   });
 });
+
+describe("Case X-Ray incremental reassessment (prepareJob xrayDelta)", () => {
+  let t: ReturnType<typeof convexTest>;
+
+  beforeEach(() => {
+    t = convexTest(schema, modules);
+  });
+
+  afterEach(() => {
+    for (const k of ENV_KEYS) delete process.env[k];
+  });
+
+  it("first X-Ray stores no delta; the second records the source-level diff and supersedes the old job", async () => {
+    const s = await seedCommercialOrg(t);
+    // An AI plan with a live subscription — the gate prepareJob enforces.
+    await asUser(t, s.userId).mutation(api.subscriptions.changePlan, {
+      planId: s.aiM as never,
+      timing: "immediately",
+    });
+
+    // Four sources on the matter.
+    const src = (name: string) => ({ name, role: "evidence" as const, text: `Text of ${name}`, charCount: 20, extraction: "text_layer" as const, addedById: s.userId, createdAt: Date.now() });
+    const [fir, chargesheet, witness, medical] = await t.run(async (ctx) => [
+      await ctx.db.insert("aiSources", { orgId: s.orgId as never, matterId: s.matterId as never, ...src("FIR copy") }),
+      await ctx.db.insert("aiSources", { orgId: s.orgId as never, matterId: s.matterId as never, ...src("Charge sheet") }),
+      await ctx.db.insert("aiSources", { orgId: s.orgId as never, matterId: s.matterId as never, ...src("Witness statement") }),
+      await ctx.db.insert("aiSources", { orgId: s.orgId as never, matterId: s.matterId as never, ...src("Medical report") }),
+    ]);
+
+    // First X-Ray over [FIR, Charge sheet, Medical]: no previous job →
+    // no delta, and it reserves its estimate against the allowance.
+    const job1 = (await asUser(t, s.userId).mutation(api.ai.prepareJob, {
+      matterId: s.matterId as never,
+      kind: "xray",
+      sourceIds: [fir, chargesheet, medical] as never[],
+    })) as unknown as string;
+    let got = await asUser(t, s.userId).query(api.ai.getJob, { jobId: job1 as never });
+    expect(got!.xrayDelta).toBeNull();
+    expect(got!.supersededByJobId).toBeNull();
+
+    // The runner never runs here; mark the first assessment complete so
+    // it is genuinely the previous COMPLETED X-Ray.
+    await t.run(async (ctx) =>
+      ctx.db.patch(job1 as never, { status: "done", completedAt: Date.now() - 1000 }),
+    );
+
+    // The medical report is re-extracted AFTER that completion.
+    await t.run(async (ctx) => ctx.db.patch(medical as never, { documentUpdatedAt: Date.now() }));
+
+    // Second X-Ray over [Charge sheet, Witness, Medical]: FIR left the
+    // record, Witness is new, Medical changed, Charge sheet unchanged.
+    const job2 = (await asUser(t, s.userId).mutation(api.ai.prepareJob, {
+      matterId: s.matterId as never,
+      kind: "xray",
+      sourceIds: [chargesheet, witness, medical] as never[],
+    })) as unknown as string;
+    got = await asUser(t, s.userId).query(api.ai.getJob, { jobId: job2 as never });
+    expect(got!.xrayDelta).toMatchObject({
+      previousJobId: job1,
+      added: ["Witness statement"],
+      changed: ["Medical report"],
+      removed: ["FIR copy"],
+      unchangedCount: 1,
+    });
+    expect(got!.xrayDelta!.previousAt).toBeGreaterThan(0);
+
+    // The old assessment is flagged outdated through the user-facing
+    // read (never deleted), and history rows expose the pointer too.
+    const old = await asUser(t, s.userId).query(api.ai.getJob, { jobId: job1 as never });
+    expect(old!.supersededByJobId).toBe(job2);
+    const history = await asUser(t, s.userId).query(api.ai.listJobs, { matterId: s.matterId as never });
+    const oldRow = history.find((j) => j._id === job1);
+    expect(oldRow).toBeDefined();
+    expect(oldRow!.supersededByJobId).toBe(job2);
+
+    // Reservation model: job 1 is done (reservation released by
+    // construction), job 2 pending → exactly one 6,000-token hold.
+    const e = await asUser(t, s.userId).query(api.entitlements.myAiEntitlement, {});
+    expect(e.usage.reserved).toBe(6_000);
+    expect(e.usage.used).toBe(0);
+  });
+});

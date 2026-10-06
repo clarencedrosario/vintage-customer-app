@@ -3378,3 +3378,89 @@ legal review. Nothing in this file claims all acceptance criteria passed.
   dates remain a legal-review item, not a code item.
 - Production deploy, paid-service activation, destructive actions and
   Git publishing remain prohibited; none performed.
+
+## Turn-27 — 6 Oct 2026: commercial release — pricing page, AI entitlements, subscription lifecycle, plan-aware UX
+
+### Implemented (backend + UI, on existing infra — no duplicated subsystems)
+
+- **Public pricing `/pricing`** (new public route, linked from Landing header + hero):
+  category sections A–D, monthly/yearly selector, computed-only savings
+  (`annualSavings` null unless both prices exist and yearly < 12×monthly),
+  `monthlyEquivalent` derivation, "configuration pending" for unpriced plans,
+  `purchasingAvailable` honesty notice, enterprise contact-sales form →
+  `enterpriseLeads` with platform-console triage (status + audit row).
+  No invented prices, no "unlimited" labels anywhere in plan data (test-asserted).
+- **AI entitlement gate** — pure `evaluateAiAccess` (single decision function),
+  `entitlements.myAiEntitlement` / `orgAiEntitlement`; enforced in
+  `researchCore`/`ai` entry points incl. background paths. Reservation model:
+  6,000-token estimate per pending job, reconciled on completion, released by
+  construction on failure/expiry (only pending jobs count — test-asserted).
+- **Model tiers** — `src/lib/aiModels.ts`: standard = gpt-4o-mini; advanced =
+  ADVOKATE_ADVANCED_MODEL only. A tier is advertised ONLY when its model is
+  configured; an unconfigured advanced request is refused with disclosure
+  (never silently substituted). Plan permission ≠ model availability.
+- **Plan change lifecycle** — `changePlan` immediate (honest "proration not
+  calculated in this release" note) / period_end (explicit scheduled date +
+  note), `cancelScheduledPlanChange`, `runExpiryScan` applies scheduled
+  changes at their effective date (honest clearing when target disabled);
+  scheduled change surfaced + withdrawable in `SubscriptionCard`.
+- **Case X-Ray "what changed"** — request-time source-level delta
+  (`xrayDelta`) vs the previous completed X-Ray, previous job flagged
+  outdated via `supersededByJobId` (never deleted), incremental prompt
+  section + first-run disclosure variant, `XrayDisclosure` component.
+- **Plan-aware UX** — `AiUsageBlock` (tier badge, usage bar,
+  used/reserved/remaining/reset, reason banner, "no AI on this plan — full
+  workspace remains" copy, `liveConfigured:false` note, availableTiers with
+  model ids); AiStudio entitlement banners + tier selector from
+  `availableTiers` only; Platform plan editor (all commercial fields +
+  validations) + enterprise enquiries.
+- **Saved work on downgrade**: non-AI gate pauses AI only; 20-tab workspace
+  fully usable (explicit copy, tested reason text).
+
+### Automated checks (this turn, real runs)
+
+- `bunx convex dev --once` → push clean on moonlit-elk-307 (functions ready).
+- `bunx tsc -b --noEmit` → 0 errors.
+- `bunx vitest run` (by shard; full-suite single command exceeds the 180s
+  terminal cap — all 51 files executed across four shard runs, same suite):
+  - `src/lib` 24 files / 421 tests ✓ (includes NEW planCatalog 24 + aiModels 10)
+  - `src/convex` 22 files / 226 tests ✓ (includes NEW commercial 26 incl. the
+    X-Ray delta chain; legalIntel 17/17 after fixture fix)
+  - `src/components`+`src/pages` 5 files / 19 tests ✓
+  - **Total 51 files / 666 tests green** (turn-26 baseline 48/606 + 60).
+- Failures found and FIXED honestly (no assertions weakened):
+  (a) 4 wrong test expectations (Math.round(333.33)=333 not 334; en-IN
+  grouping "1,00,000"/"70,000 of 1,00,000" — the en-IN format is the
+  product behaviour, tests corrected); (b) scan tests patched
+  `scheduledChangeAt` relative to a future period end — corrected to the
+  past; (c) `legalIntel.test.ts` 6 failures = the new entitlement gate
+  correctly refusing subscription-less synthetic orgs — fixture now seeds
+  an active AI-plan subscription (all 17 original assertions intact);
+  (d) X-Ray delta test: synthetic aiSources rows initially missed the
+  schema-required `addedById`/`createdAt` — fixture corrected.
+
+### Status separation (turn 27, honest)
+
+| Area | Impl | Auto checks | Browser | Live/provider | Pending |
+|---|---|---|---|---|---|
+| Pricing page + catalog | ✓ | ✓ | ✗ NOT EXECUTED | ✗ purchasingAvailable:false (no Razorpay keys) | browser; legal review of copy |
+| Subscription mgmt + plan change | ✓ | ✓ | ✗ NOT EXECUTED | n/a (no charge paths run) | browser |
+| AI entitlements + reservations | ✓ | ✓ | ✗ NOT EXECUTED | ✗ no OPENAI_API_KEY → honest errors | live AI evaluation |
+| Advanced tier | ✓ (refuses honestly) | ✓ | ✗ | ✗ ADVOKATE_ADVANCED_MODEL unset → never offered (by design) | operator model config |
+| X-Ray delta + disclosure | ✓ | ✓ (delta chain tested in commercial suite) | ✗ NOT EXECUTED | model-dependent output unexercised | browser; live eval |
+| Enterprise contact | ✓ | ✓ | ✗ NOT EXECUTED | n/a (no email sending) | browser; reply workflow is human |
+
+### HONEST LIMITS (turn 27, recorded)
+
+- Browser walkthroughs NOT EXECUTED (tooling unavailable) — nothing above
+  may be read as browser-verified. Manual paths: `/pricing` → choose plan →
+  `/login` (blocked at purchasing until keys); `/billing` change/withdraw
+  flows; `/ai` tier selector + X-Ray disclosure; `/platform` plan editor.
+- No live charges are possible: purchasing requires configured Razorpay
+  keys AND operator approval; nothing was activated this turn.
+- Proration is NOT calculated in this release (stated in-product at change
+  time); renewal is via payment link, not advertised as automatic.
+- Merchant separation (CJ GLOBAL vs firm accounts) reuses the turn-25
+  machinery unchanged; not re-verified live this turn.
+- Production deploy, paid-service activation, destructive ops and Git
+  publishing remain prohibited; none performed.
