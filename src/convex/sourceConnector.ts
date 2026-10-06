@@ -21,6 +21,14 @@
 //   egazette.gov.in        TLS certificate chain FAILS verification —
 //                          proceeding would mean disabling certificate
 //                          verification. Refused.
+//                          [RESOLVED turn 26, verification still ON: the
+//                          server sends an incomplete chain (leaf + YR2
+//                          intermediate only); the connector now fetches
+//                          through the pinned PUBLIC Let's Encrypt root
+//                          and intermediates (gazetteCa.ts) so the full
+//                          chain VERIFIES — no verification disabled, no
+//                          access control bypassed. First live retrieval:
+//                          the DPDP Rules 2025 gazette PDF, below.]
 //   www.sci.gov.in         HTTP 200; robots.txt permissive; but
 //                          case/orders APIs are REGISTRATION-GATED and
 //                          no credentials exist → not authorized. The
@@ -58,6 +66,7 @@ import { action, internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { sha256Hex } from "./crypto";
 import { OFFICIAL_SOURCE_NOTICES as NOTICES } from "./sourceNotices";
+import { httpsGetWithPinnedCa } from "./gazetteCa";
 import { renderLines, detectSections } from "../lib/pdfExtract";
 import { loadPdfWorker } from "../lib/pdfWorkerLoader.js";
 
@@ -86,21 +95,39 @@ async function runFetch(
       `No connector notice registered for ${stableKey} — add one with publisher + URL + sanity bounds first.`,
     );
   }
-    // 1. RETRIEVE (plain GET, permitted-download posture).
-    const resp = await fetch(notice.url, {
-      headers: { "User-Agent": UA, Accept: "application/pdf" },
-      signal: AbortSignal.timeout(45_000),
-    });
-    if (!resp.ok) {
-      const err = `HTTP ${resp.status} from ${notice.url}`;
+    // 1. RETRIEVE (plain GET, permitted-download posture). Notices flagged
+    // tlsFix:"lets-encrypt-aia" fetch through the pinned PUBLIC anchors in
+    // gazetteCa.ts — the host sends an incomplete chain and global fetch
+    // cannot carry extra trust anchors. Certificate verification stays ON
+    // on both paths; a TLS failure REJECTS and is recorded like any other
+    // retrieval failure (never silently downgraded).
+    const retrieval =
+      notice.tlsFix === "lets-encrypt-aia"
+        ? await httpsGetWithPinnedCa(notice.url, {
+            "User-Agent": UA,
+            Accept: "application/pdf",
+          })
+        : await (async () => {
+            const resp = await fetch(notice.url, {
+              headers: { "User-Agent": UA, Accept: "application/pdf" },
+              signal: AbortSignal.timeout(45_000),
+            });
+            return {
+              status: resp.status,
+              contentType: resp.headers.get("content-type") ?? "",
+              bytes: new Uint8Array(await resp.arrayBuffer()),
+            };
+          })();
+    if (retrieval.status < 200 || retrieval.status >= 300) {
+      const err = `HTTP ${retrieval.status} from ${notice.url}`;
       await ctx.runMutation(internal.legalIntel.recordConnectorFailure, {
         stableKey,
         error: err,
       });
       throw new Error(err);
     }
-    const contentType = resp.headers.get("content-type") ?? "";
-    const buf = new Uint8Array(await resp.arrayBuffer());
+    const contentType = retrieval.contentType;
+    const buf = retrieval.bytes;
     if (buf.byteLength > 20_000_000) {
       const err = `Retrieved file too large (${buf.byteLength} bytes) — refused.`;
       await ctx.runMutation(internal.legalIntel.recordConnectorFailure, {

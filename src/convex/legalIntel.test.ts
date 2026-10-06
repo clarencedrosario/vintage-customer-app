@@ -122,9 +122,10 @@ describe("Advokate Legal Intelligence — real backend slice", () => {
     });
     const op = asUser(t, operatorId);
 
-    // Seed is idempotent.
+    // Seed is idempotent. Nine rows since turn 26 (the DPDP Rules 2025
+    // gazette source — in:rules:dpdp-2025 — joined the seed set).
     const first = await op.mutation(api.legalIntel.seedIndianCore, {});
-    expect(first.sourcesCreated).toBe(8);
+    expect(first.sourcesCreated).toBe(9);
     const second = await op.mutation(api.legalIntel.seedIndianCore, {});
     expect(second.sourcesCreated).toBe(0);
     expect(first.crossRefsCreated).toBeGreaterThan(0);

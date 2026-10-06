@@ -150,3 +150,31 @@ Setup: A = owner. B = associate (note.write but not matter.edit). A client user 
 | 4.21 | Revoke export with <10 chars | Refused; with reason → status revoked; further downloads refused |
 
 ---
+
+## Turn-26 addendum — prioritized 8-workflow walkthrough (**NOT EXECUTED**)
+
+Status: **WALKTHROUGH ONLY — every step below is UNVERIFIED.** Browser tooling
+remained unavailable at the end of turn 26; this section translates the
+highest-value end-to-end workflows into a prioritized, role-and-route-exact
+script. Prioritization principle: workflows whose failure would produce a
+WRONG legal artifact (mis-cited authority, unredacted derivative, walled
+data leak, misrepresented export) outrank convenience surfaces. Detailed
+step tables live in Groups 0–4 above; this addendum binds each workflow to
+its group steps, the exact route, the minimum fixture set, and the expected
+result that must be observed (not assumed).
+
+| # | Priority / workflow | Route · fixtures · group steps | Expected results to OBSERVE |
+|---|---|---|---|
+| 1 | **P1 — Conflicting-evidence review** (32.1): compare conflicting passages, save a decision, reload | `/matters/:matterId` → **Review** tab (ConflictReviewPanel). Fixtures A (decider) + B (note-writer, no matter.edit). Group 0 steps 0.1–0.10 | Two conflicting statements side-by-side WITH provenance (kind labels, source refs); deciding REQUIRES a note; decision + note + actor persist across reload; history dialog shows the act; re-scan does not lose recorded decisions |
+| 2 | **P2 — Citation inspect + recheck vs source** (32.2): recheck a bundle/job's citations against stored source text | `/research` → **Adverse check** panel (recheck over latest job/bundle) + matter Review tab. Fixture A. Group 1 (1.x) steps | Recheck runs against the CURRENT stored version; changed/unavailable rows are listed, never silently passed; recording a decision requires the note threshold; a citation that fails against stored text shows as failed, not "cited" |
+| 3 | **P3 — Filing approval → invalidation** (32.5): approve ready, then change a reviewed document, confirm auto-invalidation | `/matters/:matterId` → **Filing** tab (FilingReadinessPanel). Fixtures A (approver) + B. Group 2 (2.x filing steps) | Deterministic checks + suggestions render; approve-ready requires the disclaimer acknowledgment and freezes the snapshot; editing a reviewed document afterward flips the approved status to invalidated WITH the reason; version list shows the invalidated entry — never silently stays "ready" |
+| 4 | **P4 — Verified redaction derivative** (32.6): produce + download, inspect contents | `/matters/:matterId` → **Documents** tab → Redaction section. Fixtures A (upload capability) + B (no capability → refusal, no trail). Group 2 (2.x redaction steps) | Unauthorized caller refused with recorded refusal; derivative downloads and opens; targeted terms ABSENT from the derivative; coverage note + hits/residues shown; refusals recorded verbatim |
+| 5 | **P5 — Wall denial across identities** (32.7): place wall, verify denial as a walled identity | `/conflicts` (WallsHoldsPanel) to create; then sign in as D and attempt the walled matter. Group 3 steps | D sees NOTHING §32-related (walls are not advertised — no "you are walled" leak); A sees the wall with explanation read-only; wall filtering holds on every retrieval path incl. AI |
+| 6 | **P6 — Emergency access lifecycle** (32.7): grant → acknowledge → expiry/revoke | `/conflicts` → per-wall emergency grants (WallsHoldsPanel); matter Review tab MatterHoldCard. Fixtures A (wall manager) + grant-holder + D. Group 3 steps | Grant does NOT open anything until the HOLDER acknowledges (non-holder acknowledge refused server-side); expiry ≤24h and revoke close access immediately; grant history visible; NO self-authorized bypass anywhere |
+| 7 | **P7 — Client update recipient authorization** (32.10): prepare → review → approved delivery | `/matters/:matterId` → **Client updates** tab (ClientUpdatesPanel). Fixtures A/B (draft/approve/queue capability split). Group 4A steps | Approved-developments picker only; footer disclosure travels with the draft; review dialog shows recipient authorization state honestly (unauthorized/unverified recipients NOT offered as approved delivery); duplicate guard fires; queue hands off to commOutbox — nothing sends outside the approved path |
+| 8 | **P8 — Firm export vs manifest/omissions** (32.12): export → download → compare against manifest + omissions list | `/settings` → Export & exit (ExportExitPanel). Fixtures A (data.export + reauth evidence) + B (no capability). Group 4D steps 4.12–4.21 | Capability + 7-day-reauth gates verbatim; manifest rendered BEFORE any success labelling; downloaded parts byte-match the manifest scope; omissions listed with counts + reasons; verification failures shown, never smoothed; single-use download grants refuse reuse |
+
+Cross-cutting expectations for ALL eight: cross-tenant identity C is denied at
+every route; AI surfaces re-check org+matter access; AI outputs never appear
+without the "Draft — Professional Review Required" disclosure; nothing is
+ever silently smoothed over — failures render verbatim.

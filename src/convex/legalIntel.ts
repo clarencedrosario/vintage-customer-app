@@ -85,7 +85,7 @@ async function requireSignedIn(
 type SeedSource = {
   stableKey: string;
   title: string;
-  kind: "constitution" | "statute" | "code";
+  kind: "constitution" | "statute" | "code" | "rules";
   codeFamily?: string;
   inForceFrom?: string;
   repealedAt?: string;
@@ -192,6 +192,23 @@ const INDIA_SEED: SeedSource[] = [
     // preserved verbatim in docs/LEGAL_CORPUS_MIGRATION.md § POCSO.
     notes:
       "Special act; survives the 2023 codes (children-specific offences). Text NOT OBTAINED FROM SOURCES ATTEMPTED (28 Sep 2026): indiacode.nic.in HTTP 504; indiacode.gov.in JS app shell; api.sci.gov.in 0 bytes; wcd.gov.in HTML shell; missionvatsalya.wcd.gov.in 403; ncpcr.gov.in file-not-found; legislative.gov.in 404; web.archive.org 403/429; advocatekhoj login-walled; indiankanoon Cloudflare 403; India Code deep URLs timeout. Retrieval NOT exhaustive — official mirrors may exist. Citations from this source are BLOCKED by the citation validator until real text is ingested.",
+  },
+  {
+    // First RULES source in the seed set (turn 26): the English gazette
+    // PDF of the DPDP Rules 2025 on the official eGazette host. Retrieval
+    // runs through the sourceConnector notice (in:rules:dpdp-2025) with
+    // pinned PUBLIC TLS anchors — the stub below is replaced only when a
+    // real retrieval passes the connector's sanity gates.
+    stableKey: "in:rules:dpdp-2025",
+    title: "Digital Personal Data Protection Rules, 2025",
+    kind: "rules",
+    inForceFrom: "2025-11-13",
+    sourceUrl: "https://egazette.gov.in/WriteReadData/2025/267650.pdf",
+    publisher:
+      "The Gazette of India: Extraordinary (eGazette), Government of India — G.S.R. 846(E)",
+    rights: "Open government publication",
+    notes:
+      "Notified 13 Nov 2025 (G.S.R. 846(E)). Provisions operational from that date, with later phases following at ~12 and ~18 months and full effect by 13 May 2027 — the regime is MID-PHASE as of Oct 2026; per-requirement operative dates live in dpdpRegister and remain legalReview: outstanding until a qualified reviewer confirms them. English gazette PDF (Hindi counterpart CG-DL-E-14112025-267647). Connector notice registered turn 26 (pinned public-CA retrieval; verification enabled).",
   },
 ];
 
