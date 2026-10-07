@@ -25,8 +25,8 @@ required where stated. (Owner setup steps live in `docs/OWNER_SETUP_CHECKLIST.md
 | Item | Status | Next action |
 |---|---|---|
 | POCSO connector + corpus text | ✓ LIVE (v2, cron-fired daily runs observed Oct 1–5) | retain: legal review of text |
-| DPDP Rules 2025 connector | ✓ LIVE retrieval + dedupe | cron tick evidence on next sweep; Hindi counterpart ✗ |
-| India Code deep URLs | ✗ service-side timeout (recorded, not bypassed) | retain on checklist; retry probe |
+| DPDP Rules 2025 connector | ✓ LIVE retrieval + dedupe | cron tick evidence on next sweep; Hindi counterpart ✗ — official candidate identified 7 Oct (MeitY Hindi PDF, ~398.71 KB, pub. 16.12.2025) but exact URL unresolved (JS shell + bot protection); see `docs/OFFICIAL_SOURCES.md` §1.2 |
+| India Code deep URLs | ✗ STILL BLOCKED after 7 Oct retry probe (fresh evidence: `.nic.in` deep URLs connect-timeout; `.gov.in` serves an HTML app shell, not document bytes; HEAD 405) | retry when the publisher exposes stable document URLs — DSpace `/items/` migration suggests a REST content API; future probe targets that |
 | SCI APIs | ✗ authorization-gated | needs credentials (owner decision) |
 | Scheduled-ingestion evidence file | ✓ `docs/OFFICIAL_SOURCES.md` | keep appending per-sweep evidence |
 | Discovery of NEW official publications | ✗ open | refreshes of the two registered sources (POCSO, DPDP Rules daily cron) are NOT discovery; discovering new/other official publications (India Code deep-URL retry, SCI authorization, eGazette expansion) remains open work on this checklist |

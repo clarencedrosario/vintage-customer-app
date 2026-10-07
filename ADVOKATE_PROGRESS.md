@@ -3606,3 +3606,58 @@ version-control UI (owner action) or an environment where Git is not blocked.
   real-deployment drill remaining; §A rows record turn-29 evidence/blockers.
 - No source files changed this turn → automated baseline **52 files / 674
   tests** stands. Restrictions preserved.
+
+## Turn-30 — 7 Oct 2026: source re-inspection, baseline re-established from source, India Code retry probe executed, DPDP-Hindi candidate located
+
+### Source version & baseline (from the supplied source, not from reports)
+
+- Source inspected directly; it contains all turns through 29 (turn-27/28
+  commercial code, turn-29 execution-phase records). No evidence of being
+  behind the latest Freebuff work: the turn-29 doc corrections (webhook
+  `.site` URL, encryption-key format, restore-status wording) are present in
+  the working tree.
+- Checkpoint refreshed: `/home/daytona/advokate-checkpoint-20261007b.tar.gz`
+  (1.5 MB; env/keys/backups/tarballs excluded via `scripts/archive-excludes.txt`).
+  Development branch: NOT CREATED — Git/GitHub commands remain platform-blocked
+  ("Git and GitHub commands are blocked; Vly manages version control."); the
+  tarball is the recoverable checkpoint.
+- Baseline re-established by fresh runs: `bunx tsc -b --noEmit` → 0 errors;
+  vitest shards all exit 0 — `src/lib` 25 files / 429 tests, `src/convex` 22 / 226,
+  `src/components src/pages` 5 / 19 → **52 files / 674 tests green** (matches the
+  reported baseline; no drift).
+- `docs/RAZORPAY_SETUP.md` read (verification matrix, merchant separation,
+  refund posture); docs webhook-URL sweep clean (only the correction note cites
+  the dead `.cloud` path as evidence).
+
+### Executed probes (actual runs)
+
+- **India Code retry probe (release checklist §B) — STILL BLOCKED, honest
+  evidence:** `www.indiacode.nic.in` deep URLs (IEA 1872, POCSO AA2012-32)
+  connect-timeout at 20 s (curl exit 28); `indiacode.gov.in` answers HTTP 200
+  but serves a 6,762-byte HTML app shell (`<html lang="hi">`) instead of
+  document bytes; HEAD refused (405); no content API referenced in the shell.
+  Recorded in `docs/OFFICIAL_SOURCES.md` §1.1; classification unchanged —
+  not bypassed, gates would rightly refuse the shell. Note: the shell implies
+  a DSpace `/items/` migration; a future probe should target the repository's
+  REST content API instead of bitstream deep URLs.
+- **DPDP Rules Hindi counterpart — candidate identified, URL unresolved**:
+  authoritative MeitY page advertises a Hindi PDF (~398.71 KB, pub. 16.12.2025)
+  but renders as a JS shell with bot protection (renderer 403; plain fetch →
+  3,137-byte shell, zero PDF links); eGazette adjacent-number probe from this
+  sandbox failed at connection level (English `267650.pdf` works only via the
+  app's TLS-pinned fetcher). Recorded in `docs/OFFICIAL_SOURCES.md` §1.2 and
+  the release checklist. Next step: identify the exact Hindi PDF URL from an
+  interactive browser session, then register per the `sourceNotices.ts`
+  access-basis pattern and extend the connector (machinery already proven).
+
+### Not done / pending (honest)
+
+- No source-code changes this turn → 52 files / 674 baseline stands.
+- Deployment restore drill, browser E2E, payment/AI live checks: unchanged,
+  still pending owner configuration/authorization or a Chromium-capable env.
+- **Next concrete implementation task for resumption:** DPDP Rules Hindi
+  counterpart connector — resolve the exact official Hindi PDF URL (MeitY or
+  eGazette) via interactive browser, then `sourceNotices.ts` registration +
+  connector extension; alternatively the platform-owner deployment drill when
+  an owner session is available. Legal review of retrieved texts remains
+  outstanding.
