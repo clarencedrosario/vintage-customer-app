@@ -21,7 +21,7 @@ Razorpay dashboards separate and label them accordingly.
 
 | Item | Name (exact) | Where | Test / Production | Unlocks |
 |---|---|---|---|---|
-| Model API key | `OPENAI_API_KEY` | Keys / API keys UI → backend reads `process.env.OPENAI_API_KEY` (only reader: `aiRunner.ts`) | Start with a project **test key with a hard monthly spend limit** (e.g. $5–10). Production: same key form, raise the cap only after bounded evaluation | Live AI everywhere: Case X-Ray, research, drafting, replies, briefings. The UI flips from honest "AI is not configured on this deployment" to live tiers |
+| Model API key | `OPENAI_API_KEY` | Keys / API keys UI → backend reads `process.env.OPENAI_API_KEY` (only reader: `aiRunner.ts`) | Start with a project **test key with an ENFORCED monthly spend limit** — set in the OpenAI project's billing USAGE LIMITS (a hard cap that DECLINES further paid usage; monthly reports/alert emails alone merely NOTIFY and do not stop spend) — proposal: US$5/month; execution awaits the owner's explicit spending approval. Note the app cannot enforce provider-side spend: on the deployment side `AI_RESERVE_ESTIMATE_TOKENS` governs job concurrency/reservations only, never money. Production: same key form, raise the cap only after bounded evaluation | Live AI everywhere: Case X-Ray, research, drafting, replies, briefings. The UI flips from honest "AI is not configured on this deployment" to live tiers |
 | Advanced tier model id | `ADVOKATE_ADVANCED_MODEL` | Same Keys UI (a plain string, not a secret) | Test: leave unset — the Advanced tier must NOT appear. Production: set only when you have chosen and benchmarked the model (e.g. an OpenAI model id) | The Advanced tier option in `/ai` — offered **only** when this names a real model (plan permission alone never advertises it) |
 
 Verification step unlocked: bounded real-AI checks (§5 of the release
@@ -34,15 +34,39 @@ refusal, drafting with missing facts.
 |---|---|---|---|---|
 | Key id | `RAZORPAY_KEY_ID` | Keys / API keys UI → server-side checkout + payment links | **Test mode first** (`rzp_test_…`). Switch to `rzp_live_…` keys only after the full test-mode pass below AND an explicit owner approval | `purchasingAvailable: true` on `/pricing`; checkout and renewal payment links |
 | Key secret | `RAZORPAY_KEY_SECRET` | Keys / API keys UI | Test-mode secret first; live secret later (never in chat) | Signature-verified webhooks and provider calls |
-| Webhook (test mode) | Dashboard → Settings → Webhooks → **`https://moonlit-elk-307.convex.cloud/webhooks/razorpay`** | Razorpay dashboard (NOT in-app) | Test mode: create on the test dashboard; event subscription: `payment.captured`, `payment_link.paid`, `order.paid`, `payment.failed` | Automatic reconciliation: checkout → activation, renewal → period extension, idempotent duplicate handling |
-| Webhook (production) | Same URL, created on the LIVE dashboard | Razorpay dashboard | Live mode: repeat the webhook creation on the live account before live keys are installed | Live-mode reconciliation |
-| Encryption master key | `SECRET_ENCRYPTION_KEY` | Keys / API keys UI | A 32-char random string; required for FIRM merchant credential encryption (see §3) | Firm in-app merchant connect (invoice payment links) — independent of platform keys |
+| Webhook (test mode) | Dashboard → Settings → Webhooks → **`https://moonlit-elk-307.convex.site/webhooks/razorpay`** | Razorpay dashboard (NOT in-app) | Test mode: create on the test dashboard; event subscription: `payment.captured`, `payment_link.paid`, `order.paid`, `payment.failed`. When creating the webhook the dashboard asks for a **Webhook Secret** — generate one there and store the SAME value (by hand, never pasted into chat) as `RAZORPAY_WEBHOOK_SECRET` in the Keys UI | Automatic reconciliation: checkout → activation, renewal → period extension, idempotent duplicate handling. CORRECTED 7 Oct: HTTP actions serve the `.convex.site` origin (verified live: `.cloud` path returns 404, `.site` answers 503 "Webhook secret not configured." — also proving the secret is currently ABSENT) |
+| Webhook (production) | Same `…convex.site` URL, created on the LIVE dashboard | Razorpay dashboard | Live mode: repeat the webhook creation on the live account before live keys are installed; set its own Webhook Secret and swap `RAZORPAY_WEBHOOK_SECRET` to that value at the same time (a mismatched secret silently breaks reconciliation) | Live-mode reconciliation |
+| Encryption master key | `SECRET_ENCRYPTION_KEY` | Keys / API keys UI | Exact format (implementation `src/convex/crypto.ts` masterKey()): ANY string ≥ 32 characters after trimming — format otherwise free; generate with `openssl rand -base64 24` (32 chars) or `openssl rand -hex 32`. See the generation + no-casual-rotation rule below §2. Required for FIRM merchant credential encryption (see §3) | Firm in-app merchant connect (invoice payment links) — independent of platform keys |
 
 Note: the deployment URL above is the current dev deployment
-(moonlit-elk-307). If the production deployment differs, the webhook URL must
-point at that deployment's `…/webhooks/razorpay` path (platform account) — the
-firm webhook path is `/webhooks/razorpay/firm/<orgId>` and is configured
-per-firm from the app, not by the platform owner.
+(moonlit-elk-307). HTTP actions (webhooks) serve the deployment's `…convex.site`
+origin — verified 7 Oct: `…convex.cloud/webhooks/razorpay` returns 404 while
+`https://moonlit-elk-307.convex.site/webhooks/razorpay` reaches the deployed
+handler. If the production deployment differs, point the webhook at THAT
+deployment's `…convex.site` `/webhooks/razorpay` path (platform account) —the firm webhook path is `/webhooks/razorpay/firm/<orgId>` (same `…convex.site`
+origin) and is configured per-firm from the app, not by the platform owner.
+**Firm webhook secret**: the optional secret a firm enters in-app at connect
+must equal the **Webhook Secret** the FIRM sets on ITS OWN dashboard webhook;
+platform and firm secrets are independent — the platform value never verifies
+firm events, and a missing/mismatched firm secret fails signature verification.
+
+**`SECRET_ENCRYPTION_KEY` — generation and the no-casual-rotation rule.**
+GENERATION (only when the key does not exist yet): locally generate a random
+string of at least 32 characters — e.g. `openssl rand -base64 24` or
+`openssl rand -hex 32` — and paste it ONCE into the Keys UI; never reuse a
+Razorpay secret or any other credential as this value, and never paste it into
+chat. DO NOT casually replace an existing key: per-firm merchant credentials
+are encrypted as `HKDF(master, salt "advokate-secret-enc-v1", info=<per-secret
+context>) → AES-256-GCM` (`src/convex/crypto.ts`), and the stored blob carries
+no key-version marker — a different master makes every previously stored firm
+credential UNREADABLE (decryption refuses, connect flows fail, recovery
+requires the OLD value). IF ROTATION IS EVER NEEDED: (1) record the existing
+key safely; (2) have each firm disconnect its merchant account (or hand over
+its own credentials via the firm exit workflow); (3) switch the master value
+in the Keys UI; (4) have each firm reconnect under the new key; (5) verify one
+test invoice payment link per firm. This release has no in-place
+re-encryption tool — rotation is a coordinated, scheduled operation, never a
+silent key swap.
 
 ## 3. Razorpay — the FIRM's own account (client invoices)
 
@@ -70,7 +94,7 @@ the firm connects its own account").
 1. `PLATFORM_OWNER_EMAIL` + bootstrap → **plan configuration** becomes possible.
    Until plans have prices > 0, every card honestly shows "Configuration
    pending" and nothing is purchasable — that is correct behaviour, not a bug.
-2. Test-mode `RAZORPAY_KEY_ID/SECRET` (+ test webhook) → **test-mode checkout**
+2. Test-mode `RAZORPAY_KEY_ID/SECRET` (+ test webhook + matching `RAZORPAY_WEBHOOK_SECRET`) → **test-mode checkout**
    on `/pricing` (purchasingAvailable flips true) and the full payment
    lifecycle tests below.
 3. `OPENAI_API_KEY` → bounded AI evaluation with synthetic data (independent

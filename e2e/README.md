@@ -48,6 +48,23 @@ the codes for the four inboxes and export them before running:
 export E2E_OTP_JSON='{"owner@e2e-advokate.test":"123456", "clerk@e2e-advokate.test":"234567", "client@e2e-advokate.test":"345678"}'
 ```
 
+⚠️ The codes shown are **PLACEHOLDERS only** — never real codes. Real codes
+are emailed per sign-in; each is SINGLE-USE and expires within 15 minutes.
+Working procedure per run:
+
+1. Trigger sign-ins **immediately before** capture — the runner signs in
+   sequentially (`fullyParallel: false`), so fetch each code right when the
+   runner reaches that identity; fetch and refresh — never batch stale codes.
+2. Read codes from the catch-all inbox you configured as the OTP destination
+   (owner setup — codes must be picked up programmatically).
+3. On any failure, regenerate: re-trigger the sign-in and re-capture — codes
+   are never reusable, and a 15-minute-old code is already dead.
+4. **There is deliberately NO OTP bypass, seeded codes, or test backdoor**: the
+   suite exercises the real `/login` email-OTP flow exactly as a user does.
+5. Internal/privileged-sign-in MFA (where deployed, e.g., platform-owner
+   surfaces) is outside the suite's synthetic identities — the browser suite
+   never exercises those surfaces.
+
 (Use a catch-all inbox on the test domain so codes are retrievable
 programmatically. Codes are single-use and short-lived — refresh per run.)
 

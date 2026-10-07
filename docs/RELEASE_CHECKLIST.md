@@ -35,7 +35,7 @@ required where stated. (Owner setup steps live in `docs/OWNER_SETUP_CHECKLIST.md
 
 | Item | Status | Next action |
 |---|---|---|
-| Backup/export & exit (§32.12) | ✓ code+tests; ✓ restore drill EXECUTED (turn 29: isolated in-memory instance, 3/3 — archive → restore into transient `restore-sandbox-*` → independent count verify → purge → `restore_test` register row; purge refuses non-sandboxes; count tampering fails loudly) | remaining: run the same `runRestoreDrill` once on the REAL deployment (owner UI: Settings → Data & backup) for production-grade evidence |
+| Backup/export & exit (§32.12) | ✓ code+tests; **IN-MEMORY restoration tests passed 3/3 (turn 29)**; **real export-and-restore verification PENDING** (CORRECTED 7 Oct: the in-memory runs are not deployment evidence) | next actual step: run `restoreVerification.runRestoreDrill` ONCE on the real deployment — it exports a REAL archive (`backups.archiveExport`, counts verified), restores into a transient `restore-sandbox-*` org, verifies counts independently, purges, records `restore_test` (isolated; cannot touch working orgs; purge refuses non-sandboxes). Scope note: `archiveExport` is DATABASE RECORDS ONLY by design (its own manifest note states it); document FILE bytes live in object storage and are covered by PLATFORM backups (database snapshots + storage schedule, `docs/BACKUPS.md`) — a file-inclusive restore would need a separately-authorized platform-snapshot restore into a non-production target, owner action |
 | Redaction (§32.6), walls/holds (§32.7), multilingual (§32.9), client updates (§32.10) | ✓ code+tests; ✗ browser | browser walkthrough groups in `docs/S32_BROWSER_SCRIPT.md` still NOT EXECUTED |
 
 ## D. Operations
@@ -46,6 +46,29 @@ required where stated. (Owner setup steps live in `docs/OWNER_SETUP_CHECKLIST.md
 | Customer support | ◐ support tickets + operator queue (§32.11 era) + enterprise-lead triage | owner: decide support channel/SLA and publish contact |
 | Commercial documents review | ✗ | owner/legal: review pricing copy, renewal terms, refund policy, tax configuration before live activation |
 | Production deploy | ✗✗ restricted | owner-only, after A/B above |
+| GitHub source sync (authorized, not production deploy) | ⏸ BLOCKED in agent env | platform restriction: every Git/GitHub terminal command returns exactly "Git and GitHub commands are blocked; Vly manages version control." — no SHA/URL obtainable; deliverable staging is done (docs, .gitignore exclusion fix, lockfile; checkpoint `/home/daytona/advokate-checkpoint-20261007.tar.gz`) |
+| Freebuff/Vly sync control verification | ⏸ open | engineering/owner: Vly wires project events to the GitHub repo; `integrations.md` documents API/email/payments HTTP integrations only, and NO `Publish`-style or version-control UI control is documented in-repo — owner must identify the version-control control in the Vly dashboard and confirm whether it deploys the website BEFORE using it (this REQUIRES the owner's dashboard view; the agent cannot) |
+
+## Blocker classification (corrected turn 29)
+
+| Blocker | Class |
+|---|---|
+| Razorpay test keys, webhook secret (`RAZORPAY_WEBHOOK_SECRET`), `SECRET_ENCRYPTION_KEY`, `PLATFORM_OWNER_EMAIL`, admin bootstrap, plan prices | Owner configuration |
+| `/platform` plan-creation steps after `PLATFORM_OWNER_EMAIL` is set | Owner configuration (data entry; the code surface exists) |
+| Webhook URL correction (`.convex.site` not `.cloud`) | FIXED 7 Oct in `docs/OWNER_SETUP_CHECKLIST.md`; verified live handler response |
+| Browser E2E: Chromium browser download failure in a Daytona-type terminal env | Platform restriction (terminal runtime); runner + specs + credential procedure are READY — rerun `npx playwright install chromium` in a standard dev machine/CI (not a hardened sandbox) |
+| Browser E2E: OTP receipt for synthetic identity emails `@e2e-advokate.test` | Owner configuration (point the dev deployment's OTP sender at a catch-all inbox the runner can read) |
+| Real deployment restore drill | Engineering-side execution + owner authorization (already given turn 29 — owner runs the button OR authorizes the agent to trigger it once keys/role are in place) |
+| India Code deep-URL timeout | External source access |
+| SCI APIs | External source access (authorization-gated; needs credentials per owner decision) |
+| DPDP Rules Hindi counterpart | Engineering work (new planned ingestion on an existing wiring) |
+| GitHub sync mechanism + UI identification | Platform restriction + owner dashboard access |
+
+## Open verification questions (owner dashboard / platform internals — agent cannot inspect)
+
+- **Keys-UI → deployment provisioning verification device**: a read-only check that reveals ONLY make-or-absent state, never values or even variable names: `entitlements:publicPlanCatalog` → `purchasingAvailable` (proves `RAZORPAY_KEY_ID/SECRET` presence only); `ai:runnerStatus` → `configured` (proves `OPENAI_API_KEY` presence); the platform webhook endpoint's own body response: 503 "Webhook secret not configured." ↔ 400 "Invalid signature." on garbage-triggered deliveries within its 4 events proves `RAZORPAY_WEBHOOK_SECRET` present-or-absent; `platform bootstrapAdmin` outcome after your sign-in (success with existing verified `PLATFORM_OWNER_EMAIL`; the run itself is the presence check for that variable). Single-shot decryption probes are REFUSED by design — do not use them as presence checks |
+- **`PLATFORM_OWNER_EMAIL` current deployment state: INABILITY TO INSPECT, not confirmed absence** — no read-path from the agent (the platform blocks ALL `.env*` access) and `entitlements:publicPlanCatalog` proves nothing about this variable. Earlier turn-27-era reporting asserting it was "configured on moonlit-elk-307" is DOWNGRADED here to UNVERIFIED — it cannot be verified from this environment; confirm from your Keys UI or run `platform:bootstrapAdmin` granting admin to the verified exact-email login (existing secure flow: verified-email match is the whole grant; MFA at sign-in per your account setup is unaffected — normal account MFA, not the internal special-purpose MFA) |
+- **How the Vly integration browses**: owner must check the Vly dashboard's project panel for the GitHub connection state and whether a version-control sync action exists and what it pushes (source commit vs website publish); the agent found no documented trigger and DOES NOT INVENT one. New Vly control/action UUIDs observed in the owner's dashboard should be pasted to the agent for the turn-29 next-turn continuation record |
 | Live charges | ✗✗ restricted | only after owner-approved live keys + explicit approval |
 
 ## Standing restrictions (unchanged)
