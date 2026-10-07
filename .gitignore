@@ -1,4 +1,7 @@
 .env.local
+.env.keys
+backups/
+*.tar.gz
 node_modules
 dist
 src/convex/_generated
