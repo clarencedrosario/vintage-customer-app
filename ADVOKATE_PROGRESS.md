@@ -3530,3 +3530,79 @@ legal review. Nothing in this file claims all acceptance criteria passed.
   bounded real-AI checks; backup restore drill; live activation (owner
   action). Restrictions preserved: no production deploy, no paid-service
   activation, no real charges, no destructive ops, no Git publishing.
+
+## Turn-29 — 7 Oct 2026: execution phase — restore drill EXECUTED, payment/browser/AI/GitHub blockers recorded with evidence
+
+### Authorized scope (owner, turn 29)
+
+Razorpay TEST-mode transactions (test instruments only); browser E2E with
+synthetic accounts/data; backup restore drill into an isolated non-production
+target (no additional paid service; cannot overwrite existing data). NOT
+authorized: real charges, production deployment, destructive changes,
+paid-service activation — none performed.
+
+### Executed (actual runs, exit statuses captured)
+
+- **Backup restore drill: PASSED 3/3** — `bunx vitest run
+  src/convex/restoreVerification.test.ts` → 3 passed (2.45s). The drill runs
+  the real owner-facing machinery end-to-end in an ISOLATED in-memory
+  instance (convexTest; zero contact with the dev deployment's real orgs):
+  synthetic org seeded → `backups.archiveExport` (counts verified: 1
+  matter/hearing/order/task/invoice/event) → `restoreVerification.runRestoreDrill`
+  restores the latest archive into a transient `restore-sandbox-*` org →
+  independent count verification (`result:"passed"`) → sandbox PURGED →
+  `restore_test` register row (result=passed, environment names the sandbox).
+  Isolation is test-enforced: purge refuses any org that is not a restore
+  sandbox; tampered archive counts fail loudly. Remaining for
+  production-grade evidence: run the same drill once on the REAL deployment
+  (owner UI: Settings → Data & backup → Run drill; same `runRestoreDrill`
+  action).
+- **Payment readiness probe: BLOCKED on credentials (live-confirmed)** —
+  POST `entitlements:publicPlanCatalog` against moonlit-elk-307 →
+  `{"purchasingAvailable":false,"plans":[]}`: no RAZORPAY keys configured
+  AND no plans created. The checklist §6 test-mode matrix (checkout →
+  activation, duplicate-webhook-applies-once, failed payment → past_due,
+  renewal link, refund) cannot execute until the owner adds test keys + the
+  test webhook + plan prices. Nothing simulated in its place.
+- **Browser E2E: attempted; environment cannot run it** — `cd e2e && npm
+  install` ✓; `npx playwright --version` → 1.63.0 ✓; `npx playwright
+  install chromium --with-deps` → **FAILED: "Failed to download Chrome for
+  Testing 153.0.8010.12 (playwright chromium v1243), caused by Error:
+  Download failure, code=1"**; no system chromium/chrome binaries; no Vite
+  app server reachable on any listening port (5173 closed; remaining ports
+  are platform terminal/recording services). Suite NOT executed; auth
+  untouched — no OTP weakening or bypass added. Run contract unchanged:
+  `e2e/README.md` §1–6, in a Chromium-capable environment against a running
+  deployment.
+
+### AI — exact configuration + budget proposal (awaiting key + approval)
+
+- Standard model: **`gpt-4o-mini`** (`STANDARD_MODEL_ID`, src/lib/aiModels.ts;
+  the only model read by `aiRunner.ts` via `process.env.OPENAI_API_KEY`).
+- Advanced tier: **dormant by design** — `ADVOKATE_ADVANCED_MODEL` unset →
+  `resolveModelId` refuses advanced requests and the tier is never offered
+  regardless of plan permission.
+- Proposed budget: dedicated OpenAI PROJECT TEST key with a hard monthly
+  spend limit of **US$5**; bounded checks = 3 single jobs on a synthetic
+  matter (source-backed answer; unsupported-jurisdiction refusal; drafting
+  with missing facts), each within the 6,000-token reservation → estimated
+  spend ≲US$0.02 at gpt-4o-mini rates. No paid request runs before the key
+  and budget approval.
+
+### GitHub synchronization: BLOCKED BY PLATFORM (exact record)
+
+Git/GitHub commands return exactly: **"Git and GitHub commands are blocked;
+Vly manages version control."** No commit, push, SHA or URL obtainable from
+this environment; no force-push attempted. Publishing the authorized sync to
+clarencedrosario/vintage-customer-app requires the platform's Vly
+version-control UI (owner action) or an environment where Git is not blocked.
+
+### Checklist updates
+
+- `docs/RELEASE_CHECKLIST.md`: §B gained the explicit **discovery ≠ refresh**
+  row (daily cron refreshes of the two registered sources do NOT establish
+  discovery of new publications; new-source discovery stays open); §C
+  restore-drill row moved to EXECUTED (isolated instance) with the
+  real-deployment drill remaining; §A rows record turn-29 evidence/blockers.
+- No source files changed this turn → automated baseline **52 files / 674
+  tests** stands. Restrictions preserved.

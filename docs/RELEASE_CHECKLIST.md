@@ -15,9 +15,9 @@ required where stated. (Owner setup steps live in `docs/OWNER_SETUP_CHECKLIST.md
 | Server-enforced AI entitlements (plans, reservations, no unapproved overage, background paths) | ✓ code+tests | entitlement matrix green; live-model path ⏸ `OPENAI_API_KEY` |
 | Model tiers honest (standard/advanced-when-configured) | ✓ code+tests | ⏸ `ADVOKATE_ADVANCED_MODEL` for advanced |
 | Merchant separation (CJ GLOBAL vs firm accounts) | ✓ code+tests | ⏸ live verification needs provider test mode |
-| Browser walkthrough (pricing/billing/workspace) | ✗ not executed | run `e2e/` per its README; identities + OTP contract specified |
-| Provider test-mode payment flows (checkout, duplicate webhook, failed payment, renewal, cancel, refund) | ✗ not run | ⏸ Razorpay test keys + webhook → run matrix in checklist §6 BEFORE any live activation |
-| Bounded real-AI checks (source-backed answer, unsupported-jurisdiction refusal, drafting with missing facts) | ✗ not run | ⏸ `OPENAI_API_KEY`; synthetic matter data only |
+| Browser walkthrough (pricing/billing/workspace) | ✗ not executed | turn-29 attempt recorded: runner 1.63.0 installed but `playwright install chromium --with-deps` FAILED (`Failed to download Chrome for Testing 153.0.8010.12 … Download failure, code=1`), no system browser, no reachable app URL in the authoring env — run per `e2e/README.md` §1–6 in a Chromium-capable environment |
+| Provider test-mode payment flows (checkout, duplicate webhook, failed payment, renewal, cancel, refund) | ✗ not run | turn-29 live probe: `publicPlanCatalog` → `purchasingAvailable:false`, `plans:[]` (no keys AND no plans configured) — ⏸ Razorpay test keys + webhook + plan prices → run matrix in checklist §6 BEFORE any live activation |
+| Bounded real-AI checks (source-backed answer, unsupported-jurisdiction refusal, drafting with missing facts) | ✗ not run | ⏸ `OPENAI_API_KEY`; budget proposed turn-29: project test key, US$5/month hard cap, 3 jobs on synthetic matter (gpt-4o-mini; advanced dormant while `ADVOKATE_ADVANCED_MODEL` unset) |
 | Enterprise contact workflow | ✓ code+tests | reply workflow is human (owner action after first enquiry) |
 
 ## B. Official-source connectors (32.17)
@@ -29,12 +29,13 @@ required where stated. (Owner setup steps live in `docs/OWNER_SETUP_CHECKLIST.md
 | India Code deep URLs | ✗ service-side timeout (recorded, not bypassed) | retain on checklist; retry probe |
 | SCI APIs | ✗ authorization-gated | needs credentials (owner decision) |
 | Scheduled-ingestion evidence file | ✓ `docs/OFFICIAL_SOURCES.md` | keep appending per-sweep evidence |
+| Discovery of NEW official publications | ✗ open | refreshes of the two registered sources (POCSO, DPDP Rules daily cron) are NOT discovery; discovering new/other official publications (India Code deep-URL retry, SCI authorization, eGazette expansion) remains open work on this checklist |
 
 ## C. Data protection & continuity
 
 | Item | Status | Next action |
 |---|---|---|
-| Backup/export & exit (§32.12) | ✓ code+tests (checksummed parts, independent verify, holds respected) | ✗ restore drill: restore a verified export into a fresh org and diff — scheduled task, not yet run |
+| Backup/export & exit (§32.12) | ✓ code+tests; ✓ restore drill EXECUTED (turn 29: isolated in-memory instance, 3/3 — archive → restore into transient `restore-sandbox-*` → independent count verify → purge → `restore_test` register row; purge refuses non-sandboxes; count tampering fails loudly) | remaining: run the same `runRestoreDrill` once on the REAL deployment (owner UI: Settings → Data & backup) for production-grade evidence |
 | Redaction (§32.6), walls/holds (§32.7), multilingual (§32.9), client updates (§32.10) | ✓ code+tests; ✗ browser | browser walkthrough groups in `docs/S32_BROWSER_SCRIPT.md` still NOT EXECUTED |
 
 ## D. Operations
@@ -52,4 +53,4 @@ required where stated. (Owner setup steps live in `docs/OWNER_SETUP_CHECKLIST.md
 No production deployment, no paid-service activation, no real charges, no
 destructive operations, no Git publishing — none performed. Automated suite
 remains the regression backbone: **52 files / 674 tests green** (turn-28) —
-it does NOT substitute for the browser/live rows above.
+it does NOT substitute for the browser/live rows above. Turn-29 execution record: restore drill 3/3 EXECUTED (isolated instance); browser E2E blocked (browser-download failure + no reachable app URL — recorded, not bypassed); payment test-mode blocked on missing keys/plans (live-confirmed); Git publishing blocked by platform ("Git and GitHub commands are blocked; Vly manages version control.").
