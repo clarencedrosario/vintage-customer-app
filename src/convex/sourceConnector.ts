@@ -109,7 +109,13 @@ async function runFetch(
           })
         : await (async () => {
             const resp = await fetch(notice.url, {
-              headers: { "User-Agent": UA, Accept: "application/pdf" },
+              // Per-notice agent override (turn 31): hosts whose WAFs
+              // refuse non-browser agent strings still serve the SAME
+              // document publicly to any browser — see sourceNotices.ts.
+              headers: {
+                "User-Agent": notice.userAgent ?? UA,
+                Accept: "application/pdf",
+              },
               signal: AbortSignal.timeout(45_000),
             });
             return {

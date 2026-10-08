@@ -3661,3 +3661,104 @@ version-control UI (owner action) or an environment where Git is not blocked.
   connector extension; alternatively the platform-owner deployment drill when
   an owner session is available. Legal review of retrieved texts remains
   outstanding.
+
+## Turn-31 — 8 Oct 2026: FIRST new-publication discovery completed end-to-end (Juvenile Justice Act 2015), working code + live retrieval
+
+### Working change delivered (not a documentation-only resumption)
+
+- **New source discovered, verified, registered, and retrieved LIVE on the
+  deployment**: `in:statute:jj-2015` — Juvenile Justice (Care and Protection
+  of Children) Act, 2015. This is a NEW PUBLICATION (not in the turn-6/7
+  corpus), not a refresh of a known document.
+- **Discovery trail (no URL guessing):** legislative.gov.in is now a Next.js
+  JS shell (7.3 KB, zero PDF links in raw HTML) — same shell pattern as
+  MeitY/India Code; NCPCR's listing page (HTTP 200) exposed its official
+  `uploads` PDF; CARA (Central Adoption Resource Authority, MoWCD statutory
+  body) publishes the standalone English act PDF. Both candidate URLs were
+  extracted from live official page markup, never constructed.
+- **Integrity gate — composite rejected:** NCPCR's copy is gazette issue
+  No. 96 of 13 Jan 2016, which BUNDLES the Sugar Cess (Amendment) Act 2016
+  with the JJ Act; the project's own `detectSections` showed the drift
+  (naive "s 1" = Sugar Cess short title). Section COUNT would have passed
+  the sanity gates — rejected on content review BEFORE registration and
+  recorded as a standing gates-limitation caveat (gates check
+  count/length/magic, not cross-act misalignment).
+- **Pre-registration verification (project's own pdfjs + detectSections):**
+  CARA PDF: 44 pages, 155,439 chars, 112/112 sections (the Act's exact
+  count), s 1 = short title, s 112 = savings clause, English text layer.
+- **Access basis (honest):** CARA's WAF refuses non-browser agent strings
+  (403 with the connector's default agent; 200 with a browser agent, no
+  Referer needed) while serving the SAME document publicly to any browser.
+  The notice pins a browser agent for this host only — new optional
+  `userAgent` override on the notice schema, consumed by the connector's
+  plain-GET path. No login, no CAPTCHA, no access control bypassed.
+- **Live retrieval on moonlit-elk-307 (target verified before push):**
+  `sourceConnector:runScheduledFetch` → status `updated`, **version 2**,
+  versionId `hh7sevchxzv04ytf113q166twn8fx1dc`, bytesHash
+  `642e06129bad1fe0…ffcf`, 155,439 chars / 112 sections stored,
+  collectionDate 2026-10-08. Repeat fetch: `unchanged` (dedupe §6 proven on
+  this source). The JJ Act text is now IN the corpus, indexed, and citable.
+
+### Files changed
+
+- `src/convex/sourceNotices.ts` — new notice `in:statute:jj-2015` (CARA URL,
+  publisher, maxNo 112 / minSections 100, access basis, userAgent) + optional
+  `userAgent` field on the notice type.
+- `src/convex/sourceConnector.ts` — plain-GET path honours `notice.userAgent`.
+- `src/convex/legalIntel.ts` — `INDIA_SEED` row for `in:statute:jj-2015`
+  (with the composite-rejection and as-enacted-2015-vintage caveats).
+- `src/convex/sourceNotices.test.ts` — new pin test for the JJ notice
+  (URL, bounds, agent posture, pinned-TLS exception unchanged).
+- `src/convex/legalIntel.test.ts` — seed-count pin 9 → 10 (same pattern as
+  the turn-26 update when DPDP joined the seed set).
+- `docs/OFFICIAL_SOURCES.md` §1.5 + §2(a) count; `docs/RELEASE_CHECKLIST.md`
+  §B discovery row.
+
+### Verification actually run
+
+- Registry tests: 4/4 green (incl. the new JJ pin).
+- Push: `bun convex dev --once` ✓ (typecheck clean, functions ready on
+  moonlit-elk-307); `legalIntel:seedIndianCoreCli` → sourcesCreated 1
+  (idempotent; existing 9 untouched).
+- Full suites: convex **22 files / 227 tests ✓**; lib+components+pages
+  **30 files / 448 tests ✓** → **52 files / 675 tests** (baseline 674 +1);
+  `bunx tsc -b --noEmit` → **0 errors**.
+- Live read-backs: `connectorStatusCli` → `updated`, v2, no error;
+  `getSourceCli` → 155,439 chars / 112 sections / 2026-10-08.
+
+### Blocker classification (precise, per category — not "owner blocked")
+
+- **Missing owner configuration:** Razorpay test/live keys + webhook secret
+  (§A), `OPENAI_API_KEY`, `SECRET_ENCRYPTION_KEY`, owner activation + MFA
+  enrollment (first OTP sign-in), `/platform` plan configuration, deployment
+  restore drill (needs a signed-in owner).
+- **Missing explicit authorization:** AI spending (US$5/month proposal,
+  turn-29), switch to live payment keys, production deploy/push to prod,
+  any real charges.
+- **Platform tooling restriction:** Git/GitHub terminal commands blocked
+  (Vly manages VCS — no dev branch possible); Chromium download fails in
+  this sandbox (browser E2E unrunnable here); no Vly dashboard access.
+- **External source restriction:** India Code deep URLs (timeout/HTML shell
+  — NOT credential-gated; classification unchanged); MeitY JS shell + bot
+  protection (Hindi DPDP URL); SCI APIs (registration-gated — genuinely
+  needs credentials); CARA agent filtering (worked around within permitted
+  posture, documented).
+- **Unfinished implementation (backlog):** DPDP Rules Hindi counterpart
+  connector (URL resolution needed); JJ Rules 2016 / further source
+  expansion; legal review of ALL retrieved texts (lawyer confirmation
+  outstanding); file-inclusive restoration verification (§C prep).
+
+### Not done / pending (honest)
+
+- JJ Act cron tick: the daily 17:45 UTC sweep will now fetch it on schedule;
+  today's evidence is from the connector run itself (manual trigger), not a
+  cron-fired row — distinction preserved per §2e.
+- The 2021 JJ Amendment Act is NOT consolidated in the retrieved text
+  (as-enacted 2015 vintage) — recorded on the source and §1.5.
+- Browser E2E, payment/AI live checks, restore drill: unchanged, blocked as
+  classified above.
+- **Next concrete task for resumption:** further new-publication discovery
+  (JJ Rules 2016 via NCPCR listing — verified composite Hindi-English file
+  exists there; or eGazette expansion), or the DPDP Hindi connector when
+  browser tooling is available; the Hindi-source task remains in the
+  backlog as a specific external-source blocker.

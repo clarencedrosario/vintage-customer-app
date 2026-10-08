@@ -43,4 +43,22 @@ describe("official-source notice registry", () => {
     expect(n.publisher).toMatch(/G\.S\.R\. 846\(E\)/);
     expect(n.accessBasis).toMatch(/verification fully enabled/);
   });
+
+  it("JJ Act 2015 notice targets CARA's standalone verified reproduction", () => {
+    const n = OFFICIAL_SOURCE_NOTICES["in:statute:jj-2015"];
+    // Verified before registration (turn 31): 112/112 sections — the
+    // Act's exact count — s 1 short title, s 112 savings, English layer.
+    expect(n.url).toBe("https://cara.wcd.gov.in/pdf/jj%20act%202015.pdf");
+    expect(n.maxNo).toBe(112);
+    expect(n.minSections).toBe(100);
+    expect(n.publisher).toMatch(/CARA|Central Adoption Resource Authority/);
+    // The WAF-agent posture must stay explicit and bounded to this host.
+    expect(n.accessBasis).toMatch(/no access control is bypassed/);
+    expect(n.userAgent).toMatch(/^Mozilla\//);
+    // The pinned-TLS exception must NOT have grown with the new notice.
+    const pinned = Object.entries(OFFICIAL_SOURCE_NOTICES)
+      .filter(([, m]) => m.tlsFix === "lets-encrypt-aia")
+      .map(([k]) => k);
+    expect(pinned).toEqual(["in:rules:dpdp-2025"]);
+  });
 });

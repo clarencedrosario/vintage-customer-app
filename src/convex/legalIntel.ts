@@ -208,7 +208,26 @@ const INDIA_SEED: SeedSource[] = [
       "The Gazette of India: Extraordinary (eGazette), Government of India — G.S.R. 846(E)",
     rights: "Open government publication",
     notes:
-      "Notified 13 Nov 2025 (G.S.R. 846(E)). Provisions operational from that date, with later phases following at ~12 and ~18 months and full effect by 13 May 2027 — the regime is MID-PHASE as of Oct 2026; per-requirement operative dates live in dpdpRegister and remain legalReview: outstanding until a qualified reviewer confirms them. English gazette PDF (Hindi counterpart CG-DL-E-14112025-267647). Connector notice registered turn 26 (pinned public-CA retrieval; verification enabled).",
+      "Notified 13 Nov 2025 (G.S.R. 846(E)). Provisions operational from that date, with later phases following at ~12 and ~18 months and full effect by 13 May 2027 — the regime is MID-PHASE as of Oct 2026; per-requirement operative dates live in dpdpRegister and remain legalReview: outstanding until a qualified reviewer confirms them.      English gazette PDF (Hindi counterpart CG-DL-E-14112025-267647). Connector notice registered turn 26 (pinned public-CA retrieval; verification enabled).",
+  },
+  {
+    // First NEW-PUBLICATION DISCOVERY by the connector (turn 31): the
+    // Juvenile Justice Act 2015 was NOT part of the turn-6/7 corpus —
+    // this is a new source registered because an accessible authorized
+    // official copy was located and verified (CARA standalone PDF,
+    // 112/112 sections, English text layer). Distinct from refreshing
+    // already-registered documents.
+    stableKey: "in:statute:jj-2015",
+    title: "Juvenile Justice (Care and Protection of Children) Act, 2015",
+    kind: "statute",
+    codeFamily: "special-act",
+    inForceFrom: "2016-01-15",
+    sourceUrl: "https://cara.wcd.gov.in/pdf/jj%20act%202015.pdf",
+    publisher:
+      "Central Adoption Resource Authority (CARA), Ministry of Women and Child Development, Government of India",
+    rights: "Open government publication",
+    notes:
+      "Special act; children-specific criminal-jurisdiction framework complementing POCSO. Connector notice registered turn 31 (verified BEFORE registration: 112/112 sections, s 1 short title, s 112 savings, English text layer; composite NCPCR gazette issue No. 96 of 13 Jan 2016 was REJECTED — it bundles the Sugar Cess (Amendment) Act 2016 and would misalign section anchors). This is the AS-ENACTED 2015 text (Act 2 of 2016); the 2021 Amendment Act is separate and NOT consolidated here. India Code remains the canonical citation anchor.",
   },
 ];
 

@@ -29,7 +29,7 @@ required where stated. (Owner setup steps live in `docs/OWNER_SETUP_CHECKLIST.md
 | India Code deep URLs | ✗ STILL BLOCKED after 7 Oct retry probe (fresh evidence: `.nic.in` deep URLs connect-timeout; `.gov.in` serves an HTML app shell, not document bytes; HEAD 405) | retry when the publisher exposes stable document URLs — DSpace `/items/` migration suggests a REST content API; future probe targets that |
 | SCI APIs | ✗ authorization-gated | needs credentials (owner decision) |
 | Scheduled-ingestion evidence file | ✓ `docs/OFFICIAL_SOURCES.md` | keep appending per-sweep evidence |
-| Discovery of NEW official publications | ✗ open | refreshes of the two registered sources (POCSO, DPDP Rules daily cron) are NOT discovery; discovering new/other official publications (India Code deep-URL retry, SCI authorization, eGazette expansion) remains open work on this checklist |
+| Discovery of NEW official publications | ✓ FIRST COMPLETED 8 Oct: **Juvenile Justice Act 2015** (`in:statute:jj-2015`) — new publication (not in the turn-6/7 corpus), located on CARA (MoWCD statutory body), verified BEFORE registration with the project's own extractor (112/112 sections, English layer; a composite NCPCR gazette issue was rejected for anchor misalignment), then retrieved LIVE via the connector on moonlit-elk-307 (v2, 155,439 chars, dedupe proven `unchanged` on repeat); see `docs/OFFICIAL_SOURCES.md` §1.5 | keep going: further discoveries (India Code deep-URL retry via DSpace REST, SCI authorization, eGazette expansion, JJ Rules 2016) remain open |
 
 ## C. Data protection & continuity
 
