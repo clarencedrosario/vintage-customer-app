@@ -79,4 +79,20 @@ crons.daily(
   {},
 );
 
+// Hourly automated discovery scan (turn 32): inspects the registered
+// official LISTING pages (discoveryListings.ts) for previously unknown
+// document links and creates discoveryCandidates rows. This is the
+// NEW-PUBLICATION discovery path — distinct from the connector sweeps
+// above, which only REFRESH registered sources (and therefore do not
+// demonstrate discovery). URL-hash dedupe means the steady state is one
+// page fetch + zero new candidates; validation + bounded promotion run
+// per sweep; uncertain candidates land in the operator review queue and
+// never become searchable without a human decision.
+crons.interval(
+  "discovery-listing-scan",
+  { minutes: 60 },
+  internal.legalDiscovery.scheduledDiscoveryScan,
+  {},
+);
+
 export default crons;

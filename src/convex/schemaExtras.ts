@@ -1104,7 +1104,12 @@ export const legalIntelTables = {
     // version. Absent for pre-connector (manually ingested) versions.
     bytesHash: v.optional(v.string()),
     createdAt: v.number(),
-  }).index("by_source", ["sourceId"]),
+  })
+    .index("by_source", ["sourceId"])
+    // Bytes-level duplicate detection for the discovery pipeline (turn
+    // 32): the same document bytes already stored anywhere in the corpus
+    // must never be re-ingested under a new stableKey.
+    .index("by_bytes_hash", ["bytesHash"]),
 
   // Verified cross-reference mappings between provisions across codes
   // (e.g. IPC→BNS). Deliberately NOT a blind renumber table: carries the
@@ -1228,6 +1233,75 @@ export const legalIntelTables = {
     sourceCount: v.number(),
     runIds: v.optional(v.array(v.id("ingestionRuns"))),
     note: v.optional(v.string()),
+  }).index("by_time", ["triggeredAt"]),
+
+  // ===================================================================
+  // Automated discovery pipeline (turn 32). One row per document link
+  // found by scanning a REGISTERED official listing page on a schedule.
+  // Discovery candidates are NEVER added to sourceNotices.ts or the
+  // INDIA_SEED by the scanner — they live here until identity, scope,
+  // provenance, duplication and extraction quality have been validated.
+  // Only candidates that pass every gate become searchable legalSources
+  // (bounded by promote policy); uncertain candidates stay in review.
+  // ===================================================================
+  discoveryCandidates: defineTable({
+    listingKey: v.string(), // which registered listing found it
+    url: v.string(), // exact document URL from the listing markup
+    linkTitle: v.optional(v.string()), // anchor text from the listing
+    urlHash: v.string(), // sha256 of the URL — dedupe identity
+    bytesHash: v.optional(v.string()), // sha256 of retrieved bytes (once fetched)
+    // Lifecycle: found → validating → validated (gates passed) →
+    // promoted (searchable) | review (uncertain) | rejected (failed).
+    status: v.union(
+      v.literal("found"),
+      v.literal("validating"),
+      v.literal("validated"),
+      v.literal("promoted"),
+      v.literal("review"),
+      v.literal("rejected"),
+    ),
+    detectedIdentity: v.optional(v.string()), // canonical instrument name, null = uncertain
+    detectedStableKey: v.optional(v.string()), // from the identity, namespace-checked
+    duplicateOfStableKey: v.optional(v.string()), // identity already in the corpus
+    gates: v.optional(
+      v.object({
+        magicOk: v.boolean(),
+        sizeOk: v.boolean(),
+        identityOk: v.boolean(),
+        languageOk: v.boolean(),
+        sectionsOk: v.boolean(),
+        s1Ok: v.boolean(),
+        duplicateOk: v.boolean(),
+      }),
+    ),
+    gateSummary: v.optional(v.string()), // human-readable pass/fail record
+    sectionsCount: v.optional(v.number()),
+    bodyChars: v.optional(v.number()),
+    hindiRatio: v.optional(v.number()),
+    retrievedAt: v.optional(v.number()),
+    firstSeenAt: v.number(),
+    updatedAt: v.number(),
+    reviewedBy: v.optional(v.string()),
+    reviewedAt: v.optional(v.number()),
+    reviewNote: v.optional(v.string()),
+    promotedSourceId: v.optional(v.id("legalSources")),
+    promotedStableKey: v.optional(v.string()),
+  })
+    .index("by_listing", ["listingKey"])
+    .index("by_url_hash", ["urlHash"])
+    .index("by_status", ["status"]),
+
+  discoverySweepLogs: defineTable({
+    triggeredAt: v.number(),
+    trigger: v.union(v.literal("schedule"), v.literal("manual")),
+    listingKey: v.string(),
+    linksFound: v.number(),
+    newCandidates: v.number(),
+    validated: v.number(),
+    promoted: v.number(),
+    queuedForReview: v.number(),
+    rejected: v.number(),
+    error: v.optional(v.string()),
   }).index("by_time", ["triggeredAt"]),
 };
 
