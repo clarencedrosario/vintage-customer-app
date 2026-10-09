@@ -9,6 +9,8 @@ import {
   ANSWER_CONTRACT_SECTIONS,
   EUROPEAN_COUNTRY_CODES,
   countryName,
+  vintageFor,
+  isTextIngested,
 } from "./legalIntel";
 
 describe("resolveJurisdiction — firm defaults are defaults only", () => {
@@ -196,5 +198,31 @@ describe("European register", () => {
     expect(EUROPEAN_COUNTRY_CODES).toContain("ch"); // non-EU
     expect(EUROPEAN_COUNTRY_CODES).toContain("fr"); // EU
     expect(countryName("eu")).toBe("European Union"); // EU as instrument level
+  });
+});
+
+// =====================================================================
+// Vintage disclosure (turn 32) — the JJ Act 2015 as-enacted gap.
+// =====================================================================
+describe("vintage disclosure", () => {
+  it("declares the jj-2015 as-enacted gap with the 2021 amendment named", () => {
+    const v = vintageFor("in:statute:jj-2015");
+    expect(v).not.toBeNull();
+    expect(v!.vintage).toBe("as_enacted_unconsolidated");
+    expect(v!.headline).toContain("NOT a consolidated current version");
+    expect(v!.headline).toContain("Amendment Act, 2021");
+    expect(v!.knownAmendments[0]).toContain("2021");
+  });
+
+  it("returns null for consolidated/unknown sources (no invented gaps)", () => {
+    expect(vintageFor("in:statute:bns-2023")).toBeNull();
+    expect(vintageFor("in:constitution")).toBeNull();
+    expect(vintageFor("in:statute:nonexistent")).toBeNull();
+  });
+
+  it("treats ingestion stubs as not-ingested", () => {
+    expect(isTextIngested(null)).toBe(false);
+    expect(isTextIngested("[INGESTION PENDING] POCSO stub")).toBe(false);
+    expect(isTextIngested("1. Short title and commencement.—This Act...")).toBe(true);
   });
 });

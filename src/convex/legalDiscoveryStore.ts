@@ -98,6 +98,7 @@ export const getCandidate = internalQuery({
       _id: String(c._id),
       listingKey: c.listingKey,
       url: c.url,
+      linkTitle: c.linkTitle ?? null,
       status: c.status,
     };
   },
@@ -418,6 +419,49 @@ export const sweepLogsCli = internalQuery({
       rejected: r.rejected,
       error: r.error ?? null,
     }));
+  },
+});
+
+/**
+ * CLI: delete ALL discovery candidates (pipeline shakeout hygiene while
+ * bringing a listing online — e.g. after fixing link canonicalization).
+ * Sweep-log rows are NEVER touched: the execution history of earlier
+ * scans stays as evidence. Admin-key invocation only.
+ */
+export const resetCandidatesCli = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const rows = await ctx.db.query("discoveryCandidates").collect();
+    for (const r of rows) await ctx.db.delete(r._id);
+    return { deleted: rows.length };
+  },
+});
+
+/**
+ * CLI: purge a MIS-PROMOTED auto-discovered source (identity-detector
+ * bug correction, e.g. the 2026-10-08 Rules-2007-stored-as-Amendment-2006
+ * misfire). Guarded twice: only sources whose statusNote marks them as
+ * auto-discovered can be purged, and the stableKey must be given exactly.
+ * Seeded/connector sources are structurally unreachable.
+ */
+export const purgeDiscoveredSourceCli = internalMutation({
+  args: { stableKey: v.string() },
+  handler: async (ctx, args) => {
+    const s = await ctx.db
+      .query("legalSources")
+      .withIndex("by_stable_key", (q) => q.eq("stableKey", args.stableKey))
+      .unique();
+    if (!s) return { purged: false, reason: "not found" };
+    if (!s.statusNote?.includes("Discovered automatically")) {
+      return { purged: false, reason: "not an auto-discovered source — refused" };
+    }
+    const versions = await ctx.db
+      .query("legalSourceVersions")
+      .withIndex("by_source", (q) => q.eq("sourceId", s._id))
+      .collect();
+    for (const ver of versions) await ctx.db.delete(ver._id);
+    await ctx.db.delete(s._id);
+    return { purged: true, versionsDeleted: versions.length };
   },
 });
 

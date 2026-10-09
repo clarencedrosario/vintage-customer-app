@@ -32,6 +32,19 @@ export const OFFICIAL_SOURCE_NOTICES: Record<
      * any browser); it never bypasses an access control.
      */
     userAgent?: string;
+    /**
+     * Turn-32 UA-override review outcome: when TRUE, the SCHEDULED
+     * connector sweep SKIPS this notice — automated refresh is deferred
+     * pending an approved route (owner decision), while the operator-
+     * authorized manual import (fetchOfficialSource) remains available.
+     * Set only where the automated-access basis is UNCERTAIN: the CARA
+     * host serves browsers but agent-gates other clients (403 vs 200 for
+     * the same public document), and the platform cannot confirm that
+     * the agent filter is mere client compatibility rather than an
+     * intentional automation restriction — public browser access alone
+     * does not authorize automated collection.
+     */
+    scheduledRefreshDeferred?: boolean;
   }
 > = {
   // POCSO 2012 — first connector target: the registry row exists (turn 7)
@@ -99,5 +112,13 @@ export const OFFICIAL_SOURCE_NOTICES: Record<
       "Open government publication — plain HTTPS GET of the published PDF from cara.wcd.gov.in (no login, no CAPTCHA; robots honoured). The host's WAF refuses non-browser agent strings while serving the same document publicly to any browser; the connector therefore sends a browser agent string for this notice only — no access control is bypassed.",
     userAgent:
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+    // Turn-32 review disposition: the agent override stays documented as
+    // UNCERTAIN (supported-client-compatibility vs intentional automation
+    // restriction cannot be distinguished from outside). Until the owner
+    // rules on it (or CARA publishes an automated-access statement), the
+    // scheduled sweep defers this notice; the existing stored text is
+    // untouched and manual operator-authorized import remains the
+    // refresh route.
+    scheduledRefreshDeferred: true,
   },
 };

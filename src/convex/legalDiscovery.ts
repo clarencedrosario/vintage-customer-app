@@ -34,6 +34,8 @@ import {
   detectDocumentIdentity,
   deriveStableKey,
   languageMix,
+  identityClass,
+  expectedInstrumentClass,
 } from "../lib/legalDiscovery";
 import { renderLines, detectSections } from "../lib/pdfExtract";
 import { loadPdfWorker } from "../lib/pdfWorkerLoader.js";
@@ -46,6 +48,7 @@ type CandidateRow = {
   _id: string;
   listingKey: string;
   url: string;
+  linkTitle?: string | null;
   status: string;
 };
 
@@ -90,7 +93,14 @@ async function extractPdf(
     };
   };
   await loadPdfWorker();
-  const doc = pdfjs.getDocument({ data: buf, useSystemFonts: false, isEvalSupported: false });
+  // pdfjs TRANSFERS the data buffer to its worker (detaching it), so a
+  // fresh copy is passed every call — the validation sample extraction
+  // and the full promotion extraction must not share one buffer.
+  const doc = pdfjs.getDocument({
+    data: new Uint8Array(buf),
+    useSystemFonts: false,
+    isEvalSupported: false,
+  });
   const pdf = await doc.promise;
   const lines: string[] = [];
   for (let p = 1; p <= Math.min(pdf.numPages, maxPages); p++) {
@@ -158,11 +168,11 @@ async function scanListing(
   let newCandidates = 0;
   for (const link of links) {
     const urlHash = sha256Hex(link.url);
-    const created = (await ctx.runMutation(
+    const result = (await ctx.runMutation(
       internal.legalDiscoveryStore.recordCandidate,
       { listingKey, url: link.url, linkTitle: link.title, urlHash },
     )) as { created: boolean };
-    if (created) newCandidates += 1;
+    if (result.created) newCandidates += 1;
   }
 
   // Validate the pending candidates (bounded per sweep — polite).
@@ -306,6 +316,22 @@ export const validateCandidate = internalAction({
           gates.sectionsOk = sample.sections.length >= 4;
           gates.s1Ok = /^1\./m.test(sample.body);
           identity = detectDocumentIdentity(sample.body);
+          // Cross-check the detected identity against the publisher's own
+          // naming (URL filename + anchor title): a rules notification
+          // citing an amendment act in its recitals must not masquerade as
+          // the act (observed live 2026-10-08 — Rules 2007 detected as
+          // "Amendment Act, 2006"). Mismatch or unsignalled class ⇒ the
+          // identity is UNCERTAIN: treat as no-identity (review), never
+          // promote on a contradicted match.
+          if (identity) {
+            const detected = identityClass(identity);
+            const expected = expectedInstrumentClass(
+              `${decodeURIComponent(c.url)} ${c.linkTitle ?? ""}`,
+            );
+            if (detected === null || (expected !== null && expected !== detected)) {
+              identity = null;
+            }
+          }
           gates.identityOk = identity !== null;
           stableKey = deriveStableKey(identity);
           // Duplicate gates: identity already in the corpus, or the same

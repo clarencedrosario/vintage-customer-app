@@ -692,3 +692,43 @@ export const EUROPEAN_COUNTRY_CODES = [
   "by", "ba", "ge", "kz", "xk", "md", "mc", "me", "mk", "ru", "sm", "rs",
   "tr", "ua", "va",
 ] as const;
+
+// =====================================================================
+// Vintage disclosure (turn 32): a source's stored text may be an
+// AS-ENACTED (unconsolidated) version while later amendment acts exist.
+// The gap is displayed PROMINENTLY in source details and relevant AI
+// retrieval — the corpus is never presented as a consolidated current
+// version. Pure data lives here; the registry row (INDIA_SEED.notes for
+// in:statute:jj-2015) carries the same statement.
+// =====================================================================
+
+export type VintageDisclosure = {
+  /** Machine-readable label, e.g. "as_enacted_unconsolidated". */
+  vintage: string;
+  /** Human headline shown in source details and AI retrieval. */
+  headline: string;
+  /** Specific amendment instruments known to post-date the stored text. */
+  knownAmendments: string[];
+};
+
+/** Per-source vintage disclosures. Only unconsolidated texts appear. */
+export const VINTAGE_DISCLOSURES: Record<string, VintageDisclosure> = {
+  "in:statute:jj-2015": {
+    vintage: "as_enacted_unconsolidated",
+    headline:
+      "Stored text is the AS-ENACTED Juvenile Justice Act, 2015 (Act 2 of 2016). It is NOT a consolidated current version: the Juvenile Justice (Care and Protection of Children) Amendment Act, 2021 is NOT incorporated. Section text shows the 2015/2016 wording — verify against India Code before reliance.",
+    knownAmendments: [
+      "Juvenile Justice (Care and Protection of Children) Amendment Act, 2021 (Act 30 of 2021)",
+    ],
+  },
+};
+
+/** Disclosure for one stableKey (null = no known vintage gap). */
+export function vintageFor(stableKey: string): VintageDisclosure | null {
+  return VINTAGE_DISCLOSURES[stableKey] ?? null;
+}
+
+/** A source's stored text is genuinely ingested (no pending stub). */
+export function isTextIngested(body: string | null | undefined): boolean {
+  return !!body && !body.startsWith("[INGESTION PENDING]");
+}

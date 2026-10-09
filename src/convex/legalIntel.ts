@@ -39,6 +39,8 @@ import {
   checkCitation,
   countryName,
   EUROPEAN_COUNTRY_CODES,
+  vintageFor,
+  isTextIngested,
 } from "../lib/legalIntel";
 
 function todayISO(): string {
@@ -540,7 +542,7 @@ export const searchSources = query({
         const version = s.latestVersion
           ? await ctx.db.get(s.latestVersion)
           : null;
-        const ingested = !!version && !version.body.startsWith("[INGESTION PENDING]");
+        const ingested = isTextIngested(version?.body);
         return {
           _id: s._id,
           stableKey: s.stableKey,
@@ -557,6 +559,9 @@ export const searchSources = query({
           publisher: s.publisher,
           collectionDate: s.collectionDate,
           ingested,
+          // Vintage gap (turn 32): as-enacted/unconsolidated texts are
+          // flagged in EVERY search row — never presented as current law.
+          vintage: vintageFor(s.stableKey),
           snippet: ingested ? (version!.body.slice(0, 400) ?? "") : null,
         };
       }),
@@ -601,6 +606,10 @@ export const getSource = query({
         rights: s.rights,
         collectionDate: s.collectionDate,
       },
+      // Vintage gap (turn 32): PROMINENT in the source pane — an
+      // as-enacted text is never presented as a consolidated current
+      // version. Rendered as a disclosure banner by the UI.
+      vintage: vintageFor(s.stableKey),
       body: version?.body ?? null,
       version: version?.version ?? null,
       collectedAt: version?.collectedAt ?? null,
@@ -1797,6 +1806,9 @@ export const getSourceCli = internalQuery({
       sourceUrl: s.sourceUrl,
       publisher: s.publisher,
       collectionDate: s.collectionDate,
+      // Vintage gap surfaced in the headless readback too.
+      vintage: vintageFor(s.stableKey),
+      statusNote: s.statusNote ?? null,
       latestVersion: vRow ? { version: vRow.version, sectionsCount: (vRow.sections ?? []).length, bodyChars: vRow.body.length } : null,
     };
   },
@@ -2044,6 +2056,11 @@ async function runDryRun(ctx: QueryCtx, args: DryRunArgs) {
           : "",
         applicability.reviewFlags.length
           ? `FOR LAWYER REVIEW: ${applicability.reviewFlags.join(" | ")}`
+          : "",
+        // Vintage gap (turn 32): retrieved as-enacted text carries the
+        // unconsolidated-version disclosure IN the answer itself.
+        gov.stableKey && vintageFor(gov.stableKey)
+          ? `VINTAGE: ${vintageFor(gov.stableKey)!.headline} Known amendments not incorporated: ${vintageFor(gov.stableKey)!.knownAmendments.join("; ")}.`
           : "",
       ].filter(Boolean).join(" ");
     } else {

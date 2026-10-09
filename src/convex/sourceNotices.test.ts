@@ -55,10 +55,23 @@ describe("official-source notice registry", () => {
     // The WAF-agent posture must stay explicit and bounded to this host.
     expect(n.accessBasis).toMatch(/no access control is bypassed/);
     expect(n.userAgent).toMatch(/^Mozilla\//);
+    // Turn-32 UA-override review: the agent-gated host's automated-access
+    // basis is UNCERTAIN, so the scheduled sweep must DEFER this notice
+    // (manual operator-authorized import remains the refresh route).
+    expect(n.scheduledRefreshDeferred).toBe(true);
     // The pinned-TLS exception must NOT have grown with the new notice.
     const pinned = Object.entries(OFFICIAL_SOURCE_NOTICES)
       .filter(([, m]) => m.tlsFix === "lets-encrypt-aia")
       .map(([k]) => k);
     expect(pinned).toEqual(["in:rules:dpdp-2025"]);
+  });
+
+  it("defers scheduled refresh ONLY for notices with an uncertain access basis", () => {
+    const deferred = Object.entries(OFFICIAL_SOURCE_NOTICES)
+      .filter(([, n]) => n.scheduledRefreshDeferred)
+      .map(([k]) => k);
+    // Exactly the agent-gated host; permitted-access notices (Delhi
+    // Police POCSO, eGazette DPDP) keep their scheduled refresh.
+    expect(deferred).toEqual(["in:statute:jj-2015"]);
   });
 });

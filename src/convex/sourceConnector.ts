@@ -241,7 +241,13 @@ export const scheduledConnectorSweep = internalAction({
   handler: async (
     ctx,
   ): Promise<{ attempted: number; updated: number; unchanged: number; failed: number }> => {
-    const notices = Object.entries(NOTICES).map(([stableKey]) => ({ stableKey }));
+    const notices = Object.entries(NOTICES)
+      // Turn-32 UA-override review: notices whose automated-access basis
+      // is uncertain (agent-gated host) are DEFERRED from the scheduled
+      // sweep — refresh runs only via the operator-authorized manual
+      // path until the owner rules on the override.
+      .filter(([, n]) => !n.scheduledRefreshDeferred)
+      .map(([stableKey]) => ({ stableKey }));
     let attempted = 0;
     let updated = 0;
     let unchanged = 0;
@@ -289,6 +295,14 @@ export const fetchOfficialSource = action({
     };
     if (!op.operatorUserId) {
       throw new Error("Platform operator access required.");
+    }
+    const notice = NOTICES[args.stableKey];
+    if (notice?.scheduledRefreshDeferred) {
+      // Stated override, not a silent divergence: the operator explicitly
+      // authorizes this fetch, accepting the recorded uncertainty.
+      console.warn(
+        `[sourceConnector] ${args.stableKey}: scheduled refresh is deferred (uncertain automated-access basis); running as an explicitly operator-authorized manual fetch.`,
+      );
     }
     return runFetch(ctx, args.stableKey, args.force ?? false);
   },

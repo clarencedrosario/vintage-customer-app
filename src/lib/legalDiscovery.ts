@@ -12,27 +12,45 @@ export type ListingLink = { url: string; title: string };
 
 /**
  * Extract PDF links (with anchor text as title) from listing HTML.
- * Absolute-resolves against the listing URL, dedupes by URL, and drops
+ * Absolute-resolves against the listing URL, dedupes, and drops
  * non-document links. Bounded: only same-host links are kept — the scan
  * never follows off-host links from a listing.
+ *
+ * NCPCR (like many government CMSs) renders each document TWICE: a
+ * direct /public/uploads/… URL and an inline /public/viewPdf/… viewer
+ * URL for the same file. Canonical form: anything under /viewPdf/ is
+ * mapped to its /public/uploads/ counterpart; dedupe is then by full
+ * canonical URL AND by filename, so one document ⇒ one candidate.
  */
 export function extractPdfLinks(html: string, listingUrl: string): ListingLink[] {
   const base = new URL(listingUrl);
   const out = new Map<string, string>();
+  const seenNames = new Set<string>();
   const re = /<a\b[^>]*href="([^"]+\.pdf)"[^>]*>([\s\S]*?)<\/a>/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(html)) !== null) {
     try {
-      const abs = new URL(m[1], base);
+      let abs = new URL(m[1], base);
       if (abs.host !== base.host) continue;
+      if (!abs.pathname.toLowerCase().endsWith(".pdf")) continue;
+      // Canonicalize viewer URLs to the direct file URL
+      // (/public/viewPdf/NAME.pdf → /public/uploads/NAME.pdf).
+      if (abs.pathname.includes("/viewPdf/")) {
+        abs = new URL(abs.pathname.replace("/viewPdf/", "/uploads/"), base);
+      }
       const title = m[2]
         .replace(/<[^>]*>/g, " ")
         .replace(/&amp;/g, "&")
         .replace(/&nbsp;/g, " ")
         .replace(/\s+/g, " ")
         .trim();
-      if (!abs.pathname.toLowerCase().endsWith(".pdf")) continue;
-      if (!out.has(abs.href)) out.set(abs.href, title);
+      const fileName = abs.pathname.split("/").pop() ?? abs.pathname;
+      if (out.has(abs.href) || seenNames.has(fileName)) {
+        // Same document via a second link — keep the first occurrence.
+        continue;
+      }
+      seenNames.add(fileName);
+      out.set(abs.href, title);
     } catch {
       // Malformed href — skip, never throw on publisher markup.
     }
@@ -46,19 +64,79 @@ export function extractPdfLinks(html: string, listingUrl: string): ListingLink[]
  * a canonical identity string, or null when the header does not name a
  * recognisable instrument — callers must treat null as UNCERTAIN and
  * queue for review, never guess.
+ *
+ * Guard rails added after the 2026-10-08 live run: a gazette NOTIFICATION
+ * of RULES cites the amending act in its recitals ("Rules under the JJ Act
+ * 2000 (as amended by the Amendment Act 33 of 2006)", recitals naming
+ * "…Amendment Act, 2006"), which a naive head-window match mistakes for
+ * the document's own identity. Counter-measures: (1) citation
+ * parentheticals "(33 of 2006)" are stripped; (2) a "Rules under the …"
+ * header marks the document as RULES — the amendment-act pattern is then
+ * not applied to the recitals; the rules' own call ("…may be called the
+ * …Rules, YYYY") is searched deeper instead; null if not found.
  */
 export function detectDocumentIdentity(text: string): string | null {
-  const head = text.slice(0, 4000).replace(/\s+/g, " ");
+  // Strip citation parentheticals like "(33 of 2006)" / "(56 of 2000)".
+  const cleaned = text.replace(/\((\d{1,3})\s+of\s+(\d{4})\)/g, "");
+  const head = cleaned.slice(0, 4000).replace(/\s+/g, " ");
+  const deep = cleaned.slice(0, 12000).replace(/\s+/g, " ");
   const patterns: [RegExp, string][] = [
     [/juvenile justice[\s\S]{0,220}?model\s+amendment\s+rules,\s*(\d{4})/i, "Juvenile Justice (Care and Protection of Children) Model Amendment Rules, $1"],
     [/juvenile justice[\s\S]{0,220}?amendment\s+act,\s*(\d{4})/i, "Juvenile Justice (Care and Protection of Children) Amendment Act, $1"],
     [/juvenile justice[\s\S]{0,220}?rules,\s*(\d{4})/i, "Juvenile Justice (Care and Protection of Children) Rules, $1"],
     [/juvenile justice[\s\S]{0,220}?act,\s*(\d{4})/i, "Juvenile Justice (Care and Protection of Children) Act, $1"],
   ];
+  // A "Rules under the … Act" header ⇒ this is a rules notification, not
+  // the cited amendment act: identity must come from the rules' own call.
+  if (/rules\s+under\s+the\s+juvenile\s+justice[\s\S]{0,200}?act/i.test(head)) {
+    const m = /(?:may\s+be\s+called\s+the|called\s+the)\s+juvenile\s+justice[\s\S]{0,220}?rules,\s*(\d{4})/i.exec(
+      deep,
+    );
+    if (m) {
+      return "Juvenile Justice (Care and Protection of Children) Rules, $1".replace(
+        "$1",
+        m[1]!,
+      );
+    }
+    return null; // uncertain — review, never the recital citation
+  }
   for (const [re, fmt] of patterns) {
     const m = re.exec(head);
-    if (m) return fmt.replace("$1", m[1]);
+    if (m) return fmt.replace("$1", m[1]!);
   }
+  return null;
+}
+
+/**
+ * Instrument CLASS of a detected identity (rules / amendment_act / act),
+ * used to cross-check the detected identity against the publisher's own
+ * filename/anchor title. A contradiction is uncertainty: the caller must
+ * review, not promote.
+ */
+export function identityClass(
+  identity: string | null,
+): "rules" | "amendment_act" | "act" | null {
+  if (!identity) return null;
+  const s = identity.toLowerCase();
+  if (s.includes("rules")) return "rules";
+  if (s.includes("amendment")) return "amendment_act";
+  if (s.includes("act")) return "act";
+  return null;
+}
+
+/**
+ * Instrument CLASS expected from a document URL/filename/anchor title
+ * (the publisher's own naming): "…rules-2007.pdf" ⇒ rules,
+ * "…amendment-act-2006.pdf" ⇒ amendment_act, "…act-2015.pdf" ⇒ act.
+ * null when the name carries no signal.
+ */
+export function expectedInstrumentClass(
+  urlOrTitle: string,
+): "rules" | "amendment_act" | "act" | null {
+  const s = urlOrTitle.toLowerCase();
+  if (/rules/.test(s)) return "rules";
+  if (/amendment/.test(s) && /act/.test(s)) return "amendment_act";
+  if (/act/.test(s)) return "act";
   return null;
 }
 
