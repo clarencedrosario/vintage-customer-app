@@ -15,7 +15,7 @@ import {
   type MutationCtx,
 } from "./_generated/server";
 import { getCurrentUser } from "./users";
-import type { Doc } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 
 function isPlatformOperator(user: Doc<"users"> | null): boolean {
   return !!user && !user.isAnonymous && !!user.isPlatformAdmin;
@@ -258,6 +258,17 @@ export const stagePromoted = internalMutation({
   },
 });
 
+/** Internal reauth gate consumed by the node-action promotion path. */
+export const reauthGate = internalQuery({
+  args: {},
+  handler: async (ctx): Promise<{ ok: boolean; reason: string | null }> => {
+    const user = await getCurrentUser(ctx);
+    if (!user) return { ok: false, reason: "Not signed in." };
+    const reason = await reauthRequired(ctx, user._id);
+    return { ok: reason === null, reason };
+  },
+});
+
 export const finishValidation = internalMutation({
   args: {
     candidateId: v.id("discoveryCandidates"),
@@ -352,6 +363,142 @@ export const recordSweepLog = internalMutation({
 // ---------------------------------------------------------------------
 // Review queue — human decisions on uncertain candidates.
 // ---------------------------------------------------------------------
+
+/**
+ * Reauthentication helper for operator write gates (same evidence class
+ * firmExit.ts uses): promotion is a corpus-affecting decision, so the
+ * acting platform operator must have signed in within 168 h. Returns
+ * "" when fine, else a message.
+ */
+export async function reauthRequired(
+  ctx: QueryCtx | MutationCtx,
+  userId: Id<"users">,
+): Promise<string | null> {
+  const REAUTH_WINDOW = 168 * 3600_000;
+  const row = await ctx.db
+    .query("loginEvents")
+    .withIndex("by_user_time", (q) => q.eq("userId", userId))
+    .order("desc")
+    .first();
+  if (!row) {
+    return "No sign-in event on record — sign in again (7-day reauthentication window).";
+  }
+  if (Date.now() - row.at > REAUTH_WINDOW) {
+    return "Last sign-in is older than 7 days — sign in again before promoting a source.";
+  }
+  return null;
+}
+
+/**
+ * REVIEW PACKET (query, operator-gated): everything a publication
+ * reviewer needs for one candidate — original-document context, the
+ * extraction result, extraction warnings, and the PROPOSED identifier.
+ *
+ * Deliberately carries THREE separately-labelled statuses: technical
+ * validation (gates), publication decision (owner promote/reject), and
+ * qualified legal review (ALWAYS outstanding for auto-discovered text
+ * until a qualified reviewer attests). Owning the software grants none
+ * of these by itself.
+ */
+export const reviewPacket = query({
+  args: { candidateId: v.id("discoveryCandidates") },
+  handler: async (ctx, args) => {
+    const user = await requireOperator(ctx);
+    const c = await ctx.db.get(args.candidateId);
+    if (!c) throw new Error("Candidate not found.");
+    const promotedSource = c.promotedSourceId
+      ? await ctx.db.get(c.promotedSourceId)
+      : null;
+    const warnings: string[] = [];
+    const g = c.gates;
+    if (g) {
+      if (!g.magicOk) warnings.push("PDF magic bytes missing — not a PDF-shaped download.");
+      if (!g.sizeOk) warnings.push("Size outside sane bounds for a reportable instrument.");
+      if (!g.identityOk) warnings.push("Identity detection inconsistent with the publisher's own naming (left in review by design).");
+      if (!g.languageOk) warnings.push(`Language gate failed (hindi ratio ${c.hindiRatio?.toFixed(4) ?? "n/a"}) — the English corpus need is not met.`);
+      if (!g.sectionsOk) warnings.push(`Section anchors = ${c.sectionsCount ?? 0} — outside bounds for this instrument class.`);
+      if (!g.s1Ok) warnings.push("Section 1 (short title) not detected — anchor drift or non-instrument shape.");
+      if (!g.duplicateOk) warnings.push(`Duplicate of existing corpus entry: ${c.duplicateOfStableKey ?? "unknown"}.`);
+    }
+    if (c.hindiRatio !== null && c.hindiRatio !== undefined && c.hindiRatio > 0.02) {
+      warnings.push("Devanagari characters present (likely bilingual gazette header — normal, noted).");
+    }
+    return {
+      candidate: {
+        _id: c._id,
+        status: c.status,
+        listingKey: c.listingKey,
+        url: c.url,
+        linkTitle: c.linkTitle ?? null,
+        firstSeenAt: c.firstSeenAt,
+        updatedAt: c.updatedAt,
+      },
+      extracted: {
+        identity: c.detectedIdentity ?? null,
+        proposedStableKey: c.detectedStableKey ?? null,
+        jurisdiction: "in / national (from the listing's registered scope)",
+        amendmentRelationship:
+          c.detectedStableKey?.includes("amendment-")
+            ? "AMENDS the principal act — NOT a consolidated restatement; original act text remains separate"
+            : c.detectedStableKey?.includes("rules-")
+              ? "SUBSIDIARY rules under the principal act"
+              : c.detectedStableKey?.includes("model-rules-")
+                ? "MODEL rules — persuasive template, not binding law"
+                : "PRINCIPAL instrument as published",
+        enactedOrPublishedAs: c.linkTitle ?? c.detectedIdentity ?? null,
+        sectionsCount: c.sectionsCount ?? null,
+        bodyChars: c.bodyChars ?? null,
+        hindiRatio: c.hindiRatio ?? null,
+        bytesHash: c.bytesHash ?? null,
+      },
+      gates: g ?? null,
+      gateSummary: c.gateSummary ?? null,
+      warnings,
+      provenance: promotedSource
+        ? {
+            sourceId: promotedSource._id,
+            sourceUrl: promotedSource.sourceUrl,
+            publisher: promotedSource.publisher,
+            collectionDate: promotedSource.collectionDate,
+            statusNote: promotedSource.statusNote ?? null,
+          }
+        : null,
+      statuses: {
+        technicalValidation:
+          g && Object.values(g).every(Boolean) ? "passed" : "not_passed",
+        publicationDecision:
+          c.status === "promoted"
+            ? "published"
+            : c.status === "rejected"
+              ? "rejected"
+              : "PENDING — operator promotes or rejects with a note",
+        legalReview:
+          "OUTSTANDING — no qualified reviewer has attested this text; automated discovery certifies extraction, NOT legal accuracy",
+      },
+      reviewer: {
+        name: user.name ?? user.email ?? null,
+        reauthPending: (await reauthRequired(ctx, user._id)) !== null,
+      },
+    };
+  },
+});
+
+/** Platform-operator monitor data: counts by status + recent sweep logs. */
+export const discoveryMonitor = query({
+  args: {},
+  handler: async (ctx) => {
+    await requireOperator(ctx);
+    const rows = await ctx.db.query("discoveryCandidates").collect();
+    const byStatus: Record<string, number> = {};
+    for (const r of rows) byStatus[r.status] = (byStatus[r.status] ?? 0) + 1;
+    const recentLogs = await ctx.db
+      .query("discoverySweepLogs")
+      .withIndex("by_time")
+      .order("desc")
+      .take(6);
+    return { byStatus, total: rows.length, recentLogs };
+  },
+});
 
 /** Platform-operator review queue (uncertain candidates). */
 export const reviewQueue = query({

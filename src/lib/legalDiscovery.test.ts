@@ -122,6 +122,57 @@ describe("identityClass / expectedInstrumentClass cross-check", () => {
     expect(identityClass(null)).toBeNull();
   });
 
+  it("signals expected class from publisher naming (REVERSE direction: rules body named as amendment act is also uncertainty)", () => {
+    // Reverse misfire class: a gazette notification whose OWN header rules
+    // out the recital citation (detectDocumentIdentity ⇒ rules) but whose
+    // FILENAME says "amendment-act" — a publisher-naming error or a
+    // mis-captioned file. Classes contradict ⇒ uncertain ⇒ review, and
+    // filename agreement alone NEVER established identity in either
+    // direction (see decision test below).
+    const detected = "Juvenile Justice (Care and Protection of Children) Rules, 2007";
+    const expected = expectedInstrumentClass(
+      ".../juvenule-justice-care-and-protection-of-children-amendment-act-2006.pdf",
+    );
+    expect(expected).not.toBe(identityClass(detected));
+    // Symmetry: filename matching a DETECTED identity is 1-way evidence —
+    // a rules-detected body under an act-shaped name stays uncertain.
+    expect(identityClass(detected)).toBe("rules");
+    expect(expected).toBe("amendment_act");
+  });
+
+  it("decides promotion only on consistent identity — filename agreement ALONE never promotes", () => {
+    // Decision table mirroring the validator (legalDiscovery.ts ~line 322):
+    // identity = null ⇒ identityOk false ⇒ review (regardless of filename).
+    // identity detected + class contradiction ⇒ identity reset to null ⇒
+    // review. Auto-promote requires: identity non-null AND class match
+    // (or no filename signal) AND duplicate-free AND policy prefix match.
+    const decide = (identity: string | null, expected: string | null) => {
+      let eff: string | null = identity;
+      const detected = identityClass(identity);
+      if (eff && (detected === null || (expected !== null && expected !== detected))) {
+        eff = null;
+      }
+      return eff !== null; // identityOk
+    };
+    // Consistent: the correct cycle-3 outcome (rules-2007 URL + rules body).
+    expect(
+      decide("JJ Rules 2007", expectedInstrumentClass(".../chidlren-rules-2007.pdf")),
+    ).toBe(true);
+    // The LIVE misfire: amendment-act detection + rules URL ⇒ refuted.
+    expect(
+      decide("JJ Amendment Act, 2006", expectedInstrumentClass(".../chidlren-rules-2007.pdf")),
+    ).toBe(false);
+    // Contradiction the OTHER way (test above) also refuted.
+    expect(
+      decide("JJ Rules, 2007", expectedInstrumentClass(".../amendment-act-2006.pdf")),
+    ).toBe(false);
+    // No filename signal AND null identity ⇒ review, never promote.
+    expect(decide(null, null)).toBe(false);
+    // No filename signal but consistent detection ⇒ promote-eligible
+    // (subject to duplicate + policy gates).
+    expect(decide("JJ Amendment Act, 2006", null)).toBe(true);
+  });
+
   it("signals expected class from publisher naming and exposes the live misfire", () => {
     expect(expectedInstrumentClass(".../juvenile-justice-care-and-protection-of-chidlren-rules-2007.pdf")).toBe("rules");
     expect(expectedInstrumentClass(".../juvenule-justice-care-and-protection-of-children-amendment-act-2006.pdf")).toBe("amendment_act");

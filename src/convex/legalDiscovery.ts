@@ -441,6 +441,13 @@ export const promoteFromReview = action({
       gates: Gates | null;
     } | null;
     if (!c) throw new Error("Candidate not found.");
+    // 7-day reauthentication (same evidence class as firmExit): promotion
+    // is a corpus-affecting operator decision.
+    const reauth = (await ctx.runQuery(
+      internal.legalDiscoveryStore.reauthGate,
+      {},
+    )) as { ok: boolean; reason: string | null };
+    if (!reauth.ok) throw new Error(reauth.reason ?? "Reauthentication required.");
     if (c.status !== "review" && c.status !== "validated") {
       throw new Error(`Only review/validated candidates can be promoted (status: ${c.status}).`);
     }

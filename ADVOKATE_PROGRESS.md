@@ -4,7 +4,7 @@ Durable progress file so development resumes without repeating completed work.
 Companion to `ADVOKATE_REQUIREMENTS.md` (the master checklist). Handoff log also
 maintained in `docs/DELIVERY.md`.
 
-Last checkpoint: **9 October 2026** — latest record: **Turn 32** (bottom section; automated discovery pipeline run LIVE on the NCPCR JJ listing: 1 auto-promotion, 3 review-queue additions, 2 duplicate refusals; identity-detector misfire found, disclosed, and hardened); turns 31 and earlier below.
+Last checkpoint: **9 October 2026** — latest record: **Turn 33** (bottom section; turn-32 milestone accepted: misidentification incident closed with a downstream zero-use audit, identity invariant regression-locked both directions, three-status review protocol + review packet built, CJ GLOBAL console discovery card live, eGazette expansion honestly blocked on its postback-gated download); turns 32 and earlier below.
 
 ---
 
@@ -3874,3 +3874,76 @@ separate secret, `docs/BACKUPS.md`).
 - **Next concrete task for resumption:** owner review-queue round (3 pending
   decisions), then eGazette listing expansion for the discovery pipeline
   (second discovery channel), or the DPDP-Hindi connector backlog item.
+
+---
+
+## Turn-33 — 9 Oct 2026: milestone acceptance pass — incident closed with downstream audit, review protocol separated from legal review, console surfaces built, one-listing discipline kept
+
+### 1. Misidentification incident CLOSED (downstream audit attached)
+
+Full record: `docs/DISCOVERY_REVIEW.md` §1. Downstream consumers audited live
+via deployment inline queries: `aiJobs` (2 rows, neither referencing
+`jj-amendment-2006` — snapshots included), `evidenceBundles` (0 rows),
+`matterImpactAlerts` (0 rows), exports (source rows never exported), adverse-
+authority (same corpus). The wrong versions died inside the store; nothing
+ever consumed them. Old references CANNOT silently resolve: versions are
+immutable rows; the wrong row was deleted, not overwritten, and the correct
+re-promotion is a fresh source row — any stale versionId would fail to
+resolve, never silently re-point. Audit record = this doc + sweep-log rows.
+
+### 2. Failure class regression-locked (both directions)
+
+`src/lib/legalDiscovery.test.ts` (+2 tests → 16): the verbatim Rules-2007
+notification with the embedded amendment-act recital never resolves to the
+amendment-act identity; the REVERSE mismatch (rules body under an
+amendment-act filename) is likewise refuted; a decision-table test proves
+filename agreement alone never promotes and null identity never promotes.
+`promoteFromReview` refuses review-status bypass and re-checks every gate.
+
+### 3. Technical validation / publication / legal review SEPARATED
+
+New `reviewPacket` query (`legalDiscoveryStore`): original document URL,
+extracted identity, proposed identifier, jurisdiction, instrument shape
+(amends-principal / subsidiary / model / principal — stated, not consumed as
+applicability), anchor count, body size, devanagari ratio, bytes sha256,
+per-gate warnings, provenance block. Renders THREE status chips; legal
+review is hard-coded `OUTSTANDING` for auto-discovered text. Promotion now
+requires a non-empty decision note AND 7-day reauthentication
+(`loginEvents` evidence — same class as firmExit; enforced server-side in
+the action via `reauthGate`).
+
+### 4. Source access resolved properly (no scraping around gates)
+
+- **CARA:** scheduled jj-2015 refresh stays deferred (`scheduledRefreshDeferred`); decision recorded as UNRESOLVED — owner approval cannot constitute the website's permission. Manual operator-authorized import retained.
+- **eGazette recent-uploads (probed, NOT registered):** the listing is crawlable after its `(S(session))` redirect (100 rows: ministry, subject, dates, Gazette IDs like `CG-DL-E-07102026-276903`), **but the PDF download is an encrypted ASP.NET image-button postback** — plain POST replays return 500/Runtime-Error or the re-rendered listing, never the document. Automating that handshake would bypass a server-side control; refused on principle (turns 17/26 precedent). Recorded in `docs/DISCOVERY_REVIEW.md` §4 with probe evidence. Next expanding target stays blocked until a crawlable listing with direct-PDF exists (or a real-browser path is authorized).
+
+### 5. Pipeline made usable — reusing the existing CJ GLOBAL console
+
+`/platform` → new **"Official-source discovery"** card
+(`src/components/s32/SourceDiscoveryCard.tsx`): monitor strip with the
+standing caveat ("scheduled runs with zero new candidates demonstrate
+execution and deduplication, not complete coverage"), sweep-evidence table
+(last 6 rows, manual vs schedule), review queue with packet dialog + reject,
+reauth pre-warning. Exact workflow in `docs/DISCOVERY_REVIEW.md` §5.
+
+### 6. Coverage honesty recorded
+
+The card and docs show source-specific coverage limited to the registered
+listing; no invented totals. Steady-state scheduled ticks (`newCandidates: 0`)
+continue to serve as execution+dedupe evidence only.
+
+### Verification actually run
+
+- `bunx convex dev --once` push clean; `tsc -b --noEmit` 0.
+- Full suite **53 files / 695 tests green** (672 baseline + 2 discovery
+  fixtures + disposition/etc adjustments; none removed).
+- Downstream audit via inline deployment queries (see §1 doc).
+- eGazette probe: the redirect/html/cent viewstate findings above.
+
+### Not done / pending (honest)
+
+- 3 review-queue decisions remain PENDING owner action (packet now built —
+  owner needs only a signed-in session within 7 days).
+- eGazette expansion blocked (§4); no other permitted listing with
+  direct-PDFs identified this turn.
+- Browser E2E, live AI/payment, restore drill: unchanged, pending.

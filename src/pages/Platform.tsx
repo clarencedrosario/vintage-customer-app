@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { api } from "@/convex/_generated/api";
 import { ChamberShell } from "@/components/ChamberShell";
 import { AiQualityDashboard } from "@/components/s32/AiQualityDashboard";
+import { SourceDiscoveryCard } from "@/components/s32/SourceDiscoveryCard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -147,6 +148,9 @@ export default function Platform() {
             </Card>
           ))}
         </div>
+
+        {/* Official-source discovery monitor + candidate review queue */}
+        <SourceDiscoveryCard />
 
         {/* Plans */}
         <Card>
