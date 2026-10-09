@@ -4,7 +4,7 @@ Durable progress file so development resumes without repeating completed work.
 Companion to `ADVOKATE_REQUIREMENTS.md` (the master checklist). Handoff log also
 maintained in `docs/DELIVERY.md`.
 
-Last checkpoint: **4 October 2026** — latest record: **Turn 24** (bottom section; §32 programme COMPLETE after Phases 1–12, cross-suite sweep passed and one omissions-catalogue gap fixed); turns 23 and earlier below.
+Last checkpoint: **9 October 2026** — latest record: **Turn 32** (bottom section; automated discovery pipeline run LIVE on the NCPCR JJ listing: 1 auto-promotion, 3 review-queue additions, 2 duplicate refusals; identity-detector misfire found, disclosed, and hardened); turns 31 and earlier below.
 
 ---
 
@@ -3762,3 +3762,115 @@ version-control UI (owner action) or an environment where Git is not blocked.
   exists there; or eGazette expansion), or the DPDP Hindi connector when
   browser tooling is available; the Hindi-source task remains in the
   backlog as a specific external-source blocker.
+
+---
+
+## Turn-32 — 9 Oct 2026: AUTOMATED DISCOVERY PIPELINE — first LIVE cycle on the NCPCR JJ listing, with a disclosed-and-hardened identity misfire
+
+### What was built (durable, code-level)
+
+- `src/convex/discoveryListings.ts` — new: registered official listing pages
+  for the pipeline (first entry: NCPCR JJ listing page; each entry carries the
+  verified plain-GET probe evidence for why automated scanning is permitted).
+- `src/convex/legalDiscovery.ts` — new: the "use node" action pipeline:
+  `scheduledDiscoverySweep` (cron target) + operator-gated manual variant.
+- `src/convex/legalDiscoveryStore.ts` — new: server-side store + review queue:
+  candidate upsert/dedupe, validation-gate recording, promote/reject review
+  actions (capability-gated), readback CLIs, guarded cleanup CLI
+  (restricted to auto-discovered sources only).
+- `src/lib/legalDiscovery.ts` — pure helpers: `extractPdfLinks` (incl. dedupe
+  of `/public/viewPdf/…` variants), `detectDocumentIdentity`, `deriveStableKey`,
+  `languageMix` — unit-tested in `src/lib/legalDiscovery.test.ts`.
+- `src/convex/schemaExtras.ts` — discovery candidate/sweep-log tables, +
+  `by_bytes_hash` index on `legalSourceVersions` (bytes-level duplicate gate).
+- `src/convex/crons.ts` — daily discovery sweep alongside the connector sweep.
+- `src/convex/sourceNotices.ts` — turn-32 review disposition: the jj-2015
+  CARA agent override is classified **unresolved** (client-compatibility vs
+  intentional automation restriction cannot be distinguished from outside);
+  `scheduledRefreshDeferred: true` defers SCHEDULED refresh of jj-2015 while
+  manual operator-authorized import remains. Wired into the scheduled
+  connector sweep in `sourceConnector.ts`.
+- `src/convex/crons.ts` — discovery-sweep cron added (see above).
+
+### Live run on real data (moonlit-elk-307, verified via readback CLIs)
+
+NCPCR JJ listing: 10 links found → 10 candidates. Final state:
+
+| Outcome | Count | Detail |
+|---|---|---|
+| AUTO-PROMOTED | 1 | JJ Amendment Act 2006 → NEW registry row `in:statute:jj-amendment-2006`; correct body verified (19,448 chars, 25 sections, sourceUrl = the actual amendment-act PDF) |
+| VALIDATED → review queue | 3 | JJ Act 2000 (`in:statute:jj-2000`), JJ Rules 2007 (`in:rules:jj-2007`), JJ Model Amendment Rules 2022 (`in:guidance:jj-model-rules-2022`) |
+| REJECTED duplicate | 1 | JJ Act 2015 (already corpus, turn 31) refused as refresh-is-not-discovery |
+| REJECTED other | 2 | citizen-charter (non-JJ), 2011 amendment PDF queued-review pathways exercised |
+| REVIEW (odd shapes) | 3 | STQC.pdf (0-section scan), ncpcr_disclaimer.pdf, Hindi-English composite rules file |
+
+Scheduled execution OBSERVED: sweep-log rows with `trigger:"schedule"` exist
+(latest read-back 2026-10-09) — the cron fired on its own overnight and
+correctly recorded `newCandidates: 0, validated: 0` in steady state, proving
+repeat-run dedupe live. All four demo requirements held: auto-promote,
+review queue, identity-duplicate gate, bounded validation (8/sweep).
+
+### Disclosed misfire + hardening (on the record)
+
+Cycle 2 of the same turn briefly promoted the WRONG body under the
+Amendment-2006 key: the JJ Rules 2007 gazette notification (recitals cite
+"…Amendment Act, 2006") fooled the identity detector into matching the
+citation instead of the instrument. Caught by stored-body readback, purged
+via the guarded cleanup CLI (auto-discovered rows only — live/seeded corpus
+untouchable by construction), root-caused, and FIXED with defense-in-depth:
+citation parentheticals stripped before identity matching, "Rules under the…"
+publication classes take precedence, and publisher-filename cross-check added
+(mismatch ⇒ review, NEVER promote; tests cover both). The corrective cycle
+then produced the clean state above (correct body under the correct key,
+19,448/25 verified). The misfire window is DISCLOSED in
+`docs/OFFICIAL_SOURCES.md` §1.6 rather than silently overwritten.
+
+Also fixed en route: a pdfjs v6 buffer-transfer bug (validate sample then
+full extraction on the same Uint8Array detached it — now defensive copy),
+a `newCandidates` counter that tested an object instead of the insert
+result (dedupe worked; the log lied), and viewPdf-variant link dedupe.
+
+### Vintage disclosure (jj-2015, wiring complete)
+
+`vintageFor` (pure, tested) added to `src/lib/legalIntel.ts` and wired into
+`getSource`, `searchSources`, the CLI readback, and the AI retrieval
+context block: the jj-2015 entry now discloses AS-ENACTED 2015 vintage and
+the 2021-amendment gap everywhere statute text is consumed.
+
+### Owner-scope correction (verified in code, doc updated)
+
+`docs/OWNER_SETUP_CHECKLIST.md` §4 now states precisely what
+`isPlatformAdmin` grants: commercial/console administration only —
+NOT customer legal-record access (that exists solely via exceptionalAccess
+per organization, ≤7 days, audited, revocable). Also corrects the earlier
+claim that the exceptional-access key gates the restore drill (that is a
+separate secret, `docs/BACKUPS.md`).
+
+### Verification actually run
+
+- `bunx convex dev --once` push clean (functions live on moonlit-elk-307;
+  earlier "blocked" states were the pre-existing compile gate catching my
+  own in-progress file, resolved; final push green).
+- `bunx tsc -b --noEmit` → typecheck passed alongside the final push.
+- `vitest`: legalDiscovery helpers 10/10; legalIntel vintage tests green;
+  sourceNotices disposition tests green; **full suite 53 files / 693 tests
+  green** (Turn-31 baseline 52/675 + discovery/vintage/disposition tests −
+  none removed).
+- Live CLIs: candidatesCli (final-state table above, before/after the fix),
+  sweepLogsCli (scheduled + manual rows), getSourceCli/storedSourceForCheck
+  (correct Amendment-2006 body + vintage fields), manualDiscoveryScan
+  unauthenticated refusal (operator gate works).
+
+### Not done / pending (honest)
+
+- **Human review decision outstanding:** the three validated documents
+  (JJ Act 2000, JJ Rules 2007, Model Rules 2022) sit in the review queue
+  awaiting a signed-in owner promote/reject — by design, not a failure.
+- **UA-override decision awaiting owner** (CARA agent gate classification;
+  scheduled jj-2015 refresh stays deferred until then).
+- **Legal review** of all retrieved texts remains outstanding (unchanged).
+- Browser E2E, payment/AI live checks: unchanged, blocked as classified in
+  Turn 31.
+- **Next concrete task for resumption:** owner review-queue round (3 pending
+  decisions), then eGazette listing expansion for the discovery pipeline
+  (second discovery channel), or the DPDP-Hindi connector backlog item.

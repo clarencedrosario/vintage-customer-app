@@ -118,6 +118,46 @@ no access control bypassed. This is the standard browser AIA trust model.
 
 ---
 
+### 1.6 Automated discovery pipeline (turn 32) — first NEW-PUBLICATION findings
+
+The turn-31 discovery design (operator-gated scheduled listing scan → candidate
+queue → bounded validation → promote/reject) ran LIVE on the NCPCR JJ listing
+(`nccr.gov.in` listing page; registry: `discoveryListings.ts`). What the pipeline
+actually found and did on real data:
+
+| Document (official NCPCR copy) | Pipeline outcome | Gate that decided |
+| --- | --- | --- |
+| Juvenile Justice (Care & Protection of Children) Amendment Act, 2006 (No. 33 of 2006) | **AUTO-PROMOTED** → new registry row `in:statute:jj-amendment-2006` (v2 versioned text; 19,448 chars; 25 sections detected; sourceUrl = the actual amendment-act PDF) | identity = statute, filename cross-check match, all sanity gates green |
+| Juvenile Justice (Care & Protection of Children) Model Rules, 2022 | **VALIDATED for human decision** → `in:guidance:jj-model-rules-2022` (policy kind = guidance, NEVER auto-promotes) | identity + gates green; parked behind review by policy |
+| JJ Rules 2007 gazette notification | **VALIDATED for human decision** → `in:rules:jj-2007` | identity detects "Rules at the …" publication class; queued by policy |
+| JJ Act 2000 (principal act as originally enacted) | **VALIDATED for human decision** → `in:statute:jj-2000` | identity + gates green; parked behind review by policy |
+| JJ Act 2015 (the already-corpus source registered turn 31) | **REJECTED as identity-duplicate** → no new version, no ingestion, row marked `duplicate rejected` | refresh-is-not-discovery identity gate |
+| A second file of the SAME Amendment Act 2006 (different rendition, same bytes) | **REJECTED as duplicate** | bytes-hash + URL-normalized identity dedupe |
+| NCPCR citizen-charter PDF / STQC PDF / disclaimer PDF | **REJECTED / REVIEWED out with honest notes** | non-jj-acts scope filter, no-acts text shape, or unexpected content class |
+
+**Retraction / correction on the record.** During cycle 2 of this same turn, the
+pipeline briefly promoted the WRONG body under the Amendment-2006 key: the JJ
+Rules 2007 gazette notification (whose recitals cite "…Amendment Act, 2006")
+fooled the identity detector into matching the citation instead of the
+instrument itself. That deployment state was caught by readback, fully purged
+(rotation-free cleanup recorded in the sweep log with the retraction reasons),
+the identity detector was hardened (citation parentheticals stripped;
+"Rules at the …" publishing classes take priority; publisher-filename
+cross-check added — mismatch ⇒ review, NEVER promote), and the pipeline was
+re-run end-to-end from reset: the cycle that produced the table above is the
+corrected state. The wrong-body window is disclosed here rather than quietly
+overwritten, so the record of WHY the hardening exists is preserved.
+
+**Bounded validation:** each sweep validates at most 8 candidates, so a largely
+unknown listing converges over a few scheduled ticks instead of flooding the
+review queue; the pipeline never blocks on a long-running scan. **Scheduled runs are
+observed:** the cron sweep has fired on its own (sweep log rows with
+`trigger:"schedule"`, latest read-back 2026-10-09), rendering
+`newCandidates: 0, validated: 0` in steady state — the dedupe correctly holds
+nothing NEW across repeat ticks, including the crons firing overnight.
+
+---
+
 ## 2. The five-way distinction, applied (never conflated)
 
 **(a) Registry entry.** A row in `legalSources` describing a source. Since turn 31 there are 10 registry rows from the seed set (constitution + 7 statutes + the DPDP Rules gazette source + the Juvenile Justice Act 2015 connector discovery), plus the bounded SCI judgment rows. A registry entry alone retrieves nothing.
@@ -125,6 +165,14 @@ no access control bypassed. This is the standard browser AIA trust model.
 **(b) Manual import.** Text ingested by authenticated operator action (browser path or `scripts/ingest-legal-text.mjs` CLI). Turn 6 (28 Sep 2026) manually imported 7 sources this way (IPC, CrPC, Evidence Act, BNS/BNSS/BSA via mha.gov.in PDFs, Evidence via verified reproduction, s3waas-hosted document), plus bounded SCI judgments. These are real texts with hash provenance — but no connector re-fetches them automatically.
 
 **(c) Working connector.** Code that, given a notice, performs the full path autonomously: fetch → validate → dedupe/version → index. Since turn 26 exactly **two** exist: the POCSO channel (Delhi Police bare act, turn 17) and the DPDP Rules gazette channel (eGazette with pinned public TLS anchors, turn 26). Everything else remains (a) or (b).
+**Turn-32 carve for statute-class documents:** the DISCOVERY pipeline
+(§1.6) adds new statute-family documents to `legalSources` from the reviewed
+NCPCR listing under a stricter policy — identity detection + filename
+cross-check + bounded count/section gates, and auto-promotion ONLY for a
+narrow statute family verified against publisher file names; models/notifications/rules
+classes are queued for human promote/reject decision, auto-promotion always
+refused (that boundary is what allowed the cycle-2 misfire to be caught and
+remediated without another class of document being affected).
 
 **(d) Scheduler in code.** `crons.ts` declares three relevant jobs: `legal-source-ingestion-sweep` (18:30 UTC, since turn 7 — opens run rows; no automated fetcher completes them) and `official-source-connector-sweep` (17:45 UTC, turn 17 — actually fetches connector notices; iterates ALL notices, DPDP included since turn 26). Declaring a cron is configuration, **not** evidence of execution.
 
@@ -186,11 +234,27 @@ Files: `src/convex/sourceConnector.ts` (actions), `src/convex/sourceNotices.ts` 
 | DPDP first fetch (2026-10-06, scheduled-path function on moonlit-elk-307) | `status:"updated"`; **version 2**; versionId `hh7zwadhdkne600vdmgkyn5h1h8frc95`; runId `h17ncg77gwye2y6rcxg4k8bnhs8frj7w`; bytesHash `13ee60a70ee4208b6721b2d6fa7e2d7e71cbe982921c5ec8cb7de91aeb72585b`; textHash `331084debce2ae8a95266b7b924e8c1b3c9ae39d159b32a37431880ea8475391`; 118,579 body chars; **23/23 sections** |
 | DPDP repeat fetch (2026-10-06) | `status:"unchanged"`; runId `h17g3teyzmv764n5bxcm09xmy58fr336`; version id unchanged; **0 new versions, 0 alerts** |
 
+**Scope note (turn 32):** the table above covers REGISTERED-notice connector
+retrieval. The discovery pipeline's first live cycle (§1.6) adds the parallel
+evidence path for DISCOVERED documents — Amendment Act 2006 auto-promoted to its
+own registry row (v2, 19,448 chars, 25 sections), three more documents queued
+for human promote/reject, two identity/byte duplicates refused, and the
+already-corpus JJ Act 2015 correctly refused as "refresh, not discovery". Those
+per-document sweep rows (candidate/gate results; scheduled + manual triggers)
+are recorded in `legalDiscoveryStore` and readable back through the sweep-log
+CLI.
+
 ---
 
 ## 7. Freshness invariant
 
 `legalSources.lastCheckedAt` is written by **both** success and failure paths (with `lastCheckOutcome` + `lastCheckError`), but the staleness computation (`freshness`) is keyed on `lastSuccessfulAt` **only**. Enforced by tests: a failed commit changes nothing the freshness query reports. A source that starts failing therefore drifts toward "stale" — never toward falsely "fresh".
+
+**Turn-32 extension — sweep-log rows are history, not state:** the discovery
+sweep log records every trigger (scheduled + manual) with its per-connection
+counter row; scheduled ticks that find nothing new read `newCandidates: 0,
+validated: 0` and are themselves the live dedupe evidence (read back
+2026-10-09).
 
 ---
 

@@ -89,6 +89,34 @@ the firm connects its own account").
 | Owner email | `PLATFORM_OWNER_EMAIL` | Keys / API keys UI (plain string) | `bootstrapAdmin` grants `isPlatformAdmin` to the **verified** user with exactly this email (fail-closed). That admin opens `/platform` to: create plans (PlanEditorDialog: prices, category A–D, AI allowance, billing unit, tax treatment), toggle plan availability, and triage enterprise enquiries |
 | Admin bootstrap run | `internal/platform:bootstrapAdmin` | Run once (e.g. `npx convex run platform:bootstrapAdmin` style invocation, or via dashboard) after the owner account exists and is verified | Platform console access |
 
+**Scope of platform ownership (verified turn 32, in-app):** `isPlatformAdmin`
+commercially administers the SaaS (plans, subscriptions, enterprise enquiries,
+microservice administration) — and it demonstrably does NOT read customer legal
+records: matter/client/document access exists only through `exceptionalAccess`
+per organization, granted with a written reason, time-boxed ≤ 7 days, audited,
+and revocable (`platform.ts`; enforced in `access.ts` across all §32 modules;
+destructive-path sweep in `docs/S32_INTERFACE_MAP.md`). History: an earlier
+progress note mis-stated the exceptional-access key as the trigger for the
+backup restore drill; the restore drill's key is its own distinct secret
+(`docs/BACKUPS.md`) — corrected here for the record.
+
+**Legal-intel owner-curation keys** (source discovery/review, not commercial):
+- `manualReviewTokenLegacy` — legacy compatibility reader only; grants NO write
+  capability. Owner review actions (`legalDiscoveryStore:promoteFromReview`
+  / `rejectFromReview`) require an authenticated signed-in operator with the
+  app's review capability — never this token.
+- Discovery-listing registration (`discoveryListings.ts`) and the scheduled
+  sweep/cron are deployment configuration, not per-user features.
+
+**Pending owner decision — CARA agent-override (turn 32):** the jj-2015
+connector sends a browser UA to a host whose WAF accepts browsers and 403s
+other agent strings. Genuinely UNRESOLVED whether that is client-compatibility
+or an intentional automation restriction. SCHEDULED refresh of jj-2015 is
+deferred (`scheduledRefreshDeferred` in `sourceNotices.ts`); manual
+operator-authorized import remains. Owner action: confirm the override stays
+within "authorized access to a public document" (then clear the flag) —
+or instruct removal of the notice + stored text.
+
 ## 5. Sequencing (what unlocks what)
 
 1. `PLATFORM_OWNER_EMAIL` + bootstrap → **plan configuration** becomes possible.
