@@ -15,7 +15,57 @@ import {
   type MutationCtx,
 } from "./_generated/server";
 import { getCurrentUser } from "./users";
+import { DISCOVERY_LISTINGS } from "./discoveryListings";
+import { getAuthSessionId } from "@convex-dev/auth/server";
+import { internalMfaState } from "./twofactor";
 import type { Doc, Id } from "./_generated/dataModel";
+
+/**
+ * STRUCTURED JURISDICTION MATCHING (turn 36).
+ *
+ * stableKeys are colon-namespaced: `in:statute:jj-2015`, `in:rules:...`,
+ * `in:guidance:...`. An assignment grants authority over a PREFIX SEGMENT
+ * — `in:` (all India), `in:statute:` (Indian statutes only) — and a source
+ * is covered iff the assignment's segment list is a prefix of the
+ * source's SEGMENT LIST on segment boundaries. Raw string prefix matching
+ * is WRONG here: `in:statute` would accidentally match `in:statutory-x`
+ * (or `in:statu…` anything), i.e. garbage like `"in"` would cover
+ * `"industrial-..."` slugs inside a segment. Matching therefore compares
+ * whole segments only.
+ */
+export function jurisdictionCovers(
+  assignmentPrefix: string,
+  stableKey: string,
+): boolean {
+  const a = assignmentPrefix.split(":").map((s) => s.trim()).filter(Boolean);
+  const k = stableKey.split(":").map((s) => s.trim()).filter(Boolean);
+  if (a.length === 0 || a.length > k.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== k[i]) return false;
+  }
+  // Boundary rule: the assignment must END on a segment boundary of the
+  // key — `in:statute` covers `in:statute:jj-2015`, and `in:` covers
+  // everything under India; a partial final segment never matches (the
+  // equals-prefix check above already enforces whole-segment equality).
+  return true;
+}
+
+/**
+ * Is an assignment row CURRENTLY authorising? Active, never revoked, and
+ * not past a deliberate expiry (term-bound authority). Shared by the
+ * review gate, the packet display and the renewal window check.
+ */
+export function assignmentCurrentlyAuthorises(
+  a: { active: boolean; revokedAt?: number | null; expiresAt?: number | null },
+  now: number,
+): boolean {
+  if (!a.active) return false;
+  if (a.revokedAt) return false;
+  if (a.expiresAt !== undefined && a.expiresAt !== null && a.expiresAt <= now) {
+    return false;
+  }
+  return true;
+}
 
 function isPlatformOperator(user: Doc<"users"> | null): boolean {
   return !!user && !user.isAnonymous && !!user.isPlatformAdmin;
@@ -331,6 +381,28 @@ export const finishValidation = internalMutation({
   },
 });
 
+/**
+ * CONTINUITY (turn 36): compute the overlap verdict for a scan against
+ * the last SUCCESSFUL scan of the SAME listing.
+ *
+ * URL-hash dedupe prevents duplicate PROCESSING; it does NOT recover
+ * unseen publications that appeared and left a capped feed between two
+ * successful scans. Each scan therefore either demonstrably overlaps its
+ * predecessor (continuity held) or gaps cannot be ruled out, which is
+ * recorded as an explicit possible coverage gap with its first-seen
+ * timestamp (a later failed scan neither opens nor clears a gap — it
+ * just leaves continuity unestablished for that interval).
+ */
+export function continuityOverlapCount(
+  prior: string[],
+  now: string[],
+): number {
+  const priorSet = new Set(prior);
+  let n = 0;
+  for (const u of now) if (priorSet.has(u)) n += 1;
+  return n;
+}
+
 export const recordSweepLog = internalMutation({
   args: {
     trigger: v.union(v.literal("schedule"), v.literal("manual")),
@@ -342,10 +414,47 @@ export const recordSweepLog = internalMutation({
     queuedForReview: v.number(),
     rejected: v.number(),
     error: v.optional(v.string()),
+    // The observed window of this scan (capped ≤ 40); absent when the
+    // listing fetch itself failed (no window observed).
+    windowUrls: v.optional(v.array(v.string())),
   },
-  handler: async (ctx, args): Promise<{ ok: boolean }> => {
+  handler: async (ctx, args): Promise<{ ok: boolean; continuity: string }> => {
+    const now = Date.now();
+    // Recent history FOR THIS LISTING (bounded scan — by_time is recent-first).
+    const prev = (
+      await ctx.db
+        .query("discoverySweepLogs")
+        .withIndex("by_time", (q) => q.lt("triggeredAt", now))
+        .order("desc")
+        .take(200)
+    ).filter((l) => l.listingKey === args.listingKey);
+    const lastSuccess = prev.find((l) => !l.error);
+    const lastAny = prev[0];
+
+    let continuity: "overlap" | "gap" | "first" | "unknown" = "unknown";
+    let coverageGapSince: number | undefined;
+    if (args.error || !args.windowUrls) {
+      // A failed scan establishes nothing: it cannot CLEAR an open gap
+      // (the interval under failure may contain items we never saw) and
+      // it cannot CLOSE one. If none is open and a prior successful scan
+      // exists, the interval IS potentially unretrievable — open a gap.
+      continuity = "unknown";
+      coverageGapSince =
+        lastAny?.coverageGapSince ?? (lastSuccess ? now : undefined);
+    } else if (!lastSuccess || !lastSuccess.windowUrls?.length) {
+      continuity = "first";
+    } else if (
+      continuityOverlapCount(lastSuccess.windowUrls, args.windowUrls) > 0
+    ) {
+      continuity = "overlap"; // continuity held — gap closed by construction
+    } else {
+      continuity = "gap";
+      // Carry an already-open gap forward; otherwise open at this scan.
+      coverageGapSince = lastAny?.coverageGapSince ?? now;
+    }
+
     await ctx.db.insert("discoverySweepLogs", {
-      triggeredAt: Date.now(),
+      triggeredAt: now,
       trigger: args.trigger,
       listingKey: args.listingKey,
       linksFound: args.linksFound,
@@ -355,8 +464,12 @@ export const recordSweepLog = internalMutation({
       queuedForReview: args.queuedForReview,
       rejected: args.rejected,
       error: args.error?.slice(0, 300),
+      windowUrls: args.windowUrls?.slice(0, 40),
+      continuityOverlapChecked: true,
+      continuityOverlap: continuity,
+      coverageGapSince,
     });
-    return { ok: true };
+    return { ok: true, continuity };
   },
 });
 
@@ -380,9 +493,11 @@ async function reviewerHasAuthorityFor(
     .query("reviewerAssignments")
     .withIndex("by_user", (q) => q.eq("userId", userId))
     .collect();
+  const now = Date.now();
   return rows.some(
     (a) =>
-      a.active && !a.revokedAt && stableKeyPrefix.startsWith(a.jurisdictionPrefix),
+      assignmentCurrentlyAuthorises(a, now) &&
+      jurisdictionCovers(a.jurisdictionPrefix, stableKeyPrefix),
   );
 }
 
@@ -449,24 +564,48 @@ export const recordLegalReview = mutation({
     const user = await requireOperator(ctx);
     const src = await ctx.db.get(args.sourceId);
     if (!src) throw new Error("Source not found.");
-    // REVIEW-AUTHORITY GATE: an active assignment with a matching
-    // jurisdiction prefix must exist for THIS user. Platform-operator
-    // status alone never passes this gate.
-    const assignment = await ctx.db
+    // REVIEW-AUTHORITY GATE: an active, unexpired assignment with a
+    // matching jurisdiction must exist for THIS user, and the acting
+    // session must have completed the required internal-MFA challenge.
+    // Platform-operator status or assignment alone never passes this
+    // gate on their own.
+    const myRows = await ctx.db
       .query("reviewerAssignments")
       .withIndex("by_user", (q) => q.eq("userId", user._id))
-      .collect()
-      .then((rows) =>
-        rows.find(
-          (a) =>
-            a.active &&
-            !a.revokedAt &&
-            src.stableKey.startsWith(a.jurisdictionPrefix),
-        ),
-      );
+      .collect();
+    const now = Date.now();
+    const assignment = myRows.find(
+      (a) =>
+        assignmentCurrentlyAuthorises(a, now) &&
+        jurisdictionCovers(a.jurisdictionPrefix, src.stableKey),
+    );
     if (!assignment) {
+      const expired = myRows.some(
+        (a) =>
+          a.active &&
+          !a.revokedAt &&
+          jurisdictionCovers(a.jurisdictionPrefix, src.stableKey) &&
+          a.expiresAt !== undefined &&
+          a.expiresAt !== null &&
+          a.expiresAt <= now,
+      );
       throw new Error(
-        "Review not recorded: this identity holds no active legal-reviewer assignment covering this source's jurisdiction. Platform-operator status alone does not confer review authority; an explicit reviewer assignment is required.",
+        expired
+          ? "Review not recorded: the reviewer assignment covering this jurisdiction has EXPIRED. A renewed assignment from a platform administrator is required."
+          : "Review not recorded: this identity holds no active legal-reviewer assignment covering this source's jurisdiction. Platform-operator status alone does not confer review authority; an explicit reviewer assignment is required.",
+      );
+    }
+    // REQUIRED INTERNAL MFA on privileged review recording (turn 36):
+    // same gate the workforce/owner surfaces use — TOTP enrollment + a
+    // live session challenge. Email-OTP possession is authentication,
+    // not a second factor.
+    const sessionId = await getAuthSessionId(ctx);
+    const mfa = await internalMfaState(ctx.db, user, sessionId);
+    if (!mfa.enrolled || !mfa.satisfied) {
+      throw new Error(
+        mfa.enrolled
+          ? "Review not recorded: complete the two-factor challenge for this session first (Settings → Security)."
+          : "Review not recorded: two-factor enrollment is required for legal-review recording (Settings → Security).",
       );
     }
     const version = await ctx.db
@@ -509,13 +648,31 @@ export const assignReviewer = mutation({
     jurisdictionPrefix: v.string(),
     scopeNote: v.optional(v.string()),
     selfDeclaredCredentials: v.optional(v.string()),
+    // Deliberate expiry (term-bound authority), epoch ms. Absent =
+    // indefinite. Renewal is a NEW row, never a mutation of an old one.
+    expiresAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const assigner = await requireOperator(ctx);
-    if (!args.jurisdictionPrefix.includes(":")) {
+    if (!/^(\s*[a-z0-9-]+\s*:)+$/.test(args.jurisdictionPrefix) ||
+        args.jurisdictionPrefix.split(":").filter(Boolean).length < 1) {
       throw new Error(
-        "jurisdictionPrefix must be a stableKey namespace prefix, e.g. 'in:'",
+        "jurisdictionPrefix must be a colon-namespaced segment prefix, e.g. 'in:' or 'in:statute:'",
       );
+    }
+    // ASSIGNMENT GRANTING is a privileged platform operation (turn 36):
+    // internal-MFA required, same gate class as workforce administration.
+    const sessionId = await getAuthSessionId(ctx);
+    const mfa = await internalMfaState(ctx.db, assigner, sessionId);
+    if (!mfa.enrolled || !mfa.satisfied) {
+      throw new Error(
+        mfa.enrolled
+          ? "Assignment refused: complete the two-factor challenge for this session first (Settings → Security)."
+          : "Assignment refused: two-factor enrollment is required to grant reviewer assignments (Settings → Security).",
+      );
+    }
+    if (args.expiresAt !== undefined && args.expiresAt <= Date.now()) {
+      throw new Error("expiresAt must be in the future.");
     }
     const target = await ctx.db.get(args.userId);
     if (!target) throw new Error("Reviewee user not found.");
@@ -531,6 +688,7 @@ export const assignReviewer = mutation({
       active: true,
       assignedById: assigner._id,
       assignedAt: Date.now(),
+      expiresAt: args.expiresAt,
     });
     return { ok: true };
   },
@@ -578,7 +736,10 @@ export const myReviewScope = query({
       .query("reviewerAssignments")
       .withIndex("by_user", (q) => q.eq("userId", user._id))
       .collect();
-    const active = rows.filter((a) => a.active && !a.revokedAt);
+    // Same currency rule as the review gate: expiry counts here too, so a
+    // lapsed assignment disappears from the reviewer's own scope view.
+    const now = Date.now();
+    const active = rows.filter((a) => assignmentCurrentlyAuthorises(a, now));
     return {
       signedIn: true,
       isOperator: isPlatformOperator(user),
@@ -837,6 +998,50 @@ export const rejectCandidate = mutation({
   },
 });
 
+/**
+ * CONTINUITY SUMMARY (turn 36): per registered listing, the latest sweep
+ * outcome and whether a coverage gap is OPEN. A gap is open iff the most
+ * recent log for the listing carries coverageGapSince — opened by a scan
+ * that shared no URL with the last successful scan ("gap"), by a failed
+ * scan after a successful one ("unknown" interval), and CARRIED forward
+ * until a subsequent successful scan demonstrably overlaps again.
+ * Deliberately separate from `byStatus`/totals: dedupe/drift are distinct
+ * questions.
+ */
+export const listingContinuity = query({
+  args: {},
+  handler: async (ctx) => {
+    await requireOperator(ctx);
+    const rows = await ctx.db
+      .query("discoverySweepLogs")
+      .withIndex("by_time")
+      .order("desc")
+      .take(400);
+    const out: {
+      listingKey: string;
+      lastLogAt: number | null;
+      lastContinuity: string | null;
+      gapOpenSince: number | null;
+      lastError: string | null;
+    }[] = [];
+    for (const listingKey of Object.keys(DISCOVERY_LISTINGS)) {
+      const forListing = rows.filter((r) => r.listingKey === listingKey);
+      const latest = forListing[0];
+      const gapRow = forListing.find((r) => r.coverageGapSince);
+      out.push({
+        listingKey,
+        lastLogAt: latest?.triggeredAt ?? null,
+        lastContinuity: latest?.continuityOverlap ?? null,
+        // The most recent gap timestamp wins: rows are recent-first, so
+        // the first row carrying one marks the CURRENT unresolved run.
+        gapOpenSince: gapRow?.coverageGapSince ?? null,
+        lastError: latest?.error ?? null,
+      });
+    }
+    return out;
+  },
+});
+
 /** Sweep-log readback (CLI verification of scheduled vs manual runs). */
 export const sweepLogsCli = internalQuery({
   args: { limit: v.optional(v.number()) },
@@ -857,6 +1062,9 @@ export const sweepLogsCli = internalQuery({
       queuedForReview: r.queuedForReview,
       rejected: r.rejected,
       error: r.error ?? null,
+      continuityOverlap: r.continuityOverlap ?? null,
+      windowSize: r.windowUrls?.length ?? null,
+      coverageGapSince: r.coverageGapSince ?? null,
     }));
   },
 });

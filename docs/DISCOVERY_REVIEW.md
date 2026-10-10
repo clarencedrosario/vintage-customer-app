@@ -186,15 +186,49 @@ zero deltas everywhere); the "Duplicate" columns show in the packet warnings
 | eGazette Bills&Acts (`egazette-recent-uploads`) | yes (turn 34) | 2026-10-10: 20-row capped recent window; 13 review + 6 requeued-then-review + 1 size-rejection; 11 Oct: newest-upload candidate found on the next scan (new=1 → review) | zero auto-promotes by policy; queue persists until an operator acts |
 | eGazette Notifications (`egazette-notifications`) | **yes (turn 35)** | 2026-10-10: first live cycle — 20 rows, new=20, bounded validation (6/sweep) landed 6 → review, remaining 10 found + 10 review processed by subsequent sweeps | zero auto-promotes by policy |
 
-**What this DOES and DOES NOT cover (turn 35):** each Category feed is the
-host's capped "most-recent" window (20 rows); a `Page=2` parameter is
-IGNORED by the host (probed 10 Oct 2026 — same rows returned), so there is
-no deep pagination to walk. Publications older than each window are NOT
-covered by automated scanning (connector notices / manual import remain the
-paths for those). NO full-Gazette-coverage claim is made anywhere: two
-slivers of a national publishing stream. Overlap protection for the moving
-window = the existing URL-hash dedupe (a document pushed off the front page
-by newer uploads is already a stored candidate — never re-found).
+**What this DOES and DOES NOT cover (turn 36, superseding the turn-35 wording):**
+each Category feed is the host's capped "most-recent" window (20 rows); a
+`Page=2` parameter is IGNORED by the host (probed 10 Oct 2026 — same rows
+returned), so there is no deep pagination to walk. Publications older than each
+window are NOT covered by automated scanning (connector notices / manual
+import remain the paths for those). NO full-Gazette-coverage claim is made
+anywhere: two slivers of a national publishing stream.
+
+**"Moving-window protection" CORRECTED (turn 36).** The turn-35 claim was
+wrong and is withdrawn: URL-hash dedupe prevents duplicate PROCESSING of an
+already-seen item — it does NOT and cannot recover publications that appeared
+in and left the capped window BETWEEN two successful scans, and it does not
+establish that any scan shares even one item with its predecessor. The honest
+continuity mechanism is now IN THE PRODUCT:
+
+- Every sweep log records its observed window (`windowUrls`, capped ≤ 40) and
+  an overlap verdict against the last SUCCESSFUL scan of the same listing:
+  `overlap` (≥1 URL shared — continuity held, any open gap closes),
+  `gap` (nothing shared — a POSSIBLE coverage gap opens), `first` (no prior
+  successful scan), or `unknown` (the fetch failed; continuity for that
+  interval cannot be established — a failed scan never opens, clears or
+  closes an open gap).
+- An open gap carries `coverageGapSince` (its first-seen timestamp) and is
+  DISPLAYED on the /platform discovery card (amber "Possible coverage gap —
+  completeness not guaranteed" strip + a Continuity column in the sweep
+  table) until a later successful scan demonstrably overlaps again.
+- Candidate RETENTION: candidates persist in `discoveryCandidates` by design
+  (dedupe keys on stored rows; nothing is pruned) — items that later leave
+  the front-page window keep their validation/review state and remain in
+  their queue until processed. No silent loss by feed turnover.
+- **Backfill: NOT SOLVED.** No permitted date-range/archive retrieval API
+  could be located (researched turn 36: egazette.gov.in Interactive Search
+  and archive pages exist as interactive forms, but no documented programmatic
+  API, bulk endpoint, official annual compilation or sitemap was verified
+  from this environment — the eGazette pages themselves could not be
+  fetched/re-read here for independent confirmation). The publications that
+  were missed between two successful scans may be UNRECOVERABLE by automated
+  means. **Completeness is therefore NOT guaranteed and is not claimed**;
+  the second capped category (Notifications) only widens two front-page
+  slivers — it does NOT close the gap and must not be cited as if it did.
+  If the publisher confirms a permitted bulk/date-range channel, it can be
+  registered as a backfill listing; otherwise the residual gap is recorded
+  on the release checklist (§B discovery row) as an open completeness risk.
 
 **Reviewer authority (turn 35):** platform-operator status or CJ GLOBAL
 ownership is NOT legal-review qualification. `recordLegalReview` is gated

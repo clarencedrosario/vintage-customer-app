@@ -282,6 +282,8 @@ async function scanListing(
       queuedForReview: 0,
       rejected: 0,
       error: `listing fetch failed: ${e instanceof Error ? e.message : String(e)}`,
+      // No window was observed — continuity cannot be established for
+      // this interval; the store leaves any open gap untouched.
     });
     throw e;
   }
@@ -334,6 +336,12 @@ async function scanListing(
     promoted,
     queuedForReview,
     rejected,
+    // CONTINUITY (turn 36): the scan's observed window, recorded so each
+    // scan can be overlap-checked against its predecessor. Dedupe
+    // prevents duplicate processing but nothing else — a feed that moved
+    // completely between two successful scans leaves items unseen, and
+    // this field is what makes that gap VISIBLE instead of silent.
+    windowUrls: links.map((l) => l.url),
   });
   return { linksFound: links.length, newCandidates, validated, promoted, queuedForReview, rejected };
 }

@@ -47,6 +47,9 @@ import type { FunctionReturnType } from "convex/server";
 type Packet = FunctionReturnType<
   typeof api.legalDiscoveryStore.reviewPacket
 >;
+type Continuity = FunctionReturnType<
+  typeof api.legalDiscoveryStore.listingContinuity
+>;
 
 const STATUS_ORDER = ["promoted", "validated", "review", "found", "validating", "rejected"] as const;
 
@@ -63,6 +66,7 @@ function fmtWhen(ts: number | null | undefined): string {
 export function SourceDiscoveryCard() {
   const monitor = useQuery(api.legalDiscoveryStore.discoveryMonitor);
   const queue = useQuery(api.legalDiscoveryStore.reviewQueue);
+  const continuity = useQuery(api.legalDiscoveryStore.listingContinuity);
   const reject = useMutation(api.legalDiscoveryStore.rejectCandidate);
   // promoteFromReview is an ACTION (network + pdfjs); useMutation accepts
   // actions too — the call goes through the same mutation queue client
@@ -84,6 +88,14 @@ export function SourceDiscoveryCard() {
   if (monitor === undefined || queue === undefined) return null;
 
   const counts = monitor.byStatus as Record<string, number>;
+
+  // Coverage-gap strip data: any listing whose latest sweep verdict opens
+  // or carries an unresolved possible gap. Dedupe prevented double work;
+  // it cannot recover what a capped feed dropped between scans — and the
+  // card must say so rather than imply continuity.
+  const gapListings: NonNullable<Continuity> = (continuity ?? []).filter(
+    (c) => c !== null && c.gapOpenSince !== null,
+  );
 
   return (
     <Card>
@@ -114,9 +126,34 @@ export function SourceDiscoveryCard() {
             </Badge>
           ))}
           <span className="text-xs text-muted-foreground self-center">
-            Registered listing: ncpcr-jj-listing · coverage: this listing only
+            Registered listings: 3 · coverage: registered listings' front-page windows only
           </span>
         </div>
+
+        {/* CONTINUITY strip (turn 36): URL-hash dedupe prevents duplicate
+            processing; it does NOT recover publications that appeared and
+            left a capped feed between two successful scans. Each scan is
+            overlap-checked against the last SUCCESSFUL scan of the same
+            listing; a non-overlapping intact window, or any failed-scan
+            interval after a successful one, is a POSSIBLE coverage gap
+            that stays on display until continuity is re-established. */}
+        {gapListings.length > 0 && (
+          <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            <p className="font-medium">Possible coverage gap — completeness not guaranteed</p>
+            <ul className="mt-1 space-y-0.5">
+              {gapListings.map((c) => (
+                <li key={c.listingKey}>
+                  <code>{c.listingKey}</code>: last scan{" "}
+                  {c.lastContinuity === "unknown"
+                    ? "failed (fetch failure) — interval since the last successful scan may contain unseen publications"
+                    : "fully non-overlapping with the previous successful scan — publications may have been missed"}
+                  {" ·"} open since {fmtWhen(c.gapOpenSince)}
+                  {c.lastError ? ` · last error: ${c.lastError}` : ""}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {/* Sweep evidence */}
         <div className="overflow-hidden rounded-md border border-border">
@@ -132,6 +169,7 @@ export function SourceDiscoveryCard() {
                 <TableHead>Promoted</TableHead>
                 <TableHead>Review</TableHead>
                 <TableHead>Rejected</TableHead>
+                <TableHead>Continuity</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -146,11 +184,17 @@ export function SourceDiscoveryCard() {
                   <TableCell className="text-xs">{l.promoted}</TableCell>
                   <TableCell className="text-xs">{l.queuedForReview}</TableCell>
                   <TableCell className="text-xs">{l.rejected}</TableCell>
+                  <TableCell className="text-xs">
+                    {l.continuityOverlap ?? "—"}
+                    {l.coverageGapSince ? (
+                      <span className="text-amber-700"> · gap since {fmtWhen(l.coverageGapSince)}</span>
+                    ) : null}
+                  </TableCell>
                 </TableRow>
               ))}
               {monitor.recentLogs.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-xs text-muted-foreground">
+                  <TableCell colSpan={10} className="text-xs text-muted-foreground">
                     No sweeps recorded yet.
                   </TableCell>
                 </TableRow>

@@ -1341,6 +1341,10 @@ export const legalIntelTables = {
     assignedById: v.id("users"),
     assignedAt: v.number(),
     revokedAt: v.optional(v.number()),
+    // Turn 36: assignments may EXPIRE deliberately (term-bound review
+    // authority) — after expiresAt an assignment refuses new reviews even
+    // if never revoked. Absent = indefinite.
+    expiresAt: v.optional(v.number()),
   }).index("by_user", ["userId"]),
 
   discoverySweepLogs: defineTable({
@@ -1354,6 +1358,19 @@ export const legalIntelTables = {
     queuedForReview: v.number(),
     rejected: v.number(),
     error: v.optional(v.string()),
+    // CONTINUITY (turn 36): the observed window for THIS scan (URLs,
+    // bounded) plus the overlap verdict against the last SUCCESSFUL scan
+    // of the same listing. A capped feed moves; each scan either
+    // demonstrably overlaps its predecessor (continuity held) or CANNOT
+    // be proven continuous, which is recorded as an explicit possible
+    // coverage gap — dedupe alone cannot recover publications that
+    // appeared and left the window between two successful scans.
+    windowUrls: v.optional(v.array(v.string())), // capped: ≤ 40 URLs
+    continuityOverlapChecked: v.optional(v.boolean()),
+    continuityOverlap: v.optional(
+      v.union(v.literal("overlap"), v.literal("gap"), v.literal("first"), v.literal("unknown")),
+    ), // "first" = first successful scan of the listing; "unknown" = predecessor fetch failed
+    coverageGapSince: v.optional(v.number()), // first log timestamp of the current unresolved gap run
   }).index("by_time", ["triggeredAt"]),
 };
 
