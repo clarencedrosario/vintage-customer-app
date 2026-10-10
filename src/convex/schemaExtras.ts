@@ -1317,6 +1317,32 @@ export const legalIntelTables = {
   })
     .index("by_source_version", ["sourceId", "version"]),
 
+  // Reviewer ASSIGNMENTS (turn 35): platform-operator status or platform
+  // ownership is NOT reviewer qualification. A user may record a legal
+  // review only when an active assignment row exists for their user id
+  // whose jurisdictionPrefix is a prefix of the source stableKey's
+  // jurisdiction segment ("in:"). Assignments are recorded by an
+  // operator; the CREDENTIALS claimed at assignment time are stored
+  // verbatim and marked self-desclared — the platform does NOT verify
+  // bar membership, enrolment number or any professional claim, and no
+  // downstream surface may present a completed review as evidence of
+  // verified qualification.
+  reviewerAssignments: defineTable({
+    userId: v.id("users"),
+    userLabel: v.string(), // denormalised name/email for display
+    jurisdictionPrefix: v.string(), // e.g. "in:" (stableKey namespace)
+    scopeNote: v.optional(v.string()), // e.g. "central gazette instruments"
+    selfDeclaredCredentials: v.optional(v.string()), // verbatim, NOT verified
+    credentialStatus: v.union(
+      v.literal("self_declared"),
+      v.literal("independently_verified"),
+    ),
+    active: v.boolean(),
+    assignedById: v.id("users"),
+    assignedAt: v.number(),
+    revokedAt: v.optional(v.number()),
+  }).index("by_user", ["userId"]),
+
   discoverySweepLogs: defineTable({
     triggeredAt: v.number(),
     trigger: v.union(v.literal("schedule"), v.literal("manual")),

@@ -272,6 +272,14 @@ export function SourceDiscoveryCard() {
                   ))}
                 </div>
 
+                {/* Turn 35: authority separation — publication vs review */}
+                <p className={`text-xs rounded-md border px-3 py-2 ${packet.reviewer.canLegallyReview ? "bg-emerald-50 text-emerald-900 border-emerald-200" : "bg-amber-50 text-amber-900 border-amber-200"}`}>
+                  <span className="font-medium">Your authorities:</span> publication {packet.reviewer.name ? "(you are an operator)" : "(not an operator)"} · legal review{" "}
+                  {packet.reviewer.canLegallyReview
+                    ? "— you hold an active reviewer assignment for in: instruments (your credentials are recorded as self-declared, not independently verified)"
+                    : "— NOT available: no active reviewer assignment covers this jurisdiction; operating or owning the platform is not reviewer qualification"}
+                </p>
+
                 {/* Original document + provenance */}
                 <div className="rounded-md border border-border p-3 space-y-1.5 text-xs">
                   <p>

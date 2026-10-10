@@ -130,6 +130,15 @@ documents fetched by plain GET on the same pinned anchors.
 (act, rule or notification of any kind) queues for OPERATOR review with a
 promotion note; nothing from this national listing enters the corpus without
 a recorded human decision.
+**Access basis, stated precisely (turn 35):** what was verified is that the
+host currently serves these paths to plain unauthenticated requests.
+robots.txt is ABSENT (404) — an absence, not permission. No site terms
+permitting automated collection or reuse were located; bulk/commercial
+reuse conditions under the Copyright Act s.52 / Gazette rules remain
+UNRESOLVED with the publisher, and NO licence is invented anywhere in the
+record. If the publisher's conditions, once known, restrict automated
+access, the listing entries must be removed and documents moved to the
+authorized manual-import path.
 **Live evidence (10 Oct 2026, moonlit-elk-307):** scan returns the same 20
 rows each run (URL-hash dedupe steady state); validation: 13 candidates in
 review (identity=null — general gazettes, correct pipeline behaviour), 6
@@ -174,15 +183,31 @@ zero deltas everywhere); the "Duplicate" columns show in the packet warnings
 | Listing | Registered | First live cycle | Steady state |
 | --- | --- | --- | --- |
 | NCPCR JJ listing (`ncpcr-jj-listing`) | yes | 2026-10-08: 1 auto-promote, 3 review, 2 dup-rejected, 4 odd-shape-review | scheduled ticks report `newCandidates: 0` |
-| eGazette recent-uploads (`egazette-recent-uploads`) | **yes (turn 34)** | 2026-10-10: 20 rows/scans; 13 review (correct human-gate), 6 fetch-fail→requeue→review, 1 size rejection | zero auto-promotes by policy (empty prefix list); review queue grows until the operator acts |
+| eGazette Bills&Acts (`egazette-recent-uploads`) | yes (turn 34) | 2026-10-10: 20-row capped recent window; 13 review + 6 requeued-then-review + 1 size-rejection; 11 Oct: newest-upload candidate found on the next scan (new=1 → review) | zero auto-promotes by policy; queue persists until an operator acts |
+| eGazette Notifications (`egazette-notifications`) | **yes (turn 35)** | 2026-10-10: first live cycle — 20 rows, new=20, bounded validation (6/sweep) landed 6 → review, remaining 10 found + 10 review processed by subsequent sweeps | zero auto-promotes by policy |
 
-**Qualified legal review is no longer a hardcoded label (turn 34):** the
-discoveryLegalReviews table stores per-source-version attestations (reviewer
-identity, scope, findings, notes, date, append-only history). Default state
-remains OUTSTANDING by construction (no row covering the latest version), and
-AUTO-discovery never creates attestations — only a signed-in operator
-recording THEIR OWN identity can. See `legalDiscoveryStore.recordLegalReview`
-/ `legalReviewStatus` / `legalReviewHistory`.
+**What this DOES and DOES NOT cover (turn 35):** each Category feed is the
+host's capped "most-recent" window (20 rows); a `Page=2` parameter is
+IGNORED by the host (probed 10 Oct 2026 — same rows returned), so there is
+no deep pagination to walk. Publications older than each window are NOT
+covered by automated scanning (connector notices / manual import remain the
+paths for those). NO full-Gazette-coverage claim is made anywhere: two
+slivers of a national publishing stream. Overlap protection for the moving
+window = the existing URL-hash dedupe (a document pushed off the front page
+by newer uploads is already a stored candidate — never re-found).
+
+**Reviewer authority (turn 35):** platform-operator status or CJ GLOBAL
+ownership is NOT legal-review qualification. `recordLegalReview` is gated
+by an explicit ACTIVE `reviewerAssignments` row whose jurisdiction prefix
+matches the source's namespace (assignment stored + revocable, never
+deleted). Claimed credentials are stored VERBATIM and marked
+`credentialStatus: "self_declared"` — the platform does not verify bar
+membership or any professional claim, and no surface presents a completed
+review as evidence of verified qualification. The review packet now shows
+the acting operator's two authorities separately (publication vs legal
+review). Assignment targeting spares the owner from being the default
+reviewer: assigned reviewers work their jurisdiction; `myReviewScope`
+returns each user's active assignments.
 
 Delta-from-completeness: one listing is a sliver of Indian legal publishing.
 Coverage claims stay limited to what the registered listings publish.

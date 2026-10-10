@@ -366,6 +366,26 @@ export const recordSweepLog = internalMutation({
  * review record exists for the CURRENT latest version with faithful
  * findings; anything else resolves `outstanding` by construction.
  */
+/**
+ * Does THIS user hold an active reviewer assignment whose jurisdiction
+ * prefix matches the given stableKey prefix? Authority check used by
+ * the packet display and the assignment-aware review queue.
+ */
+async function reviewerHasAuthorityFor(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+  stableKeyPrefix: string,
+): Promise<boolean> {
+  const rows = await ctx.db
+    .query("reviewerAssignments")
+    .withIndex("by_user", (q) => q.eq("userId", userId))
+    .collect();
+  return rows.some(
+    (a) =>
+      a.active && !a.revokedAt && stableKeyPrefix.startsWith(a.jurisdictionPrefix),
+  );
+}
+
 async function legalReviewStateFor(
   ctx: QueryCtx,
   sourceId: Id<"legalSources">,
@@ -406,9 +426,11 @@ async function legalReviewStateFor(
 /**
  * Record a qualified legal review of ONE source version (append-only;
  * re-review creates a NEW row — history is never overwritten).
- * A plain platform operator may record THEIR OWN attestation, which is
- * distinct from a publication decision. Auto-discovered sources and
- * connector sources alike may be reviewed.
+ * Turn 35: a platform operator identity is NOT sufficient. The actor
+ * must hold an ACTIVE reviewer assignment whose jurisdiction prefix
+ * matches the source's stableKey namespace. Owning the platform or even
+ * operating it grants NO review authority; assignments are explicit
+ * records. Any user (operator or not) may be assigned.
  */
 export const recordLegalReview = mutation({
   args: {
@@ -427,6 +449,26 @@ export const recordLegalReview = mutation({
     const user = await requireOperator(ctx);
     const src = await ctx.db.get(args.sourceId);
     if (!src) throw new Error("Source not found.");
+    // REVIEW-AUTHORITY GATE: an active assignment with a matching
+    // jurisdiction prefix must exist for THIS user. Platform-operator
+    // status alone never passes this gate.
+    const assignment = await ctx.db
+      .query("reviewerAssignments")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .collect()
+      .then((rows) =>
+        rows.find(
+          (a) =>
+            a.active &&
+            !a.revokedAt &&
+            src.stableKey.startsWith(a.jurisdictionPrefix),
+        ),
+      );
+    if (!assignment) {
+      throw new Error(
+        "Review not recorded: this identity holds no active legal-reviewer assignment covering this source's jurisdiction. Platform-operator status alone does not confer review authority; an explicit reviewer assignment is required.",
+      );
+    }
     const version = await ctx.db
       .query("legalSourceVersions")
       .withIndex("by_source", (q) => q.eq("sourceId", args.sourceId))
@@ -446,6 +488,106 @@ export const recordLegalReview = mutation({
       reviewedAt,
     });
     return { ok: true, reviewedAt };
+  },
+});
+
+// ---------------------------------------------------------------------
+// Reviewer assignments (turn 35) — publication authority vs.
+// legal-review authority are DIFFERENT grants. An operator may publish
+// (promote/reject candidates) but must NOT conduct legal review until a
+// separate, explicit assignment row authorises them for a jurisdiction.
+// The requester self-declares any professional credentials; those are
+// recorded verbatim and marked self_declared — storing them is not
+// verification, and no code path treats an assignment as proof of
+// verified qualification.
+// ---------------------------------------------------------------------
+
+/** Record (or update, never overwrite) a reviewer assignment. */
+export const assignReviewer = mutation({
+  args: {
+    userId: v.id("users"),
+    jurisdictionPrefix: v.string(),
+    scopeNote: v.optional(v.string()),
+    selfDeclaredCredentials: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const assigner = await requireOperator(ctx);
+    if (!args.jurisdictionPrefix.includes(":")) {
+      throw new Error(
+        "jurisdictionPrefix must be a stableKey namespace prefix, e.g. 'in:'",
+      );
+    }
+    const target = await ctx.db.get(args.userId);
+    if (!target) throw new Error("Reviewee user not found.");
+    await ctx.db.insert("reviewerAssignments", {
+      userId: args.userId,
+      userLabel: target.name ?? target.email ?? "unknown",
+      jurisdictionPrefix: args.jurisdictionPrefix,
+      scopeNote: args.scopeNote?.slice(0, 300),
+      selfDeclaredCredentials: args.selfDeclaredCredentials?.slice(0, 1000),
+      // Stored verbatim, flagged as NOT verified. Only a future
+      // independently_verified record could change this flag.
+      credentialStatus: "self_declared" as const,
+      active: true,
+      assignedById: assigner._id,
+      assignedAt: Date.now(),
+    });
+    return { ok: true };
+  },
+});
+
+/** List active assignments (operator view, audit). */
+export const reviewerAssignments = query({
+  args: {},
+  handler: async (ctx) => {
+    await requireOperator(ctx);
+    return ctx.db.query("reviewerAssignments").order("desc").collect();
+  },
+});
+
+/** Revoke: active=false + revokedAt — assignments are history, never deleted. */
+export const revokeReviewer = mutation({
+  args: { assignmentId: v.id("reviewerAssignments") },
+  handler: async (ctx, args) => {
+    const user = await requireOperator(ctx);
+    const a = await ctx.db.get(args.assignmentId);
+    if (!a) throw new Error("Assignment not found.");
+    if (!a.active) throw new Error("Assignment already revoked.");
+    await ctx.db.patch(args.assignmentId, {
+      active: false,
+      revokedAt: Date.now(),
+    });
+    return { ok: true, revokedBy: user.email ?? user.name ?? "operator" };
+  },
+});
+
+/**
+ * Which candidates is THIS user assigned to? Reviewer-queue filtering:
+ * a candidate whose listing or detected stableKey falls inside one of
+ * the user's active jurisdiction prefixes. Non-assigned operators see
+ * the queue but have no legal-review authority — publication decisions
+ * (promote/reject) remain owner/operator functions; legal review is a
+ * separate authority granted per jurisdiction.
+ */
+export const myReviewScope = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await getCurrentUser(ctx);
+    if (!user) return { signedIn: false, assignments: [] };
+    const rows = await ctx.db
+      .query("reviewerAssignments")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .collect();
+    const active = rows.filter((a) => a.active && !a.revokedAt);
+    return {
+      signedIn: true,
+      isOperator: isPlatformOperator(user),
+      assignments: active.map((a) => ({
+        jurisdictionPrefix: a.jurisdictionPrefix,
+        scopeNote: a.scopeNote ?? null,
+        credentialStatus: a.credentialStatus,
+      })),
+    };
   },
 });
 
@@ -624,6 +766,10 @@ export const reviewPacket = query({
       reviewer: {
         name: user.name ?? user.email ?? null,
         reauthPending: (await reauthRequired(ctx, user._id)) !== null,
+        // Turn 35: publication authority (operator) and legal-review
+        // authority (assigned reviewer) shown separately in the packet
+        // so the UI cannot blur them.
+        canLegallyReview: await reviewerHasAuthorityFor(ctx, user._id, "in:"),
       },
     };
   },

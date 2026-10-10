@@ -71,20 +71,37 @@ export const DISCOVERY_LISTINGS: Record<
   // Gazette of India / eGazette — recent uploads (Category=1, Bills &
   // Acts), FIRST national-scope listing (turn 34). Evidence:
   //   • Listing: the ASP.NET seed redirect (GET root → (S(session)) —
-  //     the ordinary browser redirect chain; cookies from responses
-  //     honoured) then a plain GET of the listing page with one Referer
-  //     serves full server-rendered rows to our agent string (verified
-  //     live 2026-10-09, HTTP 200, ~84 KB HTML, 100 rows) — the listing
-  //     serves automated and browser access on the SAME terms.
+  //     the ordinary browser redirect chain) then a plain GET of the
+  //     listing page with one Referer serves server-rendered rows to
+  //     our agent string (verified live 2026-10-09/10, HTTP 200).
   //   • Documents: each row's UGID (e.g. CG-DL-E-09102026-277020)
   //     maps to the PUBLISHED static file /WriteReadData/<year>/<num>.pdf,
   //     which the host serves by PLAIN GET with NO session/cookies
-  //     (verified live 2026-10-09: HTTP 200, %PDF-1.6, 819,727 bytes,
-  //     unauthenticated; turn-26 derivation re-verified against
-  //     current rows 277020/276981). robots.txt is ABSENT on this host
-  //     (HTTP 404 — no disallow exists). No login, no CAPTCHA, no
-  //     postback replay: we take the direct published file, which is
-  //     served to everyone — no access control involved.
+  //     (verified live 2026-10-09/10: HTTP 200, %PDF-1.6,
+  //     content-type application/pdf, unauthenticated).
+  //   • robots.txt is ABSENT on this host (HTTP 404 — an absence, not
+  //     permission); no site terms/disclaimer page could be located in
+  //     the markup probed 2026-10-10. ACCESS BASIS IS THEREFORE
+  //     DELIBERATELY NARROW: what is recorded here is that retrieval is
+  //     currently served to plain unauthenticated requests — it is NOT
+  //     a claim of unrestricted automated collection, NOT a claim of
+  //     free commercial reuse (government-published works carry their
+  //     own reuse conditions under the Copyright Act s.52 / Gazette
+  //     rules, which THIS CODE DOES NOT ADJUDICATE), and NOT a licence
+  //     the pipeline can invent on the publisher's behalf. If the
+  //     publisher's conditions for automated access or reuse ever
+  //     become known and restrictive, this entry must be removed and
+  //     the documents moved to the authorized manual-import path.
+  //   • COVERAGE SCOPE (turn 35, probed live): Category=1 renders a
+  //     capped "most-recent" window (20 rows); a Page=2 parameter is
+  //     IGNORED by the host (same rows returned), i.e. there is no deep
+  //     pagination to walk — publications older than the window are NOT
+  //     covered by automated scanning (they are reached, when at all,
+  //     only via the connector notices / manual import). Category=2
+  //     (ordinary notifications) is its own capped feed and is
+  //     registered separately below. Absence of pagination is a server
+  //     fact, not a completeness claim: NO full-Gazette-coverage claim
+  //     is made anywhere.
   //   • BOUNDED AUTO-PROMOTE POLICY: deliberately EMPTY. Every eGazette
   //     candidate (acts, rules, notifications of any kind) passes
   //     through the OPERATOR review queue with a promotion note — the
@@ -100,7 +117,26 @@ export const DISCOVERY_LISTINGS: Record<
     publisher:
       "Gazette of India (eGazette), Directorate of Printing, Ministry of Housing and Urban Affairs, Government of India",
     accessBasis:
-      "Public official listing + PUBLISHED static document files. Listing served to our agent string via the ordinary seed-redirect chain (verified 9 Oct 2026, HTTP 200 server-rendered rows). Row UGIDs map to the published /WriteReadData/<year>/<num>.pdf files, served by plain unauthenticated GET (verified 9/9 Oct 2026 live: HTTP 200 %PDF, no cookies; derivation two-for-two). robots.txt absent (404). No login, no CAPTCHA, no postback replay — direct published files only.",
+      "Retrieval currently served to plain unauthenticated requests: listing via the host's own seed-redirect chain, documents at the published /WriteReadData/<year>/<num>.pdf static paths (live-verified 9/10 Oct 2026: HTTP 200, %PDF, application/pdf, no cookies). robots.txt ABSENT (404 — an absence, not permission). No site terms permitting automated collection or reuse were located; bulk/commercial reuse conditions remain UNRESOLVED with the publisher — no licence is invented here. If such conditions are later found to restrict automated access, this entry is removed and documents move to the authorized manual-import path.",
+    autoPromoteKeyPrefixes: [],
+    maxLinksPerScan: 24,
+    maxValidatePerSweep: 6,
+  },
+
+  // Same host, DIFFERENT feed (turn 35): ordinary gazette
+  // NOTIFICATIONS (Category=2 — not Bills&Acts). Probed live 10 Oct
+  // 2026: HTTP 200, 20 capped recent rows, UGIDs span CG-DL-E-09102026
+  // → CG-DL-E-01062026 (several months of recent notifications).
+  // Same access basis and same empty auto-promote policy as above.
+  "egazette-notifications": {
+    url: "https://egazette.gov.in",
+    listingShape: "egazette-recent-uploads",
+    listingPath: "RecentUploads.aspx?Category=2",
+    tlsFix: "lets-encrypt-aia",
+    publisher:
+      "Gazette of India (eGazette), Directorate of Printing, Ministry of Housing and Urban Affairs, Government of India",
+    accessBasis:
+      "Same host, same basis as egazette-recent-uploads: retrieval currently served to plain unauthenticated requests via published static WriteReadData paths; robots.txt absent; reuse conditions UNRESOLVED with the publisher — no licence invented. If conditions restrict automated access, remove this entry.",
     autoPromoteKeyPrefixes: [],
     maxLinksPerScan: 24,
     maxValidatePerSweep: 6,
