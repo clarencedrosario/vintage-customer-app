@@ -360,6 +360,149 @@ export const recordSweepLog = internalMutation({
   },
 });
 
+/**
+ * Shared state computation for the packet + monitor: a source's legal-
+ * review status is data-driven — `reviewed` only when a qualified-
+ * review record exists for the CURRENT latest version with faithful
+ * findings; anything else resolves `outstanding` by construction.
+ */
+async function legalReviewStateFor(
+  ctx: QueryCtx,
+  sourceId: Id<"legalSources">,
+): Promise<string> {
+  const src = await ctx.db.get(sourceId);
+  if (!src) return "OUTSTANDING — source not found";
+  const latest = src.latestVersion ? await ctx.db.get(src.latestVersion) : null;
+  const history = await ctx.db
+    .query("discoveryLegalReviews")
+    .withIndex("by_source_version", (q) => q.eq("sourceId", sourceId))
+    .order("desc")
+    .collect();
+  if (!latest) return "OUTSTANDING — no versions on record";
+  const onLatest = history.find((r) => r.version === latest.version);
+  if (!onLatest) {
+    return `OUTSTANDING — no qualified review of version ${latest.version}`;
+  }
+  if (onLatest.findings === "uncertain" || onLatest.findings === "defective") {
+    return `FLAGGED — version ${latest.version} review findings: ${onLatest.findings} (by ${onLatest.reviewerName ?? "unnamed reviewer"})`;
+  }
+  return `REVIEWED — version ${latest.version} attested faithful (${onLatest.findings}) by ${onLatest.reviewerName ?? "unnamed reviewer"} on ${new Date(onLatest.reviewedAt).toISOString().slice(0, 10)}; scope: ${onLatest.scope}`;
+}
+
+// ---------------------------------------------------------------------
+// Qualified legal review — the per-version record a qualified lawyer
+// signs. This REPLACES the hardcoded "always OUTSTANDING" display: the
+// standalone-status computation is data-driven (a promoted auto-
+// discovered source with NO matching review record is outstanding by
+// construction), and the record carries reviewer identity, scope,
+// findings and date for the audit history.
+// AUTO-discovery never runs this path; it is invoked manually by a
+// signed-in human granting their own identity (requireOperator gates
+// signed-in human granting their own identity (requireOperator gates
+// it). The personal-authority rule: owning the software is NOT reviewer
+// qualification — that judgment belongs to the human whose identity is
+// recorded.
+// ---------------------------------------------------------------------
+
+/**
+ * Record a qualified legal review of ONE source version (append-only;
+ * re-review creates a NEW row — history is never overwritten).
+ * A plain platform operator may record THEIR OWN attestation, which is
+ * distinct from a publication decision. Auto-discovered sources and
+ * connector sources alike may be reviewed.
+ */
+export const recordLegalReview = mutation({
+  args: {
+    sourceId: v.id("legalSources"),
+    version: v.number(),
+    scope: v.string(),
+    findings: v.union(
+      v.literal("faithful_reproduction"),
+      v.literal("faithful_with_notes"),
+      v.literal("uncertain"),
+      v.literal("defective"),
+    ),
+    notes: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const user = await requireOperator(ctx);
+    const src = await ctx.db.get(args.sourceId);
+    if (!src) throw new Error("Source not found.");
+    const version = await ctx.db
+      .query("legalSourceVersions")
+      .withIndex("by_source", (q) => q.eq("sourceId", args.sourceId))
+      .filter((q) => q.eq(q.field("version"), args.version))
+      .unique() ?? null;
+    if (!version) throw new Error(`Version ${args.version} not found.`);
+    const reviewedAt = Date.now();
+    await ctx.db.insert("discoveryLegalReviews", {
+      sourceId: args.sourceId,
+      version: args.version,
+      reviewerId: user._id,
+      reviewerName: user.name ?? undefined,
+      reviewerEmail: user.email ?? undefined,
+      scope: args.scope.slice(0, 400),
+      findings: args.findings,
+      notes: args.notes?.slice(0, 2000),
+      reviewedAt,
+    });
+    return { ok: true, reviewedAt };
+  },
+});
+
+/** All reviews of a source (audit history keyed by source+version). */
+export const legalReviewHistory = query({
+  args: { sourceId: v.id("legalSources") },
+  handler: async (ctx, args) => {
+    await requireOperator(ctx);
+    return ctx.db
+      .query("discoveryLegalReviews")
+      .withIndex("by_source_version", (q) => q.eq("sourceId", args.sourceId))
+      .order("desc")
+      .collect();
+  },
+});
+
+/**
+ * The standalone legal-review STATUS for one source — data-driven, not
+ * a hardcoded label: outstanding unless a review row exists for the
+ * CURRENT latest version with findings of faithful-with-notes or
+ * faithful WITHOUT defect, and it has not been superseded by a later
+ * version of the same source. Exposed in the packet and in monitoring.
+ */
+export const legalReviewStatus = query({
+  args: { sourceId: v.id("legalSources") },
+  handler: async (ctx, args) => {
+    await requireOperator(ctx);
+    const src = await ctx.db.get(args.sourceId);
+    if (!src) throw new Error("Source not found.");
+    const latest = src.latestVersion
+      ? await ctx.db.get(src.latestVersion)
+      : null;
+    const history = await ctx.db
+      .query("discoveryLegalReviews")
+      .withIndex("by_source_version", (q) => q.eq("sourceId", args.sourceId))
+      .order("desc")
+      .collect();
+    const onLatest = latest
+      ? history.find((r) => r.version === latest.version)
+      : undefined;
+    const covered = latest && onLatest &&
+      (onLatest.findings === "faithful_reproduction" ||
+        onLatest.findings === "faithful_with_notes");
+    return {
+      status: covered ? "reviewed" : "outstanding",
+      reviewedVersion: latest?.version ?? null,
+      reviewedBy: covered ? (onLatest?.reviewerName ?? "") : null,
+      findings: covered ? onLatest.findings : null,
+      reviewedAt: covered ? onLatest.reviewedAt : null,
+      uncertainOrDefective: latest && onLatest &&
+        (onLatest.findings === "uncertain" || onLatest.findings === "defective"),
+      historyCount: history.length,
+    };
+  },
+});
+
 // ---------------------------------------------------------------------
 // Review queue — human decisions on uncertain candidates.
 // ---------------------------------------------------------------------
@@ -472,8 +615,12 @@ export const reviewPacket = query({
             : c.status === "rejected"
               ? "rejected"
               : "PENDING — operator promotes or rejects with a note",
-        legalReview:
-          "OUTSTANDING — no qualified reviewer has attested this text; automated discovery certifies extraction, NOT legal accuracy",
+        // Data-driven (turn 34): outstanding unless a qualified-review
+        // row covers the source's CURRENT latest version. Never auto-
+        // granted; the record itself carries reviewer identity.
+        legalReview: promotedSource
+          ? await legalReviewStateFor(ctx, promotedSource._id)
+          : "OUTSTANDING — unreviewed: a qualified review record covering the latest version does not exist yet",
       },
       reviewer: {
         name: user.name ?? user.email ?? null,

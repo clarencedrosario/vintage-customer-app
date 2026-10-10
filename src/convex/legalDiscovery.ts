@@ -40,6 +40,9 @@ import {
 import { renderLines, detectSections } from "../lib/pdfExtract";
 import { loadPdfWorker } from "../lib/pdfWorkerLoader.js";
 import { DISCOVERY_LISTINGS } from "./discoveryListings";
+import { extractGazetteRows } from "../lib/legalDiscovery";
+import { GAZETTE_CA_PEMS } from "./gazetteCa";
+import https from "node:https";
 
 const UA =
   "Advokate-legal-intel/0.2 (authorized retrieval of open government publications)";
@@ -70,7 +73,118 @@ function gateSummary(g: Gates, detail: string): string {
   return fails ? `FAILED[${fails}] ${detail}` : `PASS ${detail}`;
 }
 
-/** pdfjs extraction (legacy build) — same pattern as sourceConnector. */
+/**
+ * Session-listing fetch (turn 34): the root GET is followed through the
+ * (S(session)) redirect the HOST SERVES to the seed; from THERE the
+ * listing page is a plain GET (same-host, one Referer). Verified live
+ * 2026-10-09: NO cookies need to be sent (sending the ASP.NET fixation
+ * cookie actually REGRESSES to the home page) — the redirect chain and
+ * one Referer are the entire "session". Captures 302 Locations
+ * explicitly (undici-style auto-follow would hide the seed); verifies
+ * TLS through the pinned PUBLIC anchors (host serves an incomplete
+ * chain) — verification stays fully ON. NO postback is simulated; the
+ * listing is ordinary HTML.
+ */
+function pinnedGet(
+  url: string,
+  headers: Record<string, string>,
+  hopsLeft = 2,
+): Promise<{ status: number; location: string | null; bytes: Uint8Array }> {
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      url,
+      {
+        method: "GET",
+        ca: GAZETTE_CA_PEMS,
+        headers,
+        timeout: 45_000,
+      },
+      (res) => {
+        const status = res.statusCode ?? 0;
+        const location = res.headers.location ?? null;
+        if ([301, 302, 303, 307, 308].includes(status) && location && hopsLeft > 0) {
+          res.resume(); // drain before recursing
+          const next = new URL(location, url).toString();
+          if (!next.startsWith("https://")) {
+            reject(new Error(`Refusing non-HTTPS redirect to ${next}`));
+            return;
+          }
+          pinnedGet(next, headers, hopsLeft - 1).then(resolve, reject);
+          return;
+        }
+        const chunks: Buffer[] = [];
+        res.on("data", (c: Buffer) => chunks.push(c));
+        res.on("end", () =>
+          resolve({ status, location, bytes: new Uint8Array(Buffer.concat(chunks)) }),
+        );
+        res.on("error", reject);
+      },
+    );
+    req.on("timeout", () => req.destroy(new Error("timeout")));
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+async function fetchSessionListing(
+  rootUrl: string,
+  listingPath: string,
+): Promise<string> {
+  // Hop 1: root — the host 302s to the (S(session)) seed. Captured, not
+  // auto-followed, because subsequent requests are relative to the seed.
+  // The seed may arrive as a 302 Location (plain node) OR — when the
+  // egress runtime auto-follows redirects — as a 200 home page whose
+  // internal links still carry an (S(sid)) seed. Accept both; never
+  // invent one.
+  const root = await pinnedGet(rootUrl, {
+    "User-Agent": UA,
+    Accept: "text/html",
+  });
+  let seedUrl: string;
+  if (root.status === 302 && root.location) {
+    seedUrl = new URL(root.location, rootUrl).toString();
+  } else if (root.status === 200) {
+    const sidMatch = /\(S\(([a-z0-9]{24})\)\)/.exec(
+      new TextDecoder().decode(root.bytes.slice(0, 200_000)),
+    );
+    if (!sidMatch) {
+      throw new Error(
+        "eGazette root served neither a session redirect nor a seed reference.",
+      );
+    }
+    seedUrl = new URL(
+      `(S(${sidMatch[1]}))/default.aspx`,
+      rootUrl,
+    ).toString();
+  } else {
+    throw new Error(
+      `eGazette root did not serve the session entry point (HTTP ${root.status}).`,
+    );
+  }
+  const seedBase = seedUrl.replace(/[^/]*$/, "");
+  // Hop 2: the listing page under the seed with one Referer, NO cookie
+  // (verified: cookies regress to the home page; the seed itself is the
+  // session).
+  const listingUrl = new URL(listingPath, seedBase).toString();
+  const page = await pinnedGet(listingUrl, {
+    "User-Agent": UA,
+    Accept: "text/html",
+    Referer: seedBase + "default.aspx",
+  });
+  if (page.status !== 200) {
+    throw new Error(`HTTP ${page.status} from seeded listing path.`);
+  }
+  const html = new TextDecoder().decode(page.bytes);
+  if (!/lbl_UGID_/.test(html)) {
+    throw new Error(
+      "Listing page did not render UGID rows (regressed to home or error page).",
+    );
+  }
+  return html;
+}
+
+/** pdfjs extraction (legacy build) — same pattern as sourceConnector.
+ */
 async function extractPdf(
   buf: Uint8Array,
   maxNo: number,
@@ -138,12 +252,25 @@ async function scanListing(
 
   let html: string;
   try {
-    const resp = await fetch(listing.url, {
-      headers: { "User-Agent": UA, Accept: "text/html" },
-      signal: AbortSignal.timeout(45_000),
-    });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status} from listing`);
-    html = await resp.text();
+    // eGazette-style listings sit behind an ASP.NET cookie-session
+    // redirect chain: GET the root, follow the served (S(session)) seed
+    // redirect to the listing page with one Referer — the ordinary
+    // redirect path any browser takes (nothing replayed, invented or
+    // bypassed), through the pinned PUBLIC anchors because the host
+    // serves an incomplete chain. Plain listings keep the direct GET.
+    if (
+      listing.listingShape === "egazette-recent-uploads" &&
+      listing.tlsFix === "lets-encrypt-aia"
+    ) {
+      html = await fetchSessionListing(listing.url, listing.listingPath!);
+    } else {
+      const resp = await fetch(listing.url, {
+        headers: { "User-Agent": UA, Accept: "text/html" },
+        signal: AbortSignal.timeout(45_000),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status} from listing`);
+      html = await resp.text();
+    }
   } catch (e) {
     await ctx.runMutation(internal.legalDiscoveryStore.recordSweepLog, {
       trigger,
@@ -160,7 +287,11 @@ async function scanListing(
   }
 
   // Inspect the listing markup — never follow off-host links.
-  const links = extractPdfLinks(html, listing.url).slice(
+  const links = (
+    listing.listingShape === "egazette-recent-uploads"
+      ? extractGazetteRows(html, listing.url)
+      : extractPdfLinks(html, listing.url)
+  ).slice(
     0,
     listing.maxLinksPerScan,
   );
@@ -295,10 +426,26 @@ export const validateCandidate = internalAction({
     let fullExtract: { body: string; sections: { anchor: string; heading: string; start: number }[] } | null = null;
 
     try {
-      const resp = await fetch(c.url, {
-        headers: { "User-Agent": UA, Accept: "application/pdf" },
-        signal: AbortSignal.timeout(45_000),
-      });
+      let resp: Response;
+      if (c.url.startsWith("https://egazette.gov.in/WriteReadData/")) {
+        // eGazette static published files: plain GET through the pinned
+        // PUBLIC anchors (host serves an incomplete TLS chain; the
+        // global fetch egress here cannot build it). Verification stays
+        // fully ON — unverified fetch is never used.
+        const got = await pinnedGet(c.url, {
+          "User-Agent": UA,
+          Accept: "application/pdf",
+        });
+        resp = new Response(got.bytes as unknown as BodyInit, {
+          status: got.status,
+          headers: { "content-type": "application/pdf" },
+        });
+      } else {
+        resp = await fetch(c.url, {
+          headers: { "User-Agent": UA, Accept: "application/pdf" },
+          signal: AbortSignal.timeout(45_000),
+        });
+      }
       if (resp.ok) {
         const buf = new Uint8Array(await resp.arrayBuffer());
         bytesHash = sha256HexBytes(buf);

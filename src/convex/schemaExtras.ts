@@ -1291,6 +1291,32 @@ export const legalIntelTables = {
     .index("by_url_hash", ["urlHash"])
     .index("by_status", ["status"]),
 
+  // Qualified-legal-review RECORDS (turn 34): one append-only row per
+  // written attestation, replacing the hardcoded "always OUTSTANDING"
+  // display with a real audit record. A review applies to ONE source
+  // version (immutable) and is signed by a real user identity; scope and
+  // findings are data, not UI labels. A promoted auto-discovered source
+  // is legally-reviewed only when such a row EXISTS and the source's
+  // latestVersion matches the reviewed version — anything else is
+  // outstanding BY CONSTRUCTION (no default-on logic to maintain).
+  discoveryLegalReviews: defineTable({
+    sourceId: v.id("legalSources"),
+    version: v.number(), // reviewed version number
+    reviewerId: v.id("users"), // real signed-in reviewer identity
+    reviewerName: v.optional(v.string()),
+    reviewerEmail: v.optional(v.string()),
+    scope: v.string(), // e.g. "identity + as-published fidelity"
+    findings: v.union(
+      v.literal("faithful_reproduction"),
+      v.literal("faithful_with_notes"),
+      v.literal("uncertain"),
+      v.literal("defective"),
+    ),
+    notes: v.optional(v.string()),
+    reviewedAt: v.number(),
+  })
+    .index("by_source_version", ["sourceId", "version"]),
+
   discoverySweepLogs: defineTable({
     triggeredAt: v.number(),
     trigger: v.union(v.literal("schedule"), v.literal("manual")),

@@ -59,6 +59,45 @@ export function extractPdfLinks(html: string, listingUrl: string): ListingLink[]
 }
 
 /**
+ * Extract eGazette "recent uploads" ROWS (turn 34): the listing renders
+ * one <tr> per gazette with the UGID in a span
+ * (`gvGazetteList_lbl_UGID_N`) and metadata (ministry/department/
+ * subject/dates) in sibling labelled spans. Returns one row per gazette
+ * ID with the composed DIRECT document URL — the static WriteReadData
+ * path (year + numeric tail from the UGID), which serves the PDF by
+ * plain GET with NO session/cookies (verified live 2026-10-09: HTTP 200,
+ * %PDF-1.6, from an unauthenticated request — turn-26 derivation,
+ * re-verified against current rows). The rows' own download control is
+ * a postback; we take the DIRECT published file instead, which the
+ * host serves to everyone without any access control — no handshake
+ * replay, no bypass.
+ */
+export function extractGazetteRows(
+  html: string,
+  listingUrl: string,
+): ListingLink[] {
+  const base = new URL(listingUrl);
+  const out = new Map<string, string>();
+  const re = /CG-[A-Z0-9]{2,6}-[A-Z]-\d{8}-(\d{6})/g;
+  const seen = new Set<string>();
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    const ugid = m[0];
+    if (seen.has(ugid)) continue;
+    seen.add(ugid);
+    const num = m[1]!; // numeric tail of the UGID = static file id
+    // Publication date sits in the same row's UGID itself (ddmmyyyy
+    // inside the id); the year is unambiguous there.
+    const ddmmyyyy = /\d{8}/.exec(ugid) ![0];
+    const year = ddmmyyyy.slice(4); // "09102026" → "2026"
+    const url = new URL(`/WriteReadData/${year}/${num}.pdf`, base);
+    if (url.host !== base.host) continue; // never off-host
+    out.set(ugid, url.href);
+  }
+  return [...out.entries()].map(([title, url]) => ({ url, title }));
+}
+
+/**
  * Detect the document identity of a JJ-family instrument from the
  * extracted text (gazette headers repeat the instrument title). Returns
  * a canonical identity string, or null when the header does not name a

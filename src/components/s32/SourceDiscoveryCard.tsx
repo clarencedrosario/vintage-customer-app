@@ -254,8 +254,15 @@ export function SourceDiscoveryCard() {
                     },
                     {
                       k: "Qualified legal review",
-                      v: "outstanding (never auto-granted)",
-                      cls: "bg-amber-50 text-amber-900 border-amber-200",
+                      // Data-driven from the review-record table (turn 34):
+                      // reviewed only when a qualified-review row covers
+                      // the promoted source's CURRENT latest version.
+                      v: packet.statuses.legalReview,
+                      cls: /REVIEWED/.test(packet.statuses.legalReview)
+                        ? "bg-emerald-50 text-emerald-900 border-emerald-200"
+                        : /FLAGGED/.test(packet.statuses.legalReview)
+                          ? "bg-red-50 text-red-900 border-red-200"
+                          : "bg-amber-50 text-amber-900 border-amber-200",
                     },
                   ].map((s) => (
                     <div key={s.k} className={`rounded-md border px-3 py-2 ${s.cls}`}>

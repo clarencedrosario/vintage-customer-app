@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   extractPdfLinks,
+  extractGazetteRows,
   detectDocumentIdentity,
   deriveStableKey,
   languageMix,
@@ -62,6 +63,44 @@ describe("extractPdfLinks", () => {
       <a href="https://ncpcr.gov.in/public/uploads/abc_report.pdf">R (uploads)</a>
       <a href="https://ncpcr.gov.in/public/uploads/admin/abc_report.pdf">R (admin copy)</a>`;
     expect(extractPdfLinks(html, LISTING)).toHaveLength(1);
+  });
+});
+
+describe("extractGazetteRows — eGazette recent-uploads rows (turn 34)", () => {
+  // Verbatim markup shape observed live 2026-10-09 (probe):
+  // gvGazetteList spans carry UGID `CG-XX-E-ddmmyyyy-nnnnnn`.
+  const EGAZ_LISTING = "https://egazette.gov.in";
+  it("derives ONE direct WriteReadData URL per UGID row, deduped", () => {
+    const html = `
+      <span id="gvGazetteList_lbl_UGID_0"><font color="Black">CG-DL-E-09102026-277020</font></span>
+      <input type="image" name="gvGazetteList$ctl02$imgbtndownload" />
+      <span id="gvGazetteList_lbl_UGID_1">CG-WB-E-09102026-277019</span>
+      <span id="gvGazetteList_lbl_UGID_2">CG-DL-E-09102026-277018</span>`;
+    const rows = extractGazetteRows(html, EGAZ_LISTING);
+    expect(rows).toHaveLength(3);
+    // Year comes from the UGID's own ddmmyyyy block; num from its tail.
+    expect(rows[0].url).toBe("https://egazette.gov.in/WriteReadData/2026/277020.pdf");
+    expect(rows[1].url).toBe("https://egazette.gov.in/WriteReadData/2026/277019.pdf");
+    // Title = the UGID itself (the row's only reliable on-listing name).
+    expect(rows[0].title).toBe("CG-DL-E-09102026-277020");
+  });
+
+  it("dedupes repeated UGIDs and never emits off-host URLs", () => {
+    const html = `
+      <span>CG-KA-E-09102026-276981</span>
+      <span>CG-KA-E-09102026-276981</span>`;
+    const rows = extractGazetteRows(html, EGAZ_LISTING);
+    expect(rows).toHaveLength(1);
+  });
+
+  it("returns empty on unrelated markup (no invention)", () => {
+    expect(extractGazetteRows("<p>no rows here</p>", EGAZ_LISTING)).toEqual([]);
+  });
+
+  it("cross-year UGIDs map to their own publication year", () => {
+    const html = `<span>CG-DL-E-14112025-267650</span>`;
+    const rows = extractGazetteRows(html, EGAZ_LISTING);
+    expect(rows[0].url).toBe("https://egazette.gov.in/WriteReadData/2025/267650.pdf");
   });
 });
 
