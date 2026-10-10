@@ -398,7 +398,6 @@ async function legalReviewStateFor(
 // findings and date for the audit history.
 // AUTO-discovery never runs this path; it is invoked manually by a
 // signed-in human granting their own identity (requireOperator gates
-// signed-in human granting their own identity (requireOperator gates
 // it). The personal-authority rule: owning the software is NOT reviewer
 // qualification — that judgment belongs to the human whose identity is
 // recorded.
@@ -760,6 +759,32 @@ export const purgeDiscoveredSourceCli = internalMutation({
 });
 
 /**
+ * CLI: requeue transient-fetch failures (turn 34): the eGazette WriteReadData
+ * static files fail inside the action's egress with an undici fetch error
+ * (TLS chain build), but the SAME bytes fetch fine with the pinned
+ * PUBLIC-anchors https agent (verified out-of-band 10 Oct 2026: HTTP 200
+ * %PDF- content-type). Requeued listed "found" so the validator retries
+ * through its own pinned path.
+ */
+export const requeueFailedCli = internalMutation({
+  args: { listingKey: v.string() },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("discoveryCandidates")
+      .withIndex("by_listing", (q) => q.eq("listingKey", args.listingKey))
+      .collect();
+    let requeued = 0;
+    for (const r of rows) {
+      if (r.status === "rejected" && r.gateSummary?.includes("FAILED[exception] fetch failed")) {
+        await ctx.db.patch(r._id, { status: "found", updatedAt: Date.now() });
+        requeued += 1;
+      }
+    }
+    return { requeued };
+  },
+});
+
+/**
  * CLI readback: every candidate with its gate outcome — the headless
  * evidence view of a scan + validation + promotion cycle (admin-key
  * invocation only; the live pipeline itself runs through
@@ -772,6 +797,7 @@ export const candidatesCli = internalQuery({
     return rows
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .map((c) => ({
+        _id: String(c._id),
         listingKey: c.listingKey,
         url: c.url,
         status: c.status,

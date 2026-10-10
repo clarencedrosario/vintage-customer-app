@@ -81,11 +81,11 @@ Per candidate (`legalDiscoveryStore:reviewPacket`):
 2. **Publication decision** — the operator's promote/reject with a
    recorded note. Owning the software does NOT auto-grant this; the packet
    explicitly shows `PENDING` until a human acts.
-3. **Qualified legal review** — permanently `OUTSTANDING` for
-   auto-discovered text until a qualified lawyer attests. The statusNote
-   stamped on every auto-discovered source says: "AS-PUBLISHED text —
-   vintage/amendment status NOT consolidated; needs legal review before
-   reliance."
+3. **Qualified legal review** — `OUTSTANDING` by construction for
+   auto-discovered text until a qualified lawyer attests via a
+   `discoveryLegalReviews` row covering the CURRENT latest version
+   (turn 34: the status is data-driven, never hardcoded — reviewer
+   identity, scope, findings and date live in the record; see §6).
 
 The console (`/platform` → *Official-source discovery* card) renders these as
 three side-by-side status chips so no one can mistake a publication decision
@@ -110,26 +110,36 @@ host means to allow automation via browser agents or not. `scheduledRefreshDefer
 existing stored text stays untouched; manual operator-authorized import
 remains, documented in `docs/OFFICIAL_SOURCES.md` §1.5. Owner software-approval alone cannot constitute the website's permission.
 
-**eGazette listing (probed 2026-10-09, NOT registered):** the host serves a
-genuinely crawlable "recent gazettes" listing — 100 rows with ministry,
-department, subject, part/section, issue/publish dates, Gazette IDs
-(e.g. `CG-DL-E-07102026-276903`, `CG-OR-E-08102026-276951`) — after following
-its `(S(session))` URL-prefix redirect chain. **But the PDF download is an
-encrypted ASP.NET image-button postback** (`__VIEWSTATEENCRYPTED`, event
-validation): a plain postback replay returns either a 500 Runtime Error or a
-re-rendered listing, never the document. Reproducing that handshake outside a
-real browser session would be working around a server-side control mechanism
-— the same class of bypass this project refuses everywhere else. The
-listing is therefore **not registered** in `discoveryListings.ts`; the
-corpus's DPDP entry was fetched through the host's direct published-PDF URL
-(turn 26 — a plain GET path, which the listing rows do not expose). Options
-for a future hearing: a headless-browser retrieval note to the publisher's
-helpdesk, use of `egazette.nic.in`'s known deep links when they surface, or
-staying on MHA/gazette-PDF direct URLs published by ministries themselves.
-
-**Probe evidence kept:** the probe session observed listing rows with UGID,
-ministry, subject, file size (e.g. "0.74 MB") and publish dates 2026-10-07/08
-— recorded here rather than in the code registry.
+**eGazette listing (`egazette-recent-uploads`) — REGISTERED turn 34 (2026-10-10); supersedes the 9 Oct "not registered" decision:**
+the blocker was re-examined and RECLASSIFIED. The encrypted ASP.NET postback on
+the download image-button is the host's UI path, but it is NOT the only access
+path and not an access control: each listing row's UGID
+(e.g. `CG-DL-E-09102026-277020`) maps to the PUBLISHED static file
+`/WriteReadData/<year>/<num>.pdf`, which the host serves by PLAIN GET with NO
+session/cookies (verified live 9/10 Oct 2026: HTTP 200, `%PDF-1.6`,
+`content-type: application/pdf`; turn-26 derivation re-verified two-for-two
+against current rows). robots.txt is ABSENT (HTTP 404 — no disallow exists).
+No CAPTCHA, no login, no postback replay — the pipeline takes the direct
+published file ordinary browsers can open directly. Access mechanism in code:
+listing fetched through the host's own `(S(session))` seed-redirect chain
+(captured, never invented) with the pinned PUBLIC Let's Encrypt/ISRG anchors
+(`gazetteCa.ts` — the host serves an incomplete chain; verification fully ON);
+documents fetched by plain GET on the same pinned anchors.
+**Access-basis evidence recorded in `discoveryListings.ts`.** BOUNDED policy:
+`autoPromoteKeyPrefixes` is deliberately EMPTY — every eGazette candidate
+(act, rule or notification of any kind) queues for OPERATOR review with a
+promotion note; nothing from this national listing enters the corpus without
+a recorded human decision.
+**Live evidence (10 Oct 2026, moonlit-elk-307):** scan returns the same 20
+rows each run (URL-hash dedupe steady state); validation: 13 candidates in
+review (identity=null — general gazettes, correct pipeline behaviour), 6
+initially `FAILED[exception] fetch failed` (undici egress TLS-chain build —
+NOT an access refusal; same bytes fetched HTTP 200 with the pinned agents)
+were requeued via `requeueFailedCli` and revalidated through the internal
+pinned path to `review` with FULL metadata (e.g. 276926: 42,110 chars,
+4 sections, hindi 0.0693); 1 size-gate rejection (a gauge-sheet PDF under the
+20 KB floor — correct rejection, no retry). No promotion without an opera-
+tor; operator actions for this listing happen in the /platform console.
 
 ## 5. Console workflow (reuses the existing CJ GLOBAL platform console)
 
@@ -164,7 +174,15 @@ zero deltas everywhere); the "Duplicate" columns show in the packet warnings
 | Listing | Registered | First live cycle | Steady state |
 | --- | --- | --- | --- |
 | NCPCR JJ listing (`ncpcr-jj-listing`) | yes | 2026-10-08: 1 auto-promote, 3 review, 2 dup-rejected, 4 odd-shape-review | scheduled ticks report `newCandidates: 0` |
-| eGazette recent-uploads | **not registered** (postback-gated download; §4) | n/a | n/a |
+| eGazette recent-uploads (`egazette-recent-uploads`) | **yes (turn 34)** | 2026-10-10: 20 rows/scans; 13 review (correct human-gate), 6 fetch-fail→requeue→review, 1 size rejection | zero auto-promotes by policy (empty prefix list); review queue grows until the operator acts |
+
+**Qualified legal review is no longer a hardcoded label (turn 34):** the
+discoveryLegalReviews table stores per-source-version attestations (reviewer
+identity, scope, findings, notes, date, append-only history). Default state
+remains OUTSTANDING by construction (no row covering the latest version), and
+AUTO-discovery never creates attestations — only a signed-in operator
+recording THEIR OWN identity can. See `legalDiscoveryStore.recordLegalReview`
+/ `legalReviewStatus` / `legalReviewHistory`.
 
 Delta-from-completeness: one listing is a sliver of Indian legal publishing.
 Coverage claims stay limited to what the registered listings publish.

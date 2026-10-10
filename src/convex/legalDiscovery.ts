@@ -377,6 +377,22 @@ export const discoveryScanCli = internalAction({
   handler: async (ctx, args) => scanListing(ctx, args.listingKey, "manual"),
 });
 
+/**
+ * CLI wrapper (turn 34): targeted validation of ONE candidate without
+ * waiting for the bounded per-sweep validation loop. Same internalAction
+ * logic as the scheduled path — no separate gate set, no shortcuts.
+ */
+export const validateCandidateCli = internalAction({
+  args: { candidateId: v.id("discoveryCandidates") },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ outcome: "validated" | "promoted" | "review" | "rejected" | "skipped" }> =>
+    ctx.runAction(internal.legalDiscovery.validateCandidate, {
+      candidateId: args.candidateId,
+    }),
+});
+
 // ---------------------------------------------------------------------
 // Validation of ONE candidate: retrieve bytes, run every gate, decide
 // the outcome, and — when the bounded promote policy matches — ingest.
@@ -607,12 +623,28 @@ export const promoteFromReview = action({
         "Not every validation gate passed — promotion refused (review cannot bypass validation).",
       );
     }
-    const resp = await fetch(c.url, {
-      headers: { "User-Agent": UA, Accept: "application/pdf" },
-      signal: AbortSignal.timeout(45_000),
-    });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status} from ${c.url}`);
-    const buf = new Uint8Array(await resp.arrayBuffer());
+    // Human promotion fetches bytes the SAME way validation did —
+    // eGazette static files via the pinned PUBLIC anchors (incomplete
+    // chain on the host), everything else plain fetch. Verification
+    // stays fully ON in both branches.
+    let buf: Uint8Array;
+    if (c.url.startsWith("https://egazette.gov.in/WriteReadData/")) {
+      const got = await pinnedGet(c.url, {
+        "User-Agent": UA,
+        Accept: "application/pdf",
+      });
+      if (got.status !== 200) {
+        throw new Error(`HTTP ${got.status} from ${c.url}`);
+      }
+      buf = got.bytes;
+    } else {
+      const resp = await fetch(c.url, {
+        headers: { "User-Agent": UA, Accept: "application/pdf" },
+        signal: AbortSignal.timeout(45_000),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status} from ${c.url}`);
+      buf = new Uint8Array(await resp.arrayBuffer());
+    }
     if (String.fromCharCode(...buf.slice(0, 5)) !== "%PDF-") {
       throw new Error("Response is not a PDF — promotion aborted.");
     }
