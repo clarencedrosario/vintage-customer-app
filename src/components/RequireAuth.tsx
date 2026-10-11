@@ -14,16 +14,29 @@ import { api } from "@/convex/_generated/api";
 export function RequireAuth({
   children,
   portal,
+  platform,
 }: {
   children: ReactNode;
   portal?: "client" | "staff" | "lawyer" | "firm";
+  /** Console routes that admit CJ GLOBAL internal accounts (platform
+   *  owner / workforce). The actual operator authorization still happens
+   *  server-side (platform.amIPlatformAdmin / workforce.myPlatformIdentity
+   *  + capability gates); this guard only decides WHICH portal resolves. */
+  platform?: boolean;
 }) {
   const { isLoading, isAuthenticated } = useAuth();
   const location = useLocation();
   const twoFactor = useQuery(api.twofactor.sessionSatisfied);
   const resolved = useQuery(api.orgs.resolve);
+  const platformIdentity = useQuery(api.workforce.myPlatformIdentity);
+  const platformIdentityResolved = platformIdentity !== undefined;
+  const isPlatformIdentity =
+    platformIdentity !== undefined &&
+    platformIdentity !== null &&
+    (platformIdentity.isPlatformAdmin ||
+      platformIdentity.platformRole !== null);
 
-  if (isLoading || resolved === undefined) {
+  if (isLoading || resolved === undefined || (platform && !platformIdentityResolved)) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-background">
         <Loader2 className="size-6 animate-spin text-muted-foreground" />
@@ -67,6 +80,10 @@ export function RequireAuth({
     if (mine !== wanted) {
       return <Navigate to={mine ? home : "/login"} replace />;
     }
+  } else if (platform && isPlatformIdentity) {
+    // Platform console routes admit CJ GLOBAL internal accounts once
+    // authentication passes; the page itself enforces the real operator
+    // authorization (and the internal MFA challenge) server-side.
   } else if (mine !== "firm") {
     // Console routes: clients and staff go to their own portals.
     return <Navigate to={home} replace />;

@@ -17,7 +17,14 @@ the intended path preserved (`RequireAuth`).
 
 ## 2. Screen-vs-server agreement checklist (manual, ~10 minutes)
 
-1. `/platform` (platform admin): note a plan's configured price/interval/AI
+### Routes for CJ GLOBAL platform accounts (owner / workforce)
+
+| Flow | Route | What to verify |
+|---|---|---|
+| Platform owner console | `/owner` | Renders the actual Operations console when a signed-in platform identity is present: ticket queue with triage actions, health counters, handoff view and operations audit. The per-session MFA challenge card shows for enrolled accounts; the enrollment-required card shows for internal accounts that never enrolled. The bare refusal card (plus the audited self-activation card when the signed-in, email-verified account matches `PLATFORM_OWNER_EMAIL`) shows for everyone else — queue content never renders for them. **Fixed 11 Oct:** the route guard previously bounced ANY non-chamber account (including the platform owner, who holds no `memberships` row) back to `/login` before the page could render; `RequireAuth` now resolves platform identity (`workforce.myPlatformIdentity`) for platform-flagged console routes and lets the page's own server-side gates decide. A masked-eligibility refusal still applies to every non-platform account. |
+| Platform subscription console | `/platform` | Section-24 console (chambers, billing config, discovery review, enterprise enquiries) — unchanged; gated by the same server-side `amIPlatformAdmin`. |
+
+### Commercial checklist1. `/platform` (platform admin): note a plan's configured price/interval/AI
    allowance → compare with the same plan's card on `/pricing` — amounts,
    cycle, trial badge, AI line must match `saasPlans` exactly.
 2. Toggle the interval selector — only cycles that have configured plans are

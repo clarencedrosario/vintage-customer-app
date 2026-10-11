@@ -374,9 +374,9 @@ createRoot(document.getElementById("root")!).render(
               <Route
                 path="/owner"
                 element={
-                  <RequireAuth>
-                    <OwnerConsole />
-                  </RequireAuth>
+                <RequireAuth platform>
+                  <OwnerConsole />
+                </RequireAuth>
                 }
               />
               <Route path="/accept-platform-invite" element={<AcceptPlatformInvite />} />
