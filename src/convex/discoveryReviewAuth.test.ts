@@ -484,7 +484,7 @@ describe("scan continuity — overlap verdict + possible coverage gap", () => {
     t = convexTest(schema, modules);
   });
 
-  it("identical windows → overlap (continuity held); disjoint windows → gap recorded", async () => {
+  it("identical windows → overlap observed; disjoint windows → gap recorded", async () => {
     const A = ["u1", "u2", "u3"];
     const B = ["u3", "u4", "u5"];
     const C = ["x1", "x2", "x3"];

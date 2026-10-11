@@ -203,7 +203,9 @@ continuity mechanism is now IN THE PRODUCT:
 
 - Every sweep log records its observed window (`windowUrls`, capped ≤ 40) and
   an overlap verdict against the last SUCCESSFUL scan of the same listing:
-  `overlap` (≥1 URL shared — continuity held, any open gap closes),
+  `overlap` (≥1 URL shared with the last successful scan — OVERLAP
+  OBSERVED: the two windows are linked and any previously open gap is
+  closed for that interval; this is NOT proof of complete capture),
   `gap` (nothing shared — a POSSIBLE coverage gap opens), `first` (no prior
   successful scan), or `unknown` (the fetch failed; continuity for that
   interval cannot be established — a failed scan never opens, clears or
@@ -216,12 +218,15 @@ continuity mechanism is now IN THE PRODUCT:
   (dedupe keys on stored rows; nothing is pruned) — items that later leave
   the front-page window keep their validation/review state and remain in
   their queue until processed. No silent loss by feed turnover.
-- **Backfill: NOT SOLVED.** No permitted date-range/archive retrieval API
-  could be located (researched turn 36: egazette.gov.in Interactive Search
-  and archive pages exist as interactive forms, but no documented programmatic
-  API, bulk endpoint, official annual compilation or sitemap was verified
+- **Backfill: NOT SOLVED.** NO SUITABLE PERMITTED RETRIEVAL METHOD (API,
+  bulk endpoint, official compilation or sitemap) was IDENTIFIED IN THE
+  INVESTIGATION (turn 36: egazette.gov.in Interactive Search and archive
+  pages exist as interactive forms, but no documented programmatic API,
+  bulk endpoint, official annual compilation or sitemap was verified
   from this environment — the eGazette pages themselves could not be
-  fetched/re-read here for independent confirmation). The publications that
+  fetched/re-read here for independent confirmation). The investigation
+  is bounded by its environment: it rules out only what it could verify,
+  not the existence of a deeper permitted channel. The publications that
   were missed between two successful scans may be UNRECOVERABLE by automated
   means. **Completeness is therefore NOT guaranteed and is not claimed**;
   the second capped category (Notifications) only widens two front-page

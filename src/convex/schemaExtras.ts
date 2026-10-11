@@ -1361,7 +1361,9 @@ export const legalIntelTables = {
     // CONTINUITY (turn 36): the observed window for THIS scan (URLs,
     // bounded) plus the overlap verdict against the last SUCCESSFUL scan
     // of the same listing. A capped feed moves; each scan either
-    // demonstrably overlaps its predecessor (continuity held) or CANNOT
+    // demonstrably overlaps its predecessor (overlap observed — the two
+    // windows are linked, which is NOT in itself proof of complete capture)
+    // or CANNOT
     // be proven continuous, which is recorded as an explicit possible
     // coverage gap — dedupe alone cannot recover publications that
     // appeared and left the window between two successful scans.

@@ -388,7 +388,8 @@ export const finishValidation = internalMutation({
  * URL-hash dedupe prevents duplicate PROCESSING; it does NOT recover
  * unseen publications that appeared and left a capped feed between two
  * successful scans. Each scan therefore either demonstrably overlaps its
- * predecessor (continuity held) or gaps cannot be ruled out, which is
+ * predecessor (overlap observed — the two windows are linked, which is
+ * NOT in itself proof of complete capture) or gaps cannot be ruled out, which is
  * recorded as an explicit possible coverage gap with its first-seen
  * timestamp (a later failed scan neither opens nor clears a gap — it
  * just leaves continuity unestablished for that interval).
@@ -446,7 +447,7 @@ export const recordSweepLog = internalMutation({
     } else if (
       continuityOverlapCount(lastSuccess.windowUrls, args.windowUrls) > 0
     ) {
-      continuity = "overlap"; // continuity held — gap closed by construction
+      continuity = "overlap"; // overlap observed with the last successful scan — any open gap closes for this interval (not proof of complete capture)
     } else {
       continuity = "gap";
       // Carry an already-open gap forward; otherwise open at this scan.
