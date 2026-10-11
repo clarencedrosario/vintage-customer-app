@@ -1,0 +1,16 @@
+
+[1m[30m[46m RUN [49m[39m[22m [36mv5.0.1 [39m[90m/home/daytona/codebase[39m
+
+ [32m✓[39m src/convex/legalIntel.test.ts [2m([22m[2m17 tests[22m[2m)[22m[33m 516[2mms[22m[39m
+ [32m✓[39m src/convex/commercial.test.ts [2m([22m[2m26 tests[22m[2m)[22m[32m 289[2mms[22m[39m
+ [32m✓[39m src/convex/discoveryReviewAuth.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 89[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m3 passed[39m[22m[90m (3)[39m
+[2m      Tests [22m [1m[32m58 passed[39m[22m[90m (58)[39m
+[2m   Start at [22m 08:39:06
+[2m   Duration [22m 6.31s[2m (environment 45%, transform 19%, tests 15%, import 11%, setup 10%)[22m
+
+[2mEnvironment [22m [33mjsdom was created 3 times[39m[2m · 2.65s total, 45% of tracked time[22m
+[2m            [22m [2mcreate it once per worker with [22m[33mpool: 'vmThreads'[39m[2m (keeps per-file isolation) or [22m[33misolate: false[39m[2m (shares it across files)[22m
+[2m            [22m [2mlearn more: https://vitest.dev/guide/improving-performance#test-environments[22m
+

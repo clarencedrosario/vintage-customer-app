@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { Link } from "react-router";
 import { toast } from "sonner";
@@ -115,6 +115,166 @@ function PlanCard({ p }: { p: CatalogPlan }) {
         )}
       </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Feature-by-feature comparison table.
+// Data sources: PLAN_CATEGORIES (category grouping/context) and the rows
+// that publicPlanCatalog already returns (seatLimit, storageLimitMb,
+// aiAllowanceTokens, aiMaxConcurrentJobs is not in the catalog). Nothing
+// is invented: an unset/absent value renders as its "not set" note, and
+// unpriced plans say "Configuration pending". Enterprise is
+// contact-sales; its unquoted terms are not filled with claims.
+// ---------------------------------------------------------------------
+function compareText(priceMinor: number | null, priced: boolean): string {
+  if (!priced) return "Configuration pending";
+  if (priceMinor == null || priceMinor <= 0) return "Configuration pending";
+  const minor: number = priceMinor;
+  const perYear = minor * 12;
+  return `${inr(minor)} /mo · ${inr(perYear)} /yr`;
+}
+
+function seatText(p: CatalogPlan): string {
+  return p.seatLimit ? `${p.seatLimit} seats` : "Seat count not set";
+}
+
+function storageText(p: CatalogPlan): string {
+  return p.storageLimitMb ? `${p.storageLimitMb.toLocaleString("en-IN")} MB storage` : "Storage not set";
+}
+
+function aiAllowanceText(p: CatalogPlan): string {
+  if (!p.aiEnabled) return "—";
+  if (p.aiAllowanceTokens == null || p.aiAllowanceTokens <= 0) {
+    return "Allowance not set";
+  }
+  return `${tokens(p.aiAllowanceTokens)} tokens /mo`;
+}
+
+function ComparisonTable({ plans, interval }: { plans: CatalogPlan[]; interval: "monthly" | "yearly" }) {
+  // One column per category tier, in catalogue order; each column shows
+  // the plan configured for this cycle (or states the cycle it exists in).
+  const columns = PLAN_CATEGORIES.map((cat) => {
+    const p =
+      plans.find((x) => x.category === cat.id && x.interval === interval) ??
+      plans.find((x) => x.category === cat.id);
+    return { cat, p: p ?? null };
+  });
+  const hasAny = columns.some((c) => c.p != null);
+  if (!hasAny) return null;
+
+  const rows: { group: string; label: string; cell: (p: CatalogPlan) => string }[] = [
+    { group: "Pricing", label: "Price",      cell: (p) => compareText(p.priceMinor ?? null, p.priceConfigured) },
+    { group: "Pricing", label: "Billing unit", cell: (p) => (p.billingUnit === "per_user" ? "Per user" : "Per firm") },
+    { group: "Seats & storage", label: "Seats", cell: seatText },
+    { group: "Seats & storage", label: "Storage", cell: storageText },
+    {
+      group: "AI",
+      label: "AI included",
+      cell: (p) => (p.contactSales ? "Agreed with sales" : p.aiEnabled ? "Included" : "—"),
+    },
+    { group: "AI", label: "AI allowance", cell: aiAllowanceText },
+    {
+      group: "AI",
+      label: "Advanced AI tier",
+      cell: (p) =>
+        p.aiAdvancedModel
+          ? "Available when configured"
+          : p.aiEnabled
+            ? "Standard tier only"
+            : "—",
+    },
+  ];
+  const groups = [...new Set(rows.map((r) => r.group))];
+
+  return (
+    <div className="mt-12">
+      <div className="text-center">
+        <p className="type-label ink-faded">Compare plans</p>
+        <p className="mx-auto mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+          A feature-by-feature view of the currently configured plans. Every configuration value
+          that has not been set is shown as such — no allowances, seats, features or amounts are
+          filled in here that the plan configuration does not already carry.
+        </p>
+      </div>
+
+      <div className="mt-6 overflow-x-auto rounded-xl border border-border bg-card shadow-sm">
+        <table className="w-full min-w-[860px] text-sm">
+          <caption className="sr-only">
+            Feature comparison of the configured ADVOKATE plans for the selected billing cycle.
+          </caption>
+          <thead>
+            <tr className="border-b border-border bg-card/60">
+              <th scope="col" className="px-4 py-3 text-left font-medium text-muted-foreground">
+                Feature
+              </th>
+              {columns.map(({ cat, p }) => (
+                <th key={cat.id} scope="col" className="px-4 py-3 text-left">
+                  <span className="font-serif text-base font-semibold text-foreground">
+                    {p?.name ?? cat.label}
+                  </span>
+                  <span className="mt-0.5 block text-[11px] uppercase tracking-[0.12em] text-muted-foreground">{cat.label}</span>
+                  {p && p.interval !== interval ? (
+                    <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                      Published for the {p.interval === "yearly" ? "yearly" : "monthly"} cycle only
+                    </span>
+                  ) : null}
+                </th>
+                ))}
+              </tr>
+          </thead>
+          <tbody>
+            {groups.map((g) => (
+              <ComparisonGroup
+                key={g}
+                rows={rows}
+                group={g}
+                columns={columns}
+              />
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-3 text-xs text-muted-foreground">
+        Renewal is manual by payment link; nothing is charged automatically. Enterprise terms are
+        agreed individually — use the contact form below.
+      </p>
+    </div>
+  );
+}
+
+function ComparisonGroup({
+  rows,
+  group,
+  columns,
+}: {
+  rows: { group: string; label: string; cell: (p: CatalogPlan) => string }[];
+  group: string;
+  columns: { cat: (typeof PLAN_CATEGORIES)[number]; p: CatalogPlan | null }[];
+}) {
+  const groupRows = rows.filter((r) => r.group === group);
+  return (
+    <>
+      <tr className="bg-accent/40">
+        <th colSpan={columns.length + 1} scope="colgroup" className="px-4 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+          {group}
+        </th>
+      </tr>
+      {groupRows.map((r) => (
+        <tr key={r.label} className="border-t border-border/60">
+          <th scope="row" className="px-4 py-2.5 text-left font-medium text-foreground">{r.label}</th>
+          {columns.map(({ cat, p }) => (
+            <td key={cat.id} className="px-4 py-2.5 text-muted-foreground">
+              {p == null ? (
+                <span className="text-muted-foreground/70">Not published</span>
+              ) : (
+                r.cell(p)
+              )}
+            </td>
+          ))}
+        </tr>
+      ))}
+    </>
   );
 }
 
@@ -345,6 +505,9 @@ export default function Pricing() {
                     );
                   })}
                 </div>
+
+                {/* Feature comparison */}
+                <ComparisonTable plans={plans} interval={interval} />
 
                 {/* Disclosures */}
                 <div className="mx-auto mt-14 max-w-3xl rounded-xl border border-border bg-card p-6 shadow-sm">

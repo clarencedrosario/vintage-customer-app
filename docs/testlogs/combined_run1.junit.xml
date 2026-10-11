@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<testsuites name="vitest tests" tests="58" failures="0" errors="0" time="0.810423916">
+    <testsuite name="src/convex/commercial.test.ts" timestamp="2026-10-11T08:39:21.492Z" hostname="sandbox" tests="26" failures="0" errors="0" skipped="0" time="0.269450018">
+        <testcase classname="src/convex/commercial.test.ts" name="Plan change lifecycle (changePlan / scheduled change / withdraw) &gt; applies an immediate upgrade with an honest proration note" time="0.045664253">
+        </testcase>
+        <testcase classname="src/convex/commercial.test.ts" name="Plan change lifecycle (changePlan / scheduled change / withdraw) &gt; schedules a downgrade for period end with explicit dates" time="0.011218559">
+        </testcase>
+        <testcase classname="src/convex/commercial.test.ts" name="Plan change lifecycle (changePlan / scheduled change / withdraw) &gt; surfaces the scheduled change in mySubscription with name and date" time="0.010056389">
+        </testcase>
+        <testcase classname="src/convex/commercial.test.ts" name="Plan change lifecycle (changePlan / scheduled change / withdraw) &gt; withdraws a scheduled change; the current plan continues unchanged" time="0.015719124">
+        </testcase>
+        <testcase classname="src/convex/commercial.test.ts" name="Plan change lifecycle (changePlan / scheduled change / withdraw) &gt; refuses enterprise plans — contact sales only" time="0.004366784">
+        </testcase>
+        <testcase classname="src/convex/commercial.test.ts" name="Plan change lifecycle (changePlan / scheduled change / withdraw) &gt; refuses a change to the plan the organization is already on" time="0.016131795">
+        </testcase>
+        <testcase classname="src/convex/commercial.test.ts" name="Plan change lifecycle (changePlan / scheduled change / withdraw) &gt; refuses plan changes once the subscription is no longer live" time="0.003038745">
+        </testcase>
+        <testcase classname="src/convex/commercial.test.ts" name="Plan change lifecycle (changePlan / scheduled change / withdraw) &gt; refuses members without the billing capability" time="0.004181284">
+        </testcase>
+        <testcase classname="src/convex/commercial.test.ts" name="Plan change lifecycle (changePlan / scheduled change / withdraw) &gt; refuses an individual plan for a firm organization" time="0.005310294">
+        </testcase>
+        <testcase classname="src/convex/commercial.test.ts" name="Plan change lifecycle (changePlan / scheduled change / withdraw) &gt; runExpiryScan applies the scheduled change at its effective date" time="0.00466353">
+        </testcase>
+        <testcase classname="src/convex/commercial.test.ts" name="Plan change lifecycle (changePlan / scheduled change / withdraw) &gt; clears a scheduled change honestly when the target plan is no longer available" time="0.009936939">
+        </testcase>
+        <testcase classname="src/convex/commercial.test.ts" name="AI entitlement (myAiEntitlement) &gt; a non-AI plan keeps the workspace but refuses AI with the honest reason" time="0.019552494">
+        </testcase>
+        <testcase classname="src/convex/commercial.test.ts" name="AI entitlement (myAiEntitlement) &gt; an AI plan with a configured allowance is allowed on the standard tier" time="0.005762074">
+        </testcase>
+        <testcase classname="src/convex/commercial.test.ts" name="AI entitlement (myAiEntitlement) &gt; the advanced tier appears only when the operator configured the model, even on advanced plans" time="0.004094644">
+        </testcase>
+        <testcase classname="src/convex/commercial.test.ts" name="AI entitlement (myAiEntitlement) &gt; counts this month&apos;s usage and pending reservations against the allowance" time="0.017362738">
+        </testcase>
+        <testcase classname="src/convex/commercial.test.ts" name="AI entitlement (myAiEntitlement) &gt; usage from previous months does not count against this month" time="0.005524877">
+        </testcase>
+        <testcase classname="src/convex/commercial.test.ts" name="AI entitlement (myAiEntitlement) &gt; failed and expired jobs consume nothing — reservations exist only while pending" time="0.004881529">
+        </testcase>
+        <testcase classname="src/convex/commercial.test.ts" name="AI entitlement (myAiEntitlement) &gt; enforces the plan&apos;s concurrency cap while the allowance remains" time="0.009631629">
+        </testcase>
+        <testcase classname="src/convex/commercial.test.ts" name="AI entitlement (myAiEntitlement) &gt; an organization without a subscription has no AI and a choose-a-plan reason" time="0.01851335">
+        </testcase>
+        <testcase classname="src/convex/commercial.test.ts" name="Public catalog (publicPlanCatalog) &gt; without provider keys nothing is purchasable — savings still computed from configured prices" time="0.003730676">
+        </testcase>
+        <testcase classname="src/convex/commercial.test.ts" name="Public catalog (publicPlanCatalog) &gt; with provider keys, priced non-enterprise plans are purchasable" time="0.004374014">
+        </testcase>
+        <testcase classname="src/convex/commercial.test.ts" name="Public catalog (publicPlanCatalog) &gt; hides inactive plans from the public catalog" time="0.003711137">
+        </testcase>
+        <testcase classname="src/convex/commercial.test.ts" name="Enterprise contact workflow (requestEnterpriseContact) &gt; validates and records enquiries, readable only by platform admins" time="0.007391968">
+        </testcase>
+        <testcase classname="src/convex/commercial.test.ts" name="Subscription surface (mySubscription) &gt; returns commercial plan fields and honest numeric limits, never &apos;unlimited&apos;" time="0.004767186">
+        </testcase>
+        <testcase classname="src/convex/commercial.test.ts" name="Subscription surface (mySubscription) &gt; marks awaitingPayment honestly for past_due with an unconsumed payment link" time="0.011622958">
+        </testcase>
+        <testcase classname="src/convex/commercial.test.ts" name="Case X-Ray incremental reassessment (prepareJob xrayDelta) &gt; first X-Ray stores no delta; the second records the source-level diff and supersedes the old job" time="0.015276276">
+        </testcase>
+    </testsuite>
+    <testsuite name="src/convex/discoveryReviewAuth.test.ts" timestamp="2026-10-11T08:39:21.496Z" hostname="sandbox" tests="15" failures="0" errors="0" skipped="0" time="0.098908085">
+        <testcase classname="src/convex/discoveryReviewAuth.test.ts" name="structured jurisdiction matching (segment-boundary, no accidental string-prefix) &gt; matches whole segments only" time="0.00149456">
+        </testcase>
+        <testcase classname="src/convex/discoveryReviewAuth.test.ts" name="structured jurisdiction matching (segment-boundary, no accidental string-prefix) &gt; a deeper assignment never covers a shallower key" time="0.000294964">
+        </testcase>
+        <testcase classname="src/convex/discoveryReviewAuth.test.ts" name="assignment currency (expiry + revocation, pure rule) &gt; active + unexpired authorises" time="0.0002784">
+        </testcase>
+        <testcase classname="src/convex/discoveryReviewAuth.test.ts" name="assignment currency (expiry + revocation, pure rule) &gt; past expiry refuses even when never revoked" time="0.00019321">
+        </testcase>
+        <testcase classname="src/convex/discoveryReviewAuth.test.ts" name="assignment currency (expiry + revocation, pure rule) &gt; revocation refuses regardless of expiry" time="0.000154202">
+        </testcase>
+        <testcase classname="src/convex/discoveryReviewAuth.test.ts" name="reviewer authority — real backend gate (recordLegalReview) &gt; owner/operator WITHOUT an assignment cannot record legal review" time="0.016902435">
+        </testcase>
+        <testcase classname="src/convex/discoveryReviewAuth.test.ts" name="reviewer authority — real backend gate (recordLegalReview) &gt; an operator with an ACTIVE assignment in scope CAN record a review — recorded as fixture evidence, not a real assessment" time="0.013322797">
+        </testcase>
+        <testcase classname="src/convex/discoveryReviewAuth.test.ts" name="reviewer authority — real backend gate (recordLegalReview) &gt; WRONG jurisdiction (assignment for another namespace) refuses review" time="0.004753215">
+        </testcase>
+        <testcase classname="src/convex/discoveryReviewAuth.test.ts" name="reviewer authority — real backend gate (recordLegalReview) &gt; a REVOKED assignment refuses review" time="0.018149362">
+        </testcase>
+        <testcase classname="src/convex/discoveryReviewAuth.test.ts" name="reviewer authority — real backend gate (recordLegalReview) &gt; an EXPIRED assignment refuses review with an explicit expiry message" time="0.007782766">
+        </testcase>
+        <testcase classname="src/convex/discoveryReviewAuth.test.ts" name="reviewer authority — real backend gate (recordLegalReview) &gt; assignment granting is operator-gated AND internal-MFA gated" time="0.011391499">
+        </testcase>
+        <testcase classname="src/convex/discoveryReviewAuth.test.ts" name="reviewer authority — real backend gate (recordLegalReview) &gt; recordLegalReview also refuses a valid assignment WITHOUT the session MFA challenge" time="0.005482804">
+        </testcase>
+        <testcase classname="src/convex/discoveryReviewAuth.test.ts" name="version attribution — reviews bind to their ORIGINAL source version &gt; a review of v1 stays attributed to v1: v2 is OUTSTANDING afterward" time="0.01234892">
+        </testcase>
+        <testcase classname="src/convex/discoveryReviewAuth.test.ts" name="scan continuity — overlap verdict + possible coverage gap &gt; identical windows → overlap observed; disjoint windows → gap recorded" time="0.001636814">
+        </testcase>
+        <testcase classname="src/convex/discoveryReviewAuth.test.ts" name="scan continuity — overlap verdict + possible coverage gap &gt; recordSweepLog: first successful scan → &apos;first&apos;; overlapping → &apos;overlap&apos;; fully moved window → &apos;gap&apos; with coverageGapSince" time="0.00188628">
+        </testcase>
+    </testsuite>
+    <testsuite name="src/convex/legalIntel.test.ts" timestamp="2026-10-11T08:39:21.498Z" hostname="sandbox" tests="17" failures="0" errors="0" skipped="0" time="0.442065813">
+        <testcase classname="src/convex/legalIntel.test.ts" name="Advokate Legal Intelligence — real backend slice &gt; seed → search → applicability: IPC governs pre-2024 conduct with BNS cross-ref" time="0.236825505">
+        </testcase>
+        <testcase classname="src/convex/legalIntel.test.ts" name="Advokate Legal Intelligence — real backend slice &gt; matter jurisdiction: firm default is a labelled fallback; lawyer confirmation wins" time="0.008830153">
+        </testcase>
+        <testcase classname="src/convex/legalIntel.test.ts" name="Advokate Legal Intelligence — real backend slice &gt; citation verification rejects invented sources and un-ingested quotes" time="0.017831593">
+        </testcase>
+        <testcase classname="src/convex/legalIntel.test.ts" name="Advokate Legal Intelligence — real backend slice &gt; backend citation validator: pinpoint + quote fidelity against stored text (pure)" time="0.006288987">
+        </testcase>
+        <testcase classname="src/convex/legalIntel.test.ts" name="Advokate Legal Intelligence — real backend slice &gt; citation extraction pulls stable keys, pinpoints and quotes from generated text" time="0.004125821">
+        </testcase>
+        <testcase classname="src/convex/legalIntel.test.ts" name="Advokate Legal Intelligence — real backend slice &gt; un-cited assertion detector flags substantive claims with no citation marker" time="0.004693847">
+        </testcase>
+        <testcase classname="src/convex/legalIntel.test.ts" name="Advokate Legal Intelligence — real backend slice &gt; ingest pipeline: dedupe, freshness, and failure handling on real run rows" time="0.026456507">
+        </testcase>
+        <testcase classname="src/convex/legalIntel.test.ts" name="Advokate Legal Intelligence — real backend slice &gt; automated end-to-end check: jurisdiction → date → retrieval → grounded answer over INGESTED text" time="0.008983864">
+        </testcase>
+        <testcase classname="src/convex/legalIntel.test.ts" name="Advokate Legal Intelligence — real backend slice &gt; invalid citation markers: plausible-but-unverifiable markers are flagged, not treated as cited" time="0.00269696">
+        </testcase>
+        <testcase classname="src/convex/legalIntel.test.ts" name="Advokate Legal Intelligence — real backend slice &gt; clarification questions: asked only when missing facts change applicability" time="0.002235755">
+        </testcase>
+        <testcase classname="src/convex/legalIntel.test.ts" name="Advokate Legal Intelligence — real backend slice &gt; research workflow: submit → clarifications recorded → provider-failure keeps question → retry works → save/reopen preserves snapshot" time="0.034215658">
+        </testcase>
+        <testcase classname="src/convex/legalIntel.test.ts" name="Advokate Legal Intelligence — real backend slice &gt; citation checks pass on ingested text and refuse on the un-ingested POCSO source" time="0.022535525">
+        </testcase>
+        <testcase classname="src/convex/legalIntel.test.ts" name="Advokate Legal Intelligence — real backend slice &gt; unsupported jurisdiction: the answer contract refuses, coverage register stays honest" time="0.025563332">
+        </testcase>
+        <testcase classname="src/convex/legalIntel.test.ts" name="Advokate Legal Intelligence — real backend slice &gt; clarification gate blocks the model until facts are supplied, then unblocks on retry" time="0.012985198">
+        </testcase>
+        <testcase classname="src/convex/legalIntel.test.ts" name="Advokate Legal Intelligence — real backend slice &gt; runner-time recheck: revoked membership fails the scheduled run before the model is called" time="0.013055163">
+        </testcase>
+        <testcase classname="src/convex/legalIntel.test.ts" name="Advokate Legal Intelligence — real backend slice &gt; concurrent claims: only the first claim wins — the model can never run twice" time="0.007616866">
+        </testcase>
+        <testcase classname="src/convex/legalIntel.test.ts" name="Advokate Legal Intelligence — real backend slice &gt; citation report with zero checks is unchecked — never a success banner" time="0.004374705">
+        </testcase>
+    </testsuite>
+</testsuites>
