@@ -13,6 +13,59 @@ import {
 } from "../lib/planCatalog";
 import { availableTiers } from "../lib/aiModels";
 import { monthKeyIST } from "./ai";
+import {
+  ENTERPRISE_MIN_MONTHLY_MINOR,
+  type ApprovedPlan,
+} from "../lib/approvedPricing";
+
+/**
+ * Approved price list (12 Oct 2026): a plan code must carry exactly this
+ * base price to appear as purchasable/charged. Mirrored by
+ * subscriptions.ts — keep both in step (single source is the
+ * saasPlans row itself; the check validates it).
+ */
+const APPROVED_PRICE_CHECK: Record<string, number> = {
+  free: 0,
+  solo: 49_900,
+  advocate_ai: 99_900,
+  chamber_ai: 399_900,
+  chamber_noai: 199_900,
+  enterprise: 899_000,
+};
+
+function toApprovedPlan(p: {
+  code: string;
+  name: string;
+  kind: "individual" | "firm";
+  priceMinor: number;
+  category?: "practice" | "practice_ai" | "firm_ai" | "enterprise";
+  billingUnit?: "per_user" | "per_firm";
+  aiEnabled?: boolean;
+}): ApprovedPlan | null {
+  if (!(p.code in APPROVED_PRICE_CHECK)) return null;
+  return {
+    code: p.code as ApprovedPlan["code"],
+    name: p.name,
+    category: (p.category ?? "practice") as ApprovedPlan["category"],
+    kind: p.kind,
+    priceMinor: p.priceMinor,
+    billingUnit:
+      (p.billingUnit ?? (p.kind === "firm" ? "per_firm" : "per_user")) as ApprovedPlan["billingUnit"],
+    includedUsers:
+      p.code === "chamber_ai" || p.code === "chamber_noai" ? 4 : null,
+    extraUserMinor:
+      p.code === "chamber_ai"
+        ? 99_900
+        : p.code === "chamber_noai"
+          ? 44_900
+          : p.code === "enterprise"
+            ? 89_900
+            : null,
+    minPaidUsers: p.code === "enterprise" ? 10 : null,
+    aiEnabled: p.aiEnabled === true,
+    contactSales: p.category === "enterprise",
+  };
+}
 
 // =====================================================================
 // Entitlements (commercial release, turn 27).
@@ -188,6 +241,14 @@ export const publicPlanCatalog = query({
           : null;
       const purchasable =
         p.category !== "enterprise" && p.priceMinor > 0 && payments;
+      // Approved-pricing extension (12 Oct 2026): seat structure comes
+      // straight from the approved config — the page never recomputes
+      // charges locally; the catalog only carries the seat RULES.
+      const approved =
+        p.code in APPROVED_PRICE_CHECK &&
+        p.priceMinor === APPROVED_PRICE_CHECK[p.code]
+          ? toApprovedPlan(p)
+          : null;
       return {
         planId: p._id,
         code: p.code,
@@ -197,7 +258,12 @@ export const publicPlanCatalog = query({
         billingUnit: p.billingUnit ?? (p.kind === "firm" ? "per_firm" : "per_user"),
         interval: p.interval,
         priceMinor: p.priceMinor,
-        priceConfigured: p.priceMinor > 0,
+        // ₹0 is a CONFIGURED (approved) price for the Free tier — it
+        // must show "Free", never "Configuration pending". Any OTHER
+        // plan whose price drifted off the approved amount is NOT
+        // configured (and is refused in checkout).
+        priceConfigured:
+          (p.priceMinor > 0) || (p.code === "free" && approved != null),
         seatLimit: p.seatLimit ?? null,
         storageLimitMb: p.storageLimitMb ?? null,
         features: p.features ?? [],
@@ -213,6 +279,14 @@ export const publicPlanCatalog = query({
         savingsPercent: savings?.percent ?? null,
         purchasable,
         contactSales: p.category === "enterprise",
+        // Approved-pricing fields (null when the plan is not on the
+        // approved list — the page then shows configuration-pending UI).
+        approved: approved != null,
+        includedUsers: approved?.includedUsers ?? null,
+        extraUserMinor: approved?.extraUserMinor ?? null,
+        minPaidUsers: approved?.minPaidUsers ?? null,
+        enterpriseMinMonthlyMinor:
+          approved?.code === "enterprise" ? ENTERPRISE_MIN_MONTHLY_MINOR : null,
       };
     });
     return {

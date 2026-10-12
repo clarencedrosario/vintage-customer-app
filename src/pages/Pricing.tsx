@@ -32,9 +32,38 @@ type CatalogPlan = NonNullable<
   ReturnType<typeof useQuery<typeof api.entitlements.publicPlanCatalog>>
 >["plans"][number];
 
+/** Approved-seat line shown prominently on seat-based plan cards. */
+function SeatLine({ p }: { p: CatalogPlan }) {
+  if (p.includedUsers != null && p.extraUserMinor != null) {
+    return (
+      <p className="mt-1 text-xs font-medium text-foreground">
+        Up to {p.includedUsers} users included · {inr(p.extraUserMinor)}
+        /user/month after each included user
+      </p>
+    );
+  }
+  if (p.minPaidUsers != null && p.priceMinor != null && p.priceMinor > 0) {
+    return (
+      <p className="mt-1 text-xs font-medium text-foreground">
+        Minimum {p.minPaidUsers} paid users — {inr(p.priceMinor)}/month before
+        applicable taxes
+      </p>
+    );
+  }
+  return null;
+}
+
 function PriceLine({ p }: { p: CatalogPlan }) {
   if (!p.priceConfigured) {
     return <span className="text-sm text-muted-foreground">Configuration pending</span>;
+  }
+  if (p.priceMinor === 0) {
+    return (
+      <span>
+        <span className="font-serif text-2xl font-semibold">Free</span>
+        <span className="block text-xs text-muted-foreground">₹0 — permanently free, not a trial</span>
+      </span>
+    );
   }
   if (p.interval === "yearly") {
     const perMonth = Math.round(p.priceMinor / 12);
@@ -75,6 +104,7 @@ function PlanCard({ p }: { p: CatalogPlan }) {
 
       <div className="mt-4">
         <PriceLine p={p} />
+        <SeatLine p={p} />
         {p.savingsAmountMinor != null && p.savingsPercent != null && (
           <p className="mt-1 text-xs text-emerald-800">
             Saves {inr(p.savingsAmountMinor)} a year ({p.savingsPercent}%) vs paying monthly
@@ -110,7 +140,11 @@ function PlanCard({ p }: { p: CatalogPlan }) {
           </Button>
         ) : (
           <Button variant="outline" className="w-full" disabled>
-            {p.priceConfigured ? "Online purchasing not open yet" : "Configuration pending"}
+            {p.priceMinor === 0
+              ? "Sign up to start on the Free plan"
+              : p.priceConfigured
+                ? "Online purchasing not open yet"
+                : "Configuration pending"}
           </Button>
         )}
       </div>

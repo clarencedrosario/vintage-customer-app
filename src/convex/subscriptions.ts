@@ -4,6 +4,12 @@ import type { QueryCtx, MutationCtx } from "./_generated/server";
 import { requireAccess, requireCapability, requireWriteAccess } from "./access";
 import { getCurrentUser } from "./users";
 import type { Doc, Id } from "./_generated/dataModel";
+import {
+  seatCountValid,
+  monthlyChargeMinor,
+  type ApprovedPlan,
+} from "../lib/approvedPricing";
+import { countBillableSeats } from "../lib/invitationFlow";
 
 // =====================================================================
 // Commercial SaaS subscriptions (section 24).
@@ -362,19 +368,107 @@ export const setPlanActive = mutation({
   },
 });
 
+/**
+ * APPROVED-PRICING GUARD (approved 12 Oct 2026).
+ *
+ * A plan row is checkout-eligible only when it carries the approved
+ * code AND its configured price equals the approved price. This is the
+ * trusted-backend rule: a plan whose price was drifted in the database
+ * (or was created ad hoc) cannot be charged until the operator corrects
+ * it to the approved value — the approved figure is the only thing the
+ * platform bills.
+ */
+const APPROVED_PRICE_CHECK: Record<string, number> = {
+  free: 0,
+  solo: 49_900,
+  advocate_ai: 99_900,
+  chamber_ai: 399_900,
+  chamber_noai: 199_900,
+  enterprise: 899_000, // 10-user minimum
+};
+
+function toApprovedPlan(p: Doc<"saasPlans">): ApprovedPlan | null {
+  const approved = p.code in APPROVED_PRICE_CHECK;
+  return approved
+    ? {
+        code: p.code as ApprovedPlan["code"],
+        name: p.name,
+        category: (p.category ?? "practice") as ApprovedPlan["category"],
+        kind: p.kind,
+        priceMinor: p.priceMinor,
+        billingUnit: (p.billingUnit ?? (p.kind === "firm" ? "per_firm" : "per_user")) as ApprovedPlan["billingUnit"],
+        includedUsers:
+          p.code === "chamber_ai" || p.code === "chamber_noai" ? 4 : null,
+        extraUserMinor:
+          p.code === "chamber_ai" ? 99_900 : p.code === "chamber_noai" ? 44_900 : p.code === "enterprise" ? 89_900 : null,
+        minPaidUsers: p.code === "enterprise" ? 10 : null,
+        aiEnabled: p.aiEnabled === true,
+        contactSales: p.category === "enterprise",
+      }
+    : null;
+}
+
+/** Billable (non-exempt) active memberships for an org. */
+async function billableSeats(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+): Promise<number> {
+  const members = await ctx.db
+    .query("memberships")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
+  return countBillableSeats(members);
+}
+
 // ---------------------------------------------------------------------
 // Checkout — start a subscription (trial or paid)
 // ---------------------------------------------------------------------
 
 export const startSubscription = mutation({
-  args: { planId: v.id("saasPlans") },
+  args: {
+    planId: v.id("saasPlans"),
+    /** Requested paid seats (per-user plans). Server-side validated. */
+    seats: v.optional(v.number()),
+  },
   handler: async (ctx, args) => {
     const ac = await requireWriteAccess(ctx);
     requireCapability(ac, "billing.invoice"); // owners/admins/accountants
     const plan = await ctx.db.get(args.planId);
     if (!plan || !plan.active) throw new Error("That plan is not available.");
+    if (plan.category === "enterprise") {
+      throw new Error(
+        "Enterprise plans are arranged with our team — use the contact-sales workflow on the pricing page.",
+      );
+    }
     if (plan.kind === "individual" && ac.org.kind === "firm") {
       throw new Error("Individual plans are for single-lawyer chambers.");
+    }
+
+    const approved = toApprovedPlan(plan);
+    if (!approved) {
+      throw new Error(
+        "This plan is not on the approved price list yet — contact the platform operator.",
+      );
+    }
+    if (approved.priceMinor !== APPROVED_PRICE_CHECK[plan.code]) {
+      throw new Error(
+        "This plan's price does not match its approved amount — checkout is paused. Contact the platform operator.",
+      );
+    }
+
+    // Trusted-backend seat validation. The requested seat count (or the
+    // org's live billable count) is checked AGAINST THE APPROVED RULES
+    // here — frontend values are never trusted.
+    const requestedSeats =
+      args.seats != null && Number.isFinite(args.seats)
+        ? Math.floor(args.seats)
+        : await billableSeats(ctx, ac.org._id);
+    if (!seatCountValid(approved, requestedSeats)) {
+      throw new Error(
+        approved.code === "enterprise"
+          ? "The Enterprise plan requires a minimum of 10 paid users."
+          : "At least one paid user is required.",
+      );
     }
 
     const existing = await getSubForOrg(ctx, ac.org._id);
@@ -482,13 +576,33 @@ export const checkoutPrecheckInternal = internalQuery({
     }
     const plan = await ctx.db.get(sub.planId);
     if (!plan) return { allowed: false as const, reason: "plan missing" };
+    // TRUSTED-BACKEND CHARGE MATH (approved pricing, 12 Oct 2026):
+    // the amount is computed from the plan configuration and the org's
+    // actual billable seat count — never from anything the client sent.
+    const approved = toApprovedPlan(plan);
+    if (!approved || approved.priceMinor !== APPROVED_PRICE_CHECK[plan.code]) {
+      return {
+        allowed: false as const,
+        reason: "plan price does not match the approved amount",
+      };
+    }
+    const seats = await billableSeats(ctx, ac.org._id);
+    if (!seatCountValid(approved, seats)) {
+      return {
+        allowed: false as const,
+        reason:
+          plan.code === "enterprise"
+            ? "the Enterprise plan requires a minimum of 10 paid users"
+            : "at least one paid user is required",
+      };
+    }
     return {
       allowed: true as const,
       kind: "new" as const,
       subscriptionId: sub._id,
       orgName: ac.org.name,
       planName: planLabel(plan, sub.interval),
-      amountMinor: plan.priceMinor,
+      amountMinor: monthlyChargeMinor(approved, seats),
       payerEmail: ac.user.email ?? undefined,
       payerName: ac.user.name ?? ac.org.name,
     };
