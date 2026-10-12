@@ -13,6 +13,7 @@ import {
   ScrollText,
   ShieldCheck,
 } from "lucide-react";
+import { postAuthDestination, portalHome } from "@/lib/postAuthDestination";
 import { Suspense, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
@@ -475,16 +476,29 @@ function SessionGate({ twoFactorNeeded }: { twoFactorNeeded: boolean }) {
     );
   }
 
-  // Where does this account's resolved portal lead?
+  // Where does this account's resolved portal lead? Shared policy with
+  // RequireAuth: a returnTo that is a safe internal path wins; /login is
+  // NEVER a destination (that was the signed-in self-loop regression);
+  // platform identities without a memberships row resume at /owner; any
+  // other account without a portal lands on the account hub (/settings),
+  // which offers organisation creation instead of looping to /login.
   const mine = resolved.portal;
-  const home =
-    mine === "client"
+  const isPlatformIdentity = useQuery(api.workforce.myPlatformIdentity);
+  const identityKnown = isPlatformIdentity !== undefined;
+  const isIdentity =
+    identityKnown &&
+    isPlatformIdentity !== null &&
+    (isPlatformIdentity.isPlatformAdmin ||
+      isPlatformIdentity.platformRole !== null);
+  const home = identityKnown
+    ? portalHome(mine, !!isIdentity)
+    : mine === "client"
       ? "/portal"
       : mine === "staff"
         ? "/staff"
         : mine === "firm"
           ? "/dashboard"
-          : "/login";
+          : "/settings";
 
   return (
     <AuthLayout subtitle="Member & Client Access">
@@ -501,7 +515,13 @@ function SessionGate({ twoFactorNeeded }: { twoFactorNeeded: boolean }) {
         </CardHeader>
         <CardContent className="flex flex-col gap-2">
           <Button asChild className="w-full">
-            <Link to={returnTo ? resolveRedirectAfterAuth(returnTo) : home}>
+            <Link
+              to={
+                identityKnown
+                  ? postAuthDestination(returnTo, mine, !!isIdentity)
+                  : home
+              }
+            >
               Continue
               <ArrowRight className="ml-2 size-4" />
             </Link>

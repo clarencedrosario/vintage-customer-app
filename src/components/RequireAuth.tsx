@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { Navigate, useLocation } from "react-router";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { portalHome } from "@/lib/postAuthDestination";
 
 /**
  * Route guard. Authorization is resolved server-side in `orgs.resolve`:
@@ -71,8 +72,10 @@ export function RequireAuth({
   }
 
   const mine = resolved.portal; // "client" | "staff" | "firm" | null
-  const home =
-    mine === "client" ? "/portal" : mine === "staff" ? "/staff" : mine === "firm" ? "/dashboard" : "/login";
+  // Shared with SessionGate's Continue resolution: a platform identity
+  // with no memberships row homes at /owner (never /login); other
+  // portal-less accounts land on the account hub (/settings).
+  const home = portalHome(mine, isPlatformIdentity);
 
   if (portal) {
     // Portal routes authorize server-side from memberships.
