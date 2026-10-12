@@ -448,7 +448,8 @@ function TwoFactorStep({
 // Signed-in visitor at /login — continue to their workspace
 // ---------------------------------------------------------------
 
-function SessionGate({ twoFactorNeeded }: { twoFactorNeeded: boolean }) {
+// Exported for the signed-in-Continue regression tests (SessionGate.test.tsx).
+export function SessionGate({ twoFactorNeeded }: { twoFactorNeeded: boolean }) {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
   const searchParams = useSearchParams()[0];
