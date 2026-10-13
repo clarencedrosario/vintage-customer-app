@@ -26,6 +26,39 @@ import type { Doc, Id } from "./_generated/dataModel";
 const MAX_ACCESS_HOURS = 7 * 24;
 const MAX_AUDIT_ROWS = 200;
 
+// ---------------------------------------------------------------------
+// ONE shared predicate for "this account's email has a successfully
+// verified address" (section 24 gate). Trusted evidence on this
+// deployment (approved fix, 13 Oct 2026):
+//
+//  - This project's authentication is @convex-dev/auth 0.0.90 with the
+//    email-OTP provider (auth.ts). On SUCCESSFUL code verification
+//    (verifyCodeAndSignIn: verifier match, non-expired, correct
+//    provider, code deleted) the library sets users.\
+//    emailVerificationTime — see node_modules/\@convex-dev/auth/dist/
+//    package.json v0.0.90 and dist/server/implementation/users.js
+//    upsertUserAndAccount. It runs because auth.ts defines no custom
+//    createOrUpdateUser callback, so the library default is exactly
+//    what executes.
+//  - That version writes the boolean users.emailVerified to the
+//    authACCOUNT (as a string of the verified email), never to the
+//    users row — manual inspection of real OTP-verified accounts
+//    confirmed the timestamp is present while the boolean is unset.
+//
+// Acceptance rule: emailVerificationTime (library-written evidence) OR
+// the legacy boolean users.emailVerified, whichever exists. An explicit
+// `emailVerified: false` always DENIES, so a stale timestamp cannot
+// paper over a later revocation. Passing the email equality gate before
+// this keeps the check tied to the verified address itself.
+// ---------------------------------------------------------------------
+export function emailVerificationEvidence(u: {
+  emailVerified?: boolean;
+  emailVerificationTime?: number;
+}): boolean {
+  if (u.emailVerified === false) return false;
+  return u.emailVerified === true || typeof u.emailVerificationTime === "number";
+}
+
 async function platformAdminOf(
   ctx: QueryCtx | MutationCtx,
 ): Promise<Doc<"users"> | null> {
@@ -79,7 +112,7 @@ export const bootstrapAdmin = internalMutation({
       .collect();
     const u = users[0];
     if (!u) return { granted: false, reason: `No user with email ${email}.` };
-    if (!u.emailVerified) {
+    if (!emailVerificationEvidence(u)) {
       return { granted: false, reason: "That account's email is not verified." };
     }
     if (u.isPlatformAdmin) return { granted: true, reason: "Already an admin." };
@@ -95,8 +128,10 @@ export const bootstrapAdmin = internalMutation({
  *  1. The caller is signed in with a REAL (non-anonymous) account.
  *  2. PLATFORM_OWNER_EMAIL is set on the deployment.
  *  3. The caller's account email equals it exactly.
- *  4. The account's email is verified (emailVerified — set only by the
- *     email-OTP provider on successful code verification).
+ *  4. The account's email is verified — trusted evidence via
+ *     emailVerificationEvidence: emailVerificationTime, written only by
+ *     the email-OTP provider on successful code verification (or the
+ *     legacy emailVerified boolean).
  * No account is created here, no password is involved, and a failed
  * match is refused generically without revealing the configured address.
  * The activation lands in platformAdminAudit like every other grant.
@@ -115,7 +150,7 @@ export const selfActivateOwner = mutation({
     if (!user.email || user.email.trim().toLowerCase() !== email) {
       throw new Error("This account is not the configured platform owner.");
     }
-    if (!user.emailVerified) {
+    if (!emailVerificationEvidence(user)) {
       throw new Error(
         "Verify your email first (sign in with the code we email you), then activate.",
       );
@@ -152,7 +187,7 @@ export const myOwnerActivationEligibility = query({
     const eligible =
       !!user.email &&
       user.email.trim().toLowerCase() === email &&
-      !!user.emailVerified;
+      emailVerificationEvidence(user);
     return { eligible, alreadyActive: !!user.isPlatformAdmin };
   },
 });
