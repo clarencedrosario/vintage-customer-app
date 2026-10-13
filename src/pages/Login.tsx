@@ -456,7 +456,17 @@ export function SessionGate({ twoFactorNeeded }: { twoFactorNeeded: boolean }) {
   const returnTo = searchParams.get("returnTo");
   // Authorization resolved from memberships server-side; the legacy role
   // is only a fallback. Arriving on this page never grants privileges.
+  //
+  // HOOK ORDER: every hook below runs UNCONDITIONALLY on every render of
+  // this component. Convex `useQuery` is itself a hook, so it must sit
+  // above any conditional early returns — otherwise the render that
+  // follows query resolution (or a twoFactorNeeded toggle) executes a
+  // different number of hooks and React throws "Rendered more hooks than
+  // during the previous render" (preview regression, fixed 13 Oct 2026;
+  // reproduced by SessionGate.test.tsx hook-order stability tests).
+  // reproduced by SessionGate.test.tsx hook-order stability tests).
   const resolved = useQuery(api.orgs.resolve);
+  const isPlatformIdentity = useQuery(api.workforce.myPlatformIdentity);
 
   if (twoFactorNeeded) {
     return (
@@ -484,7 +494,6 @@ export function SessionGate({ twoFactorNeeded }: { twoFactorNeeded: boolean }) {
   // other account without a portal lands on the account hub (/settings),
   // which offers organisation creation instead of looping to /login.
   const mine = resolved.portal;
-  const isPlatformIdentity = useQuery(api.workforce.myPlatformIdentity);
   const identityKnown = isPlatformIdentity !== undefined;
   const isIdentity =
     identityKnown &&

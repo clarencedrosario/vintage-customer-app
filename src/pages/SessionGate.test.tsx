@@ -13,17 +13,37 @@
 //      destination policy (RequireAuth-side contract unit-tested in
 //      postAuthDestination.test.ts; here the safe-returnTo path wins)
 //   5. invalid/unauthorized destinations → safe fallback, never /login
+//
+// INCIDENT (13 Oct, preview bug fix): useQuery(workforce.myPlatformIdentity)
+// sat BELOW the `twoFactorNeeded` and `resolved === undefined` early
+// returns, so the render on which `orgs.resolve` resolved (or the first
+// authenticated render after a 2FA-needed one) executed one extra Convex
+// useQuery hook and React threw "Rendered more hooks than during the
+// previous render". Fixed by hoisting every hook above the early returns.
+// The hook-order block below reproduces those transitions with a stub
+// that engages React's real dispatcher (a real useMemo per useQuery
+// call), so a conditional hook still violates the invariant in tests.
 // =====================================================================
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, afterEach, afterAll } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
 
 const useQuery = vi.fn<(...args: unknown[]) => unknown>();
 
-vi.mock("convex/react", () => ({
-  useQuery: (...args: unknown[]) => useQuery(...args),
-  useMutation: () => async () => undefined,
-}));
+vi.mock("convex/react", async () => {
+  const { useMemo } = await import("react");
+  return {
+    useQuery: (...args: unknown[]) => {
+      // A REAL hook call (React hook dispatcher engaged) on every render
+      // routed through this stub. Conditional hook execution anywhere in
+      // the component then reproduces React's hook-order invariant —
+      // otherwise a plain stub would silently hide the bug.
+      useMemo(() => "useQuery-subscription-slot", []);
+      return useQuery(...args);
+    },
+    useMutation: () => async () => undefined,
+  };
+});
 
 vi.mock("@/convex/_generated/api", () => ({
   // Leaf refs are readable strings ("orgs.resolve") so the hook stub can
@@ -186,5 +206,83 @@ describe("SessionGate Continue — invalid or unauthorized destinations", () => 
     });
     renderGate({ initialEntry: "/login" });
     await waitFor(() => expect(continueHref()).toBe("/settings"));
+  });
+});
+
+// ---------------------------------------------------------------------
+// Hook-order stability (13 Oct preview incident regression).
+//
+// The stub above calls a real useMemo for every Convex useQuery call, so
+// the component's hook count is enforced by React itself. These tests
+// re-render through the exact transitions that crashed the preview:
+//   loading (orgs.resolve undefined) → resolved, and
+//   2FA-needed branch ↔ no-2FA branch.
+// The final UI assertions also pin that the Continue/2FA behavior is
+// unchanged — the fix only reorders hooks.
+// ---------------------------------------------------------------------
+describe("SessionGate — hook-order stability", () => {
+  const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  afterEach(() => {
+    consoleError.mockClear();
+  });
+  afterAll(() => {
+    consoleError.mockRestore();
+  });
+
+  function gateElement(twoFactorNeeded: boolean) {
+    return (
+      <MemoryRouter initialEntries={["/login"]}>
+        <Routes>
+          <Route path="/login" element={<SessionGate twoFactorNeeded={twoFactorNeeded} />} />
+        </Routes>
+      </MemoryRouter>
+    );
+  }
+
+  it("loading → resolved transition uses a stable hook order (no 'Rendered more hooks')", async () => {
+    let resolved = false;
+    useQuery.mockImplementation((fn: unknown) => {
+      if (queryName(fn) === "orgs.resolve") {
+        return resolved ? { portal: "firm", role: null } : undefined;
+      }
+      if (queryName(fn) === "workforce.myPlatformIdentity") return null;
+      return undefined;
+    });
+
+    const view = render(gateElement(false));
+    expect(view.container.textContent).toContain("Checking your access");
+
+    // The Convex subscription resolves: the same component instance now
+    // takes the non-loading branch. Pre-fix, this render executed one
+    // MORE hook than the previous render and the preview crashed.
+    resolved = true;
+    view.rerender(gateElement(false));
+
+    await waitFor(() => expect(continueHref()).toBe("/dashboard"));
+    for (const call of consoleError.mock.calls) {
+      expect(String(call[0])).not.toMatch(/Rendered more hooks|Rendered fewer hooks/);
+    }
+  });
+
+  it("2FA-needed ↔ no-2FA rerender keeps a stable hook order and behavior", async () => {
+    useQuery.mockImplementation((fn: unknown) => {
+      if (queryName(fn) === "orgs.resolve") return { portal: "firm", role: null };
+      if (queryName(fn) === "workforce.myPlatformIdentity") return null;
+      return undefined;
+    });
+
+    const view = render(gateElement(false));
+    await waitFor(() => expect(continueHref()).toBe("/dashboard"));
+
+    view.rerender(gateElement(true));
+    await waitFor(() =>
+      expect(view.container.textContent).toContain("Two-factor required"),
+    );
+
+    view.rerender(gateElement(false));
+    await waitFor(() => expect(continueHref()).toBe("/dashboard"));
+    for (const call of consoleError.mock.calls) {
+      expect(String(call[0])).not.toMatch(/Rendered more hooks|Rendered fewer hooks/);
+    }
   });
 });
